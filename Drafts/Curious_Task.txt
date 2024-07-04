@@ -1,0 +1,20 @@
+// : 4
+struct S
+{
+    int i : 4;  // after i what to insert?? uebok
+};
+
+constexpr int foo()
+{
+    S s{5};
+    const auto& v = s.i;
+    s.i           = 0;
+    return v;
+}
+
+ static_assert(foo() == 5);
+
+int main()
+{
+    return foo();
+}

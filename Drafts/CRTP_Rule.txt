@@ -1,0 +1,37 @@
+template<typename Derived>
+class Base {
+    public:
+        void DoSomething()
+    {
+        Derived& derived = static_cast<Derived&>(*this);
+        // use derived...
+    }
+    private:
+    
+    // NOTE: This is the general rule to prevent human mistakes when declaring CRTP class.
+    Base() = default;
+    friend Derived;
+};
+
+class Derived1 : public Base<Derived1>
+{
+  public:
+    Derived1() = default;
+};
+
+
+// NOTE: Won't compile cuz types are different.
+class Derived2 : public Base<Derived1>
+{
+  public:
+    Derived2() = default;
+};
+
+
+int main()
+{
+    Derived1 obj;
+    Derived2 obj2;
+
+    return 0;
+}

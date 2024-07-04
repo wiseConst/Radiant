@@ -1,0 +1,84 @@
+#include <pch.h>
+
+template <typename T> class CRTPCounter
+{
+  public:
+    uint64_t GetValue() const { return static_cast<const T*>(this)->GetValueImpl(); }
+    void AddValue(uint64_t n) { static_cast<T*>(this)->AddValueImpl(n); }
+
+  private:
+    CRTPCounter() = default;
+    friend T;
+};
+
+class CRTPSimpleCounter : public CRTPCounter<CRTPSimpleCounter>
+{
+  public:
+    uint64_t GetValueImpl() const { return m_Value; }
+    void AddValueImpl(uint64_t n) { m_Value += n; }
+
+  private:
+    uint64_t m_Value{0};
+};
+
+template <typename T> void RunCRTP(CRTPCounter<T>& counter)
+{
+    const uint64_t range = 50'000;
+    for (uint64_t x{}; x < range; ++x)
+    {
+        for (uint64_t k{}; k < x; ++k)
+            counter.AddValue(k * x);
+    }
+    TB_TRACE("{}, {}", __FUNCTION__, counter.GetValue());
+}
+
+class BaseCounter
+{
+  public:
+    virtual uint64_t GetValue() const = 0;
+    virtual void AddValue(uint64_t n) = 0;
+};
+
+class NormalCounter : public BaseCounter
+{
+  public:
+    uint64_t GetValue() const { return m_Value; }
+    void AddValue(uint64_t n) { m_Value += n; }
+
+  private:
+    uint64_t m_Value{0};
+};
+
+void RunNormal(BaseCounter& counter)
+{
+    const uint64_t range = 50'000;
+    for (uint64_t x{}; x < range; ++x)
+    {
+        for (uint64_t k{}; k < x; ++k)
+            counter.AddValue(k * x);
+    }
+    TB_TRACE("{}, {}", __FUNCTION__, counter.GetValue());
+}
+
+template <typename T, typename S> void Benchmark(T& object, S& function, const std::string& name)
+{
+    Timer t = {};
+
+    function(object);
+
+    TB_INFO("{}: {:.4f}ms", name, t.GetElapsedMilliseconds());
+}
+
+int32_t main(int32_t argc, char** argv)
+{
+    TestBed::Log::Init();
+    TB_INFO("{}", __FUNCTION__);
+
+    NormalCounter object;
+    Benchmark(object, RunNormal, "Normal Interface");
+
+    CRTPSimpleCounter object_2;
+    Benchmark(object_2, RunCRTP<CRTPSimpleCounter>, "CRTP Interface");
+
+    return 0;
+}

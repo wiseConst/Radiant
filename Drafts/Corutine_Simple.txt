@@ -1,0 +1,52 @@
+#include "pch.h"
+
+// The caller-level type
+struct Task
+{
+     // The coroutine level type
+     struct promise_type
+     {
+         promise_type() { TB_TRACE(__FUNCTION__); }
+         ~promise_type() { TB_TRACE(__FUNCTION__); }
+         Task get_return_object()
+         {
+             TB_TRACE(__FUNCTION__);
+             return {};
+         }
+         std::suspend_never initial_suspend()
+         {
+             TB_TRACE(__FUNCTION__);
+             return {};
+         }
+         std::suspend_never final_suspend() noexcept
+         {
+             TB_TRACE(__FUNCTION__);
+             return {};
+         }
+         void return_void() { TB_TRACE(__FUNCTION__); }
+         void unhandled_exception() { TB_TRACE(__FUNCTION__); }
+     };
+     Task() { TB_TRACE(__FUNCTION__); }
+     ~Task() { TB_TRACE(__FUNCTION__); }
+};
+
+ Task myCoroutine()
+{
+     std::cerr << "Inside coroutine.\n";
+     co_return;  // make it a coroutine
+}
+
+ int32_t main(int32_t argc, char** argv)
+{
+     TestBed::Log::Init();
+
+     // const auto rg = RenderGraphManager::Create("../data/RenderGraphDescription.pfr");
+
+     // rg->Execute();
+
+     std::cerr << "Before coroutine call.\n";
+     auto c = myCoroutine();
+     std::cerr << "After coroutine call.\n";
+
+     return 0;
+}

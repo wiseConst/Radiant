@@ -1,0 +1,367 @@
+#include <iostream>
+#include <assert.h>
+
+#include <climits>
+#include <cmath>
+
+#include <random>
+#include <algorithm>
+#include <optional>
+#include <format>
+#include <functional>
+#include <utility>
+#include <memory>
+#include <variant>
+
+#include <ranges>
+#include <vector>
+#include <span>
+#include <array>
+#include <queue>
+#include <deque>
+
+#include <thread>
+#include <future>
+#include <semaphore>
+
+#include "Timer.h"
+
+// Journey ended 30/12/2023 02:03 with success
+// https://www.youtube.com/watch?v=f-1rZdMEzE8&list=PLqCJpWy5Fohe9b4gS5_HHyYcGNXVrtKUa&ab_channel=ChiliTomatoNoodle
+
+template <typename T> class SharedState
+{
+  public:
+    template <typename R> void Set(R&& result)
+    {
+        if (std::holds_alternative<std::monostate>(m_Result) /*!m_Result*/)
+        {
+            m_Result = std::forward<R>(result);
+            m_Semaphore.release();
+        }
+    }
+
+    T Get()
+    {
+        m_Semaphore.acquire();
+
+        if (auto ppException = std::get_if<std::exception_ptr>(&m_Result))
+        {
+            std::rethrow_exception(*ppException);
+        }
+        return std::move(std::get<T>(m_Result));
+    }
+
+    bool Ready()
+    {
+        if (m_Semaphore.try_acquire())
+        {
+            m_Semaphore.release();
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    std::binary_semaphore m_Semaphore{0};  // 0 here means it's not free
+    std::variant<std::monostate, T, std::exception_ptr> m_Result;
+};
+
+template <> class SharedState<void>
+{
+  public:
+    void Set()
+    {
+        if (!m_bIsComplete)
+        {
+            m_bIsComplete = true;
+            m_Semaphore.release();
+        }
+    }
+
+    void Set(std::exception_ptr exceptionPtr)
+    {
+        if (!m_bIsComplete)
+        {
+            m_bIsComplete  = true;
+            m_ExceptionPtr = exceptionPtr;
+            m_Semaphore.release();
+        }
+    }
+
+    void Get()
+    {
+        m_Semaphore.acquire();
+        if (m_ExceptionPtr)
+        {
+            std::rethrow_exception(m_ExceptionPtr);
+        }
+    }
+
+  private:
+    std::binary_semaphore m_Semaphore{0};  // 0 here means it's not free
+    bool m_bIsComplete                = false;
+    std::exception_ptr m_ExceptionPtr = nullptr;
+};
+
+template <typename T> class Promise;
+
+template <typename T> class Future
+{
+  public:
+    T Get()
+    {
+        assert(!m_bResultAcquired);
+        m_bResultAcquired = true;
+        return m_State->Get();
+    }
+
+    bool Ready() { return m_State->Ready(); }
+
+  private:
+    friend class Promise<T>;
+    bool m_bResultAcquired = false;
+    std::shared_ptr<SharedState<T>> m_State;
+
+    Future(std::shared_ptr<SharedState<T>> state) : m_State(state) {}
+};
+
+template <typename T> class Promise
+{
+  public:
+    Promise() : m_State{std::make_shared<SharedState<T>>()} {}
+
+    // In case we have void functions, variadic templates gonna help us
+    template <typename... R> void Set(R&&... result) { m_State->Set(std::forward<R>(result)...); }
+
+    Future<T> GetFuture()
+    {
+        assert(m_bFutureAvailable);
+        m_bFutureAvailable = false;
+
+        return Future(m_State);
+    }
+
+  private:
+    bool m_bFutureAvailable = true;
+    std::shared_ptr<SharedState<T>> m_State;
+};
+
+class Task
+{
+  public:
+    Task()                       = default;
+    Task(const Task&)            = delete;
+    Task& operator=(const Task&) = delete;
+    Task(const Task&& other) { m_Executor = std::move(other.m_Executor); }
+    Task& operator=(const Task&& other)
+    {
+        m_Executor = std::move(other.m_Executor);
+        return *this;
+    }
+
+    void operator()() { m_Executor(); }
+    operator bool() const { return (bool)m_Executor; }
+
+    template <typename F, typename... Args> static auto Make(F&& function, Args&&... args)
+    {
+        Promise<std::invoke_result_t<F, Args...>> promise;
+        auto future = promise.GetFuture();
+
+        return std::make_pair(Task{std::forward<F>(function), std::move(promise), std::forward<Args>(args)...}, std::move(future));
+    }
+
+  private:
+    template <typename F, typename P, typename... Args> Task(F&& function, P&& promise, Args&&... args)
+    {
+        m_Executor = [function = std::forward<F>(function),  //
+                      promise  = std::forward<P>(promise),   //
+                      ... args = std::forward<Args>(args...)]() mutable
+        {
+            try
+            {
+                if constexpr (std::is_void_v<std::invoke_result_t<F, Args...>>)
+                {
+                    function(std::forward<Args>(args)...);
+                    promise.Set();
+                }
+                else
+                {
+                    promise.Set(function(std::forward<Args>(args)...));
+                }
+            }
+            catch (...)
+            {
+                promise.Set(std::current_exception());
+            }
+        };
+    }
+
+    std::function<void()> m_Executor;
+};
+
+class Threadpool
+{
+  public:
+    Threadpool()
+    {
+        m_Workers.reserve(std::thread::hardware_concurrency() - 1);
+        for (size_t i = 0; i < m_Workers.capacity(); ++i)
+        {
+            m_Workers.emplace_back(std::make_unique<Worker>(this));
+        }
+    }
+
+    ~Threadpool()
+    {
+        for (auto& w : m_Workers)
+            w->RequestStop();
+    }
+
+    template <typename F, typename... Args> auto Submit(F&& function, Args&&... args)
+    {
+        auto [task, future] = Task::Make(std::forward<F>(function), std::forward<Args>(args)...);
+        {
+            std::unique_lock lock(m_TaskQueueMutex);
+            m_TaskQueue.push_back(std::move(task));
+        }
+        m_TaskQueueCv.notify_one();
+
+        return future;
+    }
+
+    void WaitForAllDone()
+    {
+        std::unique_lock lock(m_TaskQueueMutex);
+        m_TaskQueueCv.wait(lock, [this] { return m_TaskQueue.empty(); });
+    }
+
+  private:
+    Task GetTask(std::stop_token& sp)
+    {
+        Task task;
+        std::unique_lock lock(m_TaskQueueMutex);
+        m_TaskQueueCv.wait(lock, sp, [this] { return !m_TaskQueue.empty(); });
+        if (!sp.stop_requested())
+        {
+            task = std::move(m_TaskQueue.front());
+            m_TaskQueue.pop_front();
+            if (m_TaskQueue.empty())
+            {
+                m_TaskQueueCv.notify_all();
+            }
+        }
+
+        return task;
+    }
+
+    class Worker
+    {
+      public:
+        explicit Worker(Threadpool* tp) : m_Handle(&Worker::Run, this), m_Pool(tp) {}
+
+        void RequestStop() { m_Handle.get_stop_source().request_stop(); }
+
+      private:
+        Threadpool* m_Pool = nullptr;
+        std::jthread m_Handle;
+
+        void Run()
+        {
+            auto sp = m_Handle.get_stop_token();
+            while (auto task = m_Pool->GetTask(sp))
+            {
+                task();
+            }
+        }
+    };
+
+    std::mutex m_TaskQueueMutex;
+    std::deque<Task> m_TaskQueue;
+    std::condition_variable_any m_TaskQueueCv;
+    std::vector<std::unique_ptr<Worker>> m_Workers;
+};
+
+static void MultithreadingTest()
+{
+    using namespace std::chrono_literals;
+
+    Threadpool tp;
+    /* for (uint32_t i = 0; i < 9; ++i)
+     {
+         tp.Submit(
+             []
+             {
+                 std::this_thread::sleep_for(500ms);
+                 std::ostringstream ss;
+                 ss << std::this_thread::get_id();
+                 std::cout << std::format("<< {} >>", ss.str()) << std::endl;
+             });
+     }*/
+    const auto spitt = [](uint32_t milliseconds) -> std::string
+    {
+        if (milliseconds % 3 == 0) throw std::runtime_error("comi!");
+
+        std::this_thread::sleep_for(1ms * milliseconds);
+        std::ostringstream ss;
+        ss << std::this_thread::get_id();
+        return ss.str();
+    };
+    std::vector<Future<std::string>> futures;
+    for (uint32_t i = 0; i < 40; ++i)
+    {
+        futures.push_back(tp.Submit(spitt, i * 250));
+    }
+
+    // C++23
+    /*auto futures = std::views::iota(0, 40) | std::views::transform([&](uint32_t i) { return tp.Submit(spitt, i * 100); }) |
+                   std::ranges::to<std::vector>();*/
+
+    for (auto& fut : futures)
+    {
+        try
+        {
+            std::cout << std::format("<< {} >>", fut.Get()) << std::endl;
+        }
+        catch (...)
+        {
+            std::cout << "yuikes!" << std::endl;
+        }
+    }
+
+    auto future = tp.Submit(
+        []()
+        {
+            std::this_thread::sleep_for(25ms);
+            return 69;
+        });
+    while (!future.Ready())
+    {
+        std::this_thread::sleep_for(10ms);
+        std::cout << "Waiting on future!" << std::endl;
+    }
+    std::cout << "Task ready! " << future.Get() << std::endl;
+
+    /* Promise<int> prom;
+     auto fut = prom.GetFuture();
+
+     std::jthread t(
+         [](Promise<int>& prom)
+         {
+             std::this_thread::sleep_for(2'500ms);
+             prom.Set(69);
+         },
+         std::ref(prom));
+
+     std::cout << fut.Get() << std::endl;
+
+     auto [task, future] = Task::Make(
+         [](int x)
+         {
+             std::this_thread::sleep_for(1'500ms);
+             return x + 42000;
+         },
+         69);
+     std::thread{std::move(task)}.detach();
+     std::cout << future.Get() << std::endl;*/
+}

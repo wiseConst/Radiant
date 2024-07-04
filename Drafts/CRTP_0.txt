@@ -1,0 +1,36 @@
+struct Shape
+{
+    virtual Shape* Clone() = 0;
+    virtual ~Shape()       = default;
+};
+
+template <typename T> struct ShapeCRTP : public Shape
+{
+    Shape* Clone() override { return new T(*static_cast<T*>(this)); }
+};
+
+struct Square : public ShapeCRTP<Square>
+{
+    int x     = 1;
+    Square()  = default;
+    ~Square() = default;
+};
+
+struct Rectangle : public ShapeCRTP<Rectangle>
+{
+    int x = 1;
+    int y = 2;
+
+    Rectangle()  = default;
+    ~Rectangle() = default;
+};
+
+
+    std::vector<Shape*> v;
+    v.emplace_back(new Square);
+    v.emplace_back(new Rectangle);
+    for (auto& s : v)
+    {
+        Shape* c = s->Clone();
+        int k    = 0;
+    }

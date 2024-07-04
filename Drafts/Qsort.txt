@@ -1,0 +1,55 @@
+// Hoare(a bit faster) should include p for left call of qsort!!!
+uint32_t partition(std::vector<uint32_t>& arr, uint32_t lowIndex, uint32_t highIndex)
+{
+    const auto pivotIndex = std::clamp(distribution(mtEngine) % highIndex, lowIndex, highIndex);
+    const auto pivot      = arr.at(pivotIndex);
+
+    int32_t i = (int32_t)lowIndex - 1, j = highIndex + 1;
+    while (true)
+    {
+        do
+        {
+            ++i;
+        } while (i < highIndex && arr.at(i) < pivot);
+
+        do
+        {
+            --j;
+        } while (j > lowIndex && arr.at(j) > pivot);
+
+        if (i >= j) return j;
+
+        std::swap(arr.at(j), arr.at(i));
+    }
+}
+
+// Lomuto(slower than Hoare)
+uint32_t partition(std::vector<uint32_t>& arr, uint32_t lowIndex, uint32_t highIndex)
+{
+    const auto pivotIndex = std::clamp(distribution(mtEngine) % highIndex, lowIndex, highIndex);
+    std::swap(arr.at(highIndex), arr.at(pivotIndex));
+    const auto pivot = arr.at(highIndex);
+
+    uint32_t i = lowIndex;
+    for (uint32_t j = lowIndex; j < highIndex; ++j)
+    {
+        if (arr.at(j) <= pivot)
+        {
+            std::swap(arr.at(j), arr.at(i));
+            ++i;
+        }
+    }
+
+    std::swap(arr.at(i), arr.at(highIndex));
+    return i;
+}
+
+void q_sort(std::vector<uint32_t>& arr, uint32_t lowIndex, uint32_t highIndex)
+{
+    if (lowIndex < highIndex && highIndex < arr.size())
+    {
+        const auto p = partition(arr, lowIndex, highIndex);
+        q_sort(arr, lowIndex, p - 1);
+        q_sort(arr, p + 1, highIndex);
+    }
+}

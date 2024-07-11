@@ -14,7 +14,18 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/compatibility.hpp>
 
-namespace TestBed
+namespace Radiant
 {
 
-}
+    namespace Math
+    {
+
+        static constexpr float s_KINDA_SMALL_FLOAT_NUMBER = 10.e-4f;
+        static constexpr float s_SMALL_FLOAT_NUMBER       = 10.e-9f;
+
+        static constexpr double s_KINDA_SMALL_DOUBLE_NUMBER = 10.e-4;
+        static constexpr double s_SMALL_DOUBLE_NUMBER       = 10.e-9;
+
+    }  // namespace Math
+
+}  // namespace Radiant

@@ -38,7 +38,6 @@
 
 #include <optional>
 #include <variant>
-#include <format>
 #include <chrono>
 #include <random>
 #include <omp.h>

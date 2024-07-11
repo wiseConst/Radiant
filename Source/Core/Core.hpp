@@ -6,8 +6,24 @@
 
 #include <chrono>
 
-namespace TestBed
+namespace Radiant
 {
+
+#ifdef RDNT_DEBUG
+#define RDNT_ASSERT(cond, ...)                                                                                                             \
+    {                                                                                                                                      \
+        LOG_ERROR(__VA_ARGS__);                                                                                                            \
+        std::terminate();                                                                                                                  \
+    }
+#endif
+
+#ifdef RDNT_RELEASE
+#define RDNT_ASSERT(cond, ...)                                                                                                             \
+    {                                                                                                                                      \
+        LOG_ERROR(__VA_ARGS__);                                                                                                            \
+        std::terminate();                                                                                                                  \
+    }
+#endif
 
     class Timer final
     {
@@ -37,4 +53,4 @@ namespace TestBed
         MAYBE_UNUSED std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTime = {};
     };
 
-}  // namespace TestBed
+}  // namespace Radiant

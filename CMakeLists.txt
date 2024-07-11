@@ -1,6 +1,7 @@
-cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
-set(CMAKE_CXX_STANDARD 20)
+# NOTE: C++23 for now used with std::move_only_function
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -13,7 +14,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -MP")
 include(FetchContent)
 
 set(CMAKE_CONFIGURATION_TYPES Debug Release)
-set(PROJECT_NAME TestBed)
+set(PROJECT_NAME Radiant)
 project(${PROJECT_NAME} LANGUAGES CXX)
 
 set(CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Source)
@@ -43,21 +44,45 @@ endif()
 
 # ============= ThirdParty =============
 
-# NVIDIA RENDER INTERFACE
-FetchContent_Declare(
-    NRI
-    GIT_REPOSITORY https://github.com/NVIDIAGameWorks/NRI.git
-    GIT_TAG        main
-    GIT_SHALLOW    true
-)
-set(NRI_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+# TODO: slang - modern feature-rich, cross-gfx-api, robust shader language
+#FetchContent_Declare(
+#    slang    
+#    GIT_REPOSITORY https://github.com/shader-slang/slang.git
+#    GIT_TAG        master
+#    GIT_SHALLOW    true
+#)
 
-FetchContent_MakeAvailable(NRI)
-target_link_libraries(${PROJECT_NAME} PRIVATE NRI)
-target_link_libraries(${PROJECT_NAME} PRIVATE NRI_D3D12)
-target_link_libraries(${PROJECT_NAME} PRIVATE NRI_VK)
-target_link_libraries(${PROJECT_NAME} PRIVATE NRI_Shared)
-target_include_directories(${PROJECT_NAME} PRIVATE ${NRI_SOURCE_DIR}/Include)
+#set(SLANG_ENABLE_SLANG_GLSLANG ON CACHE BOOL "" FORCE)
+#set(SLANG_ENABLE_TESTS ON CACHE BOOL "" FORCE)
+#set(SLANG_LIB_TYPE STATIC CACHE BOOL "" FORCE)
+
+#FetchContent_MakeAvailable(slang)
+#target_link_libraries(${PROJECT_NAME} PRIVATE slang)
+#set_target_properties(slang PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(slang-rt PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(slangc PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(slangd PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(platform PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(core PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(compiler-core PROPERTIES FOLDER "ThirdParty/slang")
+#set_target_properties(copy-prebuilt-binaries PROPERTIES FOLDER "ThirdParty/slang")
+
+# Vulkan SDK
+find_package(Vulkan REQUIRED)
+target_include_directories(${PROJECT_NAME} PRIVATE Vulkan::Headers)
+
+# Detect the platform for appropriate volk lib.
+if(WIN32)
+    set(VOLK_LIBRARIES $ENV{VK_SDK_PATH}/Lib/volk.lib)
+elseif(UNIX AND NOT APPLE)
+    set(VOLK_LIBRARIES $ENV{VK_SDK_PATH}/Lib/libvolk.so)
+elseif(APPLE)
+    set(VOLK_LIBRARIES $ENV{VK_SDK_PATH}/Lib/libvolk.dylib)
+else()
+    message(FATAL_ERROR "Unsupported platform!")
+endif()
+
+target_link_libraries(${PROJECT_NAME} PRIVATE ${VOLK_LIBRARIES})
 
 # glfw
 FetchContent_Declare(
@@ -77,13 +102,13 @@ set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
 # TODO: Fill imgui
 # imgui 
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        docking
-    GIT_SHALLOW    true
-)
-FetchContent_MakeAvailable(imgui)
+#FetchContent_Declare(
+#    imgui
+#    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+#    GIT_TAG        docking
+#    GIT_SHALLOW    true
+#)
+#FetchContent_MakeAvailable(imgui)
 #target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui)
 #set_target_properties(imgui::imgui PROPERTIES FOLDER "ThirdParty")
 
@@ -150,6 +175,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb_image)
 target_include_directories(${PROJECT_NAME} PRIVATE ${stb_image_SOURCE_DIR})
 
+# TODO: Valve's GameNetworkingSockets
+#FetchContent_Declare(
+#    GameNetworkingSockets
+#    GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+#    GIT_TAG        master
+#    GIT_SHALLOW    true
+#)
+#FetchContent_MakeAvailable(GameNetworkingSockets)
+#target_link_libraries(${PROJECT_NAME} PRIVATE GameNetworkingSockets)
+#set_target_properties(GameNetworkingSockets PROPERTIES FOLDER "ThirdParty")
+
 # tracy profiler
 FetchContent_Declare(
     tracy
@@ -172,22 +208,46 @@ FetchContent_MakeAvailable(unordered_dense)
 target_link_libraries(${PROJECT_NAME} PRIVATE unordered_dense)
 set_target_properties(unordered_dense PROPERTIES FOLDER "ThirdParty")
 
-# SteamAudio
-FetchContent_Declare(
-    SteamAudio
-    GIT_REPOSITORY https://github.com/ValveSoftware/steam-audio.git
-    GIT_TAG        master
-    GIT_SHALLOW    true
-)
+# TODO: SteamAudio
+#FetchContent_Declare(
+#    SteamAudio
+#    GIT_REPOSITORY https://github.com/ValveSoftware/steam-audio.git
+#    GIT_TAG        master
+#    GIT_SHALLOW    true
+#)
 
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(STEAMAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(STEAMAUDIO_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-set(STEAMAUDIO_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)   
-FetchContent_MakeAvailable(SteamAudio)
+#set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+#set(STEAMAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+#set(STEAMAUDIO_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+#set(STEAMAUDIO_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)   
+#FetchContent_MakeAvailable(SteamAudio)
 
 #target_link_libraries(${PROJECT_NAME} PRIVATE SteamAudio)
 #set_target_properties(SteamAudio PROPERTIES FOLDER "ThirdParty")
 
+# openmp
+find_package(OpenMP REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE OpenMP::OpenMP_CXX)
+if(OpenMP_CXX_FOUND)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        set(OpenMP_CXX_FLAGS "/openmp")
+    else()
+        set(OpenMP_CXX_FLAGS "-fopenmp")
+    endif()
+
+    target_compile_options(${PROJECT_NAME} PRIVATE ${OpenMP_CXX_FLAGS})
+endif()
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE 
+    $<$<CONFIG:Debug>:RDNT_DEBUG>
+    $<$<CONFIG:Release>:RDNT_RELEASE>
+)
+
 add_compile_options($<$<CONFIG:Debug>:-Og>)
 add_compile_options($<$<CONFIG:Release>:-O3 -lto>)
+
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+
+set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
+add_compile_options(-H) # Print all files that will be precompiled
+add_compile_options(-ftime-report) # Print overall stats

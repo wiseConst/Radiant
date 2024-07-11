@@ -1,14 +1,16 @@
-#include <pch.h>
+#include <Core/Application.hpp>
 
-#include <Core/Window/Window.hpp>
+// SoundSystem
+// RenderSystem
+// SceneSystem
 
-int32_t main(int32_t argc, char** argv)
+int32_t main(uint32_t argc, char** argv) noexcept
 {
-    TestBed::Log::Init();
-    TB_INFO("{}", __FUNCTION__);
+    Radiant::ApplicationDescription appDesc = {
+        .Name = "Radiant", .CmdArgs{.Argc = argc, .Argv = argv}, .FPSLimit = 30, .RHI = Radiant::ERHI::RHI_VULKAN};
 
-    using namespace TestBed;
-    //  Window window = Window::Create({.Name ="TestBed",})
+    auto app = Radiant::Application::Create(appDesc);
+    app->Run();
 
     return 0;
 }

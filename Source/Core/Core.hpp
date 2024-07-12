@@ -3,14 +3,19 @@
 #include <Core/CoreTypes.hpp>
 #include <Core/Log.hpp>
 #include <Core/Math.hpp>
+#include <Core/PlatformDetection.hpp>
 
-#include <chrono>
+#include <thread>  // For threadpool impl
+#include <future>
+#include <mutex>
+#include <deque>
 
 namespace Radiant
 {
 
 #ifdef RDNT_DEBUG
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
+    if (!(cond))                                                                                                                           \
     {                                                                                                                                      \
         LOG_ERROR(__VA_ARGS__);                                                                                                            \
         std::terminate();                                                                                                                  \
@@ -19,38 +24,37 @@ namespace Radiant
 
 #ifdef RDNT_RELEASE
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
+    if (!(cond))                                                                                                                           \
     {                                                                                                                                      \
         LOG_ERROR(__VA_ARGS__);                                                                                                            \
         std::terminate();                                                                                                                  \
     }
 #endif
 
-    class Timer final
+    class ThreadPool final
     {
       public:
-        Timer() noexcept : m_StartTime(Now()) {}
-        ~Timer() = default;
-
-        NODISCARD FORCEINLINE double GetElapsedMilliseconds() const noexcept
+        ThreadPool() noexcept { m_Workers.resize(std::thread::hardware_concurrency()); }
+        ThreadPool(const std::uint16_t workerCount) noexcept
         {
-            const auto elapsed = std::chrono::duration<double, std::milli>(Now() - m_StartTime);
-            return elapsed.count();
+            RDNT_ASSERT(workerCount > 0, "Worker count should be > 0!");
+            m_Workers.resize(workerCount);
         }
-
-        NODISCARD FORCEINLINE double GetElapsedSeconds() const noexcept
+        ~ThreadPool() noexcept
         {
-            const auto elapsed = std::chrono::duration<double>(Now() - m_StartTime);
-            return elapsed.count();
-        }
-
-        FORCEINLINE void Reset() noexcept { m_StartTime = Now(); }
-        NODISCARD FORCEINLINE static std::chrono::high_resolution_clock::time_point Now() noexcept
-        {
-            return std::chrono::high_resolution_clock::now();
+            {
+                std::scoped_lock lock(m_Mtx);
+                m_bShutdownRequested = true;
+            }
+            m_Cv.notify_all();
         }
 
       private:
-        MAYBE_UNUSED std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTime = {};
+        std::deque<std::move_only_function<void()>> m_WorkQueue;
+        std::vector<std::jthread> m_Workers;
+        std::condition_variable m_Cv{};
+        std::mutex m_Mtx{};
+        bool m_bShutdownRequested{false};
     };
 
 }  // namespace Radiant

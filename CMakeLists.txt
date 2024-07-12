@@ -69,7 +69,7 @@ endif()
 
 # Vulkan SDK
 find_package(Vulkan REQUIRED)
-target_include_directories(${PROJECT_NAME} PRIVATE Vulkan::Headers)
+target_include_directories(${PROJECT_NAME} PRIVATE $ENV{VK_SDK_PATH}/Include $ENV{VK_SDK_PATH}/Include/Volk)
 
 # Detect the platform for appropriate volk lib.
 if(WIN32)
@@ -100,17 +100,26 @@ FetchContent_MakeAvailable(glfw)
 target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
 set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
-# TODO: Fill imgui
 # imgui 
-#FetchContent_Declare(
-#    imgui
-#    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-#    GIT_TAG        docking
-#    GIT_SHALLOW    true
-#)
-#FetchContent_MakeAvailable(imgui)
-#target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui)
-#set_target_properties(imgui::imgui PROPERTIES FOLDER "ThirdParty")
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        docking
+    GIT_SHALLOW    true
+)
+
+FetchContent_MakeAvailable(imgui)
+target_include_directories(${PROJECT_NAME} PRIVATE ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+
+# Manually creating imgui lib since it hasn't CMakeLists.txt (what a pity...)
+file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+add_library(imgui STATIC ${IMGUI_SOURCES})
+target_compile_definitions(imgui PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
+target_include_directories(imgui PRIVATE ${imgui_SOURCE_DIR} $ENV{VK_SDK_PATH}/Include $ENV{VK_SDK_PATH}/Include/Volk ${glfw_SOURCE_DIR}/include)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
+target_link_libraries(${PROJECT_NAME} PRIVATE imgui)
+set_target_properties(imgui PROPERTIES FOLDER "ThirdParty")
 
 # glm
 FetchContent_Declare(

@@ -15,7 +15,11 @@ namespace Radiant
     class GLFWWindow final : private Uncopyable, private Unmovable
     {
       public:
-        GLFWWindow(const WindowDescription& windowDesc) noexcept : m_Description(windowDesc) { Init(); }
+        GLFWWindow(const WindowDescription& windowDesc) noexcept : m_Description(windowDesc)
+        {
+            LOG_INFO("Created window: \"{}\", [{}x{}].", m_Description.Name, m_Description.Extent.x, m_Description.Extent.y);
+            Init();
+        }
         ~GLFWWindow() noexcept { Destroy(); }
 
         NODISCARD FORCEINLINE GLFWwindow* Get() const noexcept { return m_Handle; }

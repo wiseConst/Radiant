@@ -1,7 +1,18 @@
 #include <pch.h>
 #include "GLFWWindow.hpp"
 
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+
+#if defined(RDNT_WINDOWS)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#elif defined(RDNT_LINUX)
+#define GLFW_EXPOSE_NATIVE_X11
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#elif defined(RDNT_MACOS)
+#define GLFW_EXPOSE_NATIVE_COCOA
+#endif
+#include <GLFW/glfw3native.h>
 
 namespace Radiant
 {

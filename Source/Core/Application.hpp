@@ -23,12 +23,12 @@ namespace Radiant
         ERHI RHI{ERHI::RHI_NONE};
     };
 
-    class GLFWWindow;
+    class Scene;
     class Application final
     {
       public:
         Application(const ApplicationDescription& appDesc) noexcept : m_Description(appDesc) { Init(); }
-        ~Application() noexcept { Destroy(); }
+        ~Application() noexcept { Shutdown(); }
 
         void Run() noexcept;
 
@@ -38,9 +38,19 @@ namespace Radiant
             return MakeUnique<Application>(appDesc);
         }
 
+        NODISCARD FORCEINLINE const auto& GetMainWindow() const noexcept { return m_MainWindow; }
+
+        NODISCARD FORCEINLINE static const auto& Get() noexcept
+        {
+            RDNT_ASSERT(s_Instance, "Application instance invalid!");
+            return *s_Instance;
+        }
+
       private:
         Unique<GLFWWindow> m_MainWindow{nullptr};
         Unique<RenderSystem> m_RenderSystem{nullptr};
+        static inline Application* s_Instance{nullptr};
+        Shared<Scene> m_Scene{nullptr};
 
         ApplicationDescription m_Description{};
         bool m_bIsRunning{false};
@@ -49,7 +59,7 @@ namespace Radiant
 
         constexpr Application() noexcept = delete;
         void Init() noexcept;
-        void Destroy() noexcept;
+        void Shutdown() noexcept;
     };
 
 }  // namespace Radiant

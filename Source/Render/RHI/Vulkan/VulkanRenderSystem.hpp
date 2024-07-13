@@ -3,8 +3,6 @@
 #include <Core/Core.hpp>
 #include <Systems/RenderSystem.hpp>
 
-#include <Volk/volk.h>
-
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
 
@@ -19,7 +17,8 @@ namespace Radiant
 
       private:
         vk::UniqueInstance m_Instance{};
-        vk::DispatchLoaderDynamic m_DispatchLoaderDynamic{};
+        vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
+        vk::UniqueSwapchainKHR m_Swapchain{};
 
         constexpr VulkanRenderSystem() noexcept = delete;
         void Init() noexcept;

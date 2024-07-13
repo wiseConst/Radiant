@@ -9,6 +9,8 @@ namespace Radiant
 {
     void Application::Init() noexcept
     {
+        RDNT_ASSERT(!s_Instance, "Application instance already init!");
+        s_Instance = this;
         Radiant::Log::Init();
         LOG_INFO("{}", __FUNCTION__);
 
@@ -61,11 +63,14 @@ namespace Radiant
         }
     }
 
-    void Application::Destroy() noexcept
+    void Application::Shutdown() noexcept
     {
-        LOG_INFO("{}", __FUNCTION__);
+        m_RenderSystem.reset();
 
+        LOG_INFO("{}", __FUNCTION__);
         Log::Shutdown();
+
+        s_Instance = nullptr;
     }
 
 }  // namespace Radiant

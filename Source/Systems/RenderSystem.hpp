@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Core/Core.hpp>
+#include <Render/CoreDefines.hpp>
 #include <Render/GfxDevice.hpp>
 
 namespace Radiant

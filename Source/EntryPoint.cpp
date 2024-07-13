@@ -6,10 +6,12 @@
 
 int32_t main(uint32_t argc, char** argv) noexcept
 {
-    Radiant::ApplicationDescription appDesc = {
-        .Name = "Radiant", .CmdArgs{.Argc = argc, .Argv = argv}, .FPSLimit = 30, .RHI = Radiant::ERHI::RHI_VULKAN};
+    using namespace Radiant;
 
-    auto app = Radiant::Application::Create(appDesc);
+    const ApplicationDescription appDesc = {
+        .Name = "Radiant", .CmdArgs{.Argc = argc, .Argv = argv}, .FPSLimit = 90, .RHI = ERHI::RHI_VULKAN};
+
+    auto app = Application::Create(appDesc);
     app->Run();
 
     return 0;

@@ -5,6 +5,8 @@
 namespace Radiant
 {
 
+    static constexpr bool s_bForceGfxValidation = true;
+
     struct RendererStatistics
     {
         std::atomic<std::uint64_t> DrawCallCount;

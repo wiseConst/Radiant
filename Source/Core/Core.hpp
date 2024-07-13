@@ -13,6 +13,8 @@
 namespace Radiant
 {
 
+    static constexpr const char* s_ENGINE_NAME = "RADIANT";
+
 #ifdef RDNT_DEBUG
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
     if (!(cond))                                                                                                                           \

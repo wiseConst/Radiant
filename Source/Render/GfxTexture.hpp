@@ -21,10 +21,11 @@ namespace Radiant
     class GfxTexture
     {
       public:
+        GfxTexture(const GfxTextureDescription& description) noexcept : m_Description(description){};
+        virtual ~GfxTexture() noexcept = default;
+
       protected:
         GfxTextureDescription m_Description{};
-
-        GfxTexture(const GfxTextureDescription& description) noexcept : m_Description(description){};
 
       private:
         constexpr GfxTexture() noexcept = delete;

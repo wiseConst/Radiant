@@ -25,16 +25,16 @@ namespace Radiant
     class GfxTexture final : private Uncopyable, private Unmovable
     {
       public:
-        GfxTexture(const GfxTextureDescription& description) noexcept : m_Description(description){};
-        ~GfxTexture() noexcept = default;
+        GfxTexture(const GfxTextureDescription& description) noexcept : m_Description(description) { Invalidate(); };
+        ~GfxTexture() noexcept { Shutdown(); }
 
       private:
         GfxTextureDescription m_Description{};
         vk::UniqueImage m_Image{nullptr};
+        vk::UniqueImageView m_ImageView{nullptr};  // Base mip level(0)
         VmaAllocation m_Allocation{};
 
         constexpr GfxTexture() noexcept = delete;
-
         void Invalidate() noexcept;
         void Shutdown() noexcept;
     };

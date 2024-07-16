@@ -11,6 +11,7 @@ namespace Radiant
         ForwardBlinnPhongRenderer() noexcept : Renderer() {}
 
         bool BeginFrame() noexcept final override;
+        void RenderFrame() noexcept final override;
         void EndFrame() noexcept final override;
 
       private:

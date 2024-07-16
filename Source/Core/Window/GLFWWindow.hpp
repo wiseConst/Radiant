@@ -30,7 +30,7 @@ namespace Radiant
 
         void PollInput() noexcept;
 
-        NODISCARD FORCEINLINE bool IsMinimized() const noexcept { return m_Description.Extent == glm::uvec2(0); }
+        NODISCARD FORCEINLINE bool IsMinimized() const noexcept { return m_Description.Extent.x == 0 || m_Description.Extent.y == 0; }
         bool IsRunning() const noexcept;
 
         void SetTitle(const std::string_view& title) noexcept;

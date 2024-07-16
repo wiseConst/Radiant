@@ -79,7 +79,7 @@ namespace Radiant
         void SelectGPUAndCreateLogicalDevice(std::vector<const char*>& requiredDeviceExtensions,
                                              const vk::PhysicalDeviceFeatures& requiredDeviceFeatures,
                                              const void* pNext = nullptr) noexcept;
-        void CreateSwapchain() noexcept;
+        void InvalidateSwapchain() noexcept;
         void LoadPipelineCache() noexcept;
         void CreateFrameResources() noexcept;
         void Shutdown() noexcept;

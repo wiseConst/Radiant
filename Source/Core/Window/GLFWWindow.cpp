@@ -86,6 +86,17 @@ namespace Radiant
         }
 
         GLFWUtils::s_GLFWActiveWindowCount.fetch_add(1);
+
+        glfwSetWindowUserPointer(m_Handle, &m_Description);
+        glfwSetFramebufferSizeCallback(m_Handle,
+                                       [](GLFWwindow* window, std::int32_t width, std::int32_t height)
+                                       {
+                                           void* data = glfwGetWindowUserPointer(window);
+                                           RDNT_ASSERT(data, "glfwGetWindowUserPointer() returned invalid data!");
+
+                                           WindowDescription& desc = *(static_cast<WindowDescription*>(data));
+                                           desc.Extent             = glm::uvec2{width, height};
+                                       });
     }
 
     void GLFWWindow::Destroy() noexcept

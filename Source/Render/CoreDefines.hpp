@@ -7,7 +7,7 @@ namespace Radiant
 {
 
     static constexpr bool s_bForceGfxValidation        = true;
-    static constexpr bool s_bForceIGPU                 = false;
+    static constexpr bool s_bForceIGPU                 = true;
     static constexpr std::uint8_t s_BufferedFrameCount = 2;
 
     struct RendererStatistics

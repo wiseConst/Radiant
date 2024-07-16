@@ -1,7 +1,11 @@
 #pragma once
 
 #include <Core/Core.hpp>
+#include <Systems/RenderSystem.hpp>
 #include <variant>
+
+#define VK_NO_PROTOTYPES
+#include "vma/vk_mem_alloc.h"
 
 namespace Radiant
 {
@@ -16,6 +20,7 @@ namespace Radiant
 
     struct GfxRayTracingPipelineOptions
     {
+        std::uint32_t MaxRecursionDepth{1};
     };
 
     struct GfxPipelineDescription
@@ -25,16 +30,14 @@ namespace Radiant
             std::monostate{}};
     };
 
-    class GfxPipeline
+    class GfxPipeline final
     {
       public:
-      protected:
-        GfxPipelineDescription m_Description{};
-
         GfxPipeline(const GfxPipelineDescription& description) noexcept : m_Description(description) {}
 
       private:
-        constexpr GfxPipeline() noexcept = delete;
+        GfxPipelineDescription m_Description{};
+        vk::UniquePipeline m_Handle{};
     };
 
 }  // namespace Radiant

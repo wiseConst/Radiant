@@ -20,6 +20,7 @@ namespace Radiant
     if (!(cond))                                                                                                                           \
     {                                                                                                                                      \
         LOG_ERROR(__VA_ARGS__);                                                                                                            \
+        __debugbreak();                                                                                                                    \
         std::terminate();                                                                                                                  \
     }
 #endif

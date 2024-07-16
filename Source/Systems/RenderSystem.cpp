@@ -36,12 +36,31 @@ namespace Radiant
                     "{}", __FUNCTION__);
 
         m_LogicalDevice->resetFences(*m_FrameData[m_CurrentFrameIndex].RenderFinishedFence);
-        
-        const auto [result, imageIndex] =
-            m_LogicalDevice->acquireNextImageKHR(*m_Swapchain, UINT64_MAX, *m_FrameData[m_CurrentFrameIndex].ImageAvailableSemaphore);
 
-        //    RDNT_ASSERT(result == vk::Result::eSuccess, "{}", __FUNCTION__);
-        m_CurrentImageIndex = imageIndex;
+        // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
+        try
+        {
+            const auto [result, imageIndex] =
+                m_LogicalDevice->acquireNextImageKHR(*m_Swapchain, UINT64_MAX, *m_FrameData[m_CurrentFrameIndex].ImageAvailableSemaphore);
+
+            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
+            {
+                m_LogicalDevice->waitIdle();
+                InvalidateSwapchain();
+                return false;
+            }
+            else if (result != vk::Result::eSuccess)
+            {
+                RDNT_ASSERT(false, "acquireNextImageKHR(): unknown result!");
+            }
+            m_CurrentImageIndex = imageIndex;
+        }
+        catch (vk::OutOfDateKHRError)
+        {
+            m_LogicalDevice->waitIdle();
+            InvalidateSwapchain();
+            return false;
+        }
 
         m_LogicalDevice->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].CommandPool);
         m_FrameData[m_CurrentFrameIndex].CommandBuffer.begin(
@@ -148,12 +167,30 @@ namespace Radiant
                                          .setWaitDstStageMask(waitDstStageMask),
                                      *m_FrameData[m_CurrentFrameIndex].RenderFinishedFence);
 
-        RDNT_ASSERT(m_PresentQueue.Handle.presentKHR(vk::PresentInfoKHR()
-                                                         .setImageIndices(m_CurrentImageIndex)
-                                                         .setSwapchains(*m_Swapchain)
-                                                         .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore)) ==
-                        vk::Result::eSuccess,
-                    "{}", __FUNCTION__);
+        // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
+        try
+        {
+            auto result =
+                m_PresentQueue.Handle.presentKHR(vk::PresentInfoKHR()
+                                                     .setImageIndices(m_CurrentImageIndex)
+                                                     .setSwapchains(*m_Swapchain)
+                                                     .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore));
+
+            if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
+            {
+                m_LogicalDevice->waitIdle();
+                InvalidateSwapchain();
+            }
+            else if (result != vk::Result::eSuccess)
+            {
+                RDNT_ASSERT(false, "presentKHR(): unknown result!");
+            }
+        }
+        catch (vk::OutOfDateKHRError)
+        {
+            m_LogicalDevice->waitIdle();
+            InvalidateSwapchain();
+        }
 
         m_CurrentFrameIndex = (m_CurrentFrameIndex + 1) % s_BufferedFrameCount;
     }
@@ -201,7 +238,7 @@ namespace Radiant
         paravozik  = &vkFeatures12.pNext;
 
         SelectGPUAndCreateLogicalDevice(requiredDeviceExtensions, requiredDeviceFeatures, pNext);
-        CreateSwapchain();
+        InvalidateSwapchain();
         CreateFrameResources();
 
         LoadPipelineCache();
@@ -463,8 +500,7 @@ namespace Radiant
     }
 
     void RenderSystem::SelectGPUAndCreateLogicalDevice(std::vector<const char*>& requiredDeviceExtensions,
-                                                             const vk::PhysicalDeviceFeatures& requiredDeviceFeatures,
-                                                             const void* pNext) noexcept
+                                                       const vk::PhysicalDeviceFeatures& requiredDeviceFeatures, const void* pNext) noexcept
     {
         const auto gpus = m_Instance->enumeratePhysicalDevices();
         LOG_TRACE("{} gpus present.", gpus.size());
@@ -695,7 +731,7 @@ namespace Radiant
         }
     }
 
-    void RenderSystem::CreateSwapchain() noexcept
+    void RenderSystem::InvalidateSwapchain() noexcept
     {
         const auto& window = Application::Get().GetMainWindow();
         const auto& extent = window->GetDescription().Extent;
@@ -761,6 +797,14 @@ namespace Radiant
             swapchainCI.setImageSharingMode(vk::SharingMode::eConcurrent)
                 .setQueueFamilyIndexCount(2)
                 .setPQueueFamilyIndices(queueFamilyIndices.data());
+        }
+
+        auto oldSwapchain = std::move(m_Swapchain);
+        if (oldSwapchain)
+        {
+            m_SwapchainImages.clear();
+            m_SwapchainImageViews.clear();
+            swapchainCI.setOldSwapchain(*oldSwapchain);
         }
 
         m_Swapchain = m_LogicalDevice->createSwapchainKHRUnique(swapchainCI);

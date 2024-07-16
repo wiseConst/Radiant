@@ -2,7 +2,7 @@
 
 #include <Core/Core.hpp>
 
-#include <Systems/RenderSystem.hpp>
+#include <Render/Renderers/Renderer.hpp>
 #include <Core/Window/GLFWWindow.hpp>
 
 namespace Radiant
@@ -20,7 +20,6 @@ namespace Radiant
         CommandLineArguments CmdArgs{};
         glm::uvec2 WindowExtent{1280, 720};
         uint32_t FPSLimit{60};
-        ERHI RHI{ERHI::RHI_NONE};
     };
 
     class Scene;
@@ -47,9 +46,9 @@ namespace Radiant
         }
 
       private:
-        Unique<GLFWWindow> m_MainWindow{nullptr};
-        Unique<RenderSystem> m_RenderSystem{nullptr};
         static inline Application* s_Instance{nullptr};
+        Unique<GLFWWindow> m_MainWindow{nullptr};
+        Unique<Renderer> m_Renderer{nullptr};
         Shared<Scene> m_Scene{nullptr};
 
         ApplicationDescription m_Description{};

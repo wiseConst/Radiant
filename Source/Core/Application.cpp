@@ -1,9 +1,7 @@
 #include <pch.h>
 #include "Application.hpp"
 
-#if 0
-
-#endif
+#include <Render/Renderers/BlinnPhong/ForwardRenderer.hpp>
 
 namespace Radiant
 {
@@ -11,11 +9,15 @@ namespace Radiant
     {
         RDNT_ASSERT(!s_Instance, "Application instance already init!");
         s_Instance = this;
+
         Radiant::Log::Init();
         LOG_INFO("{}", __FUNCTION__);
+        LOG_CRITICAL("Current working directory: {}", std::filesystem::current_path().string());
 
-        m_MainWindow   = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
-        m_RenderSystem = RenderSystem::Create(m_Description.RHI);
+        m_MainWindow = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
+
+        // Simply decide which renderer to use lol.
+        m_Renderer = MakeUnique<ForwardBlinnPhongRenderer>();
     }
 
     void Application::Run() noexcept
@@ -29,44 +31,56 @@ namespace Radiant
 
         while (m_bIsRunning)
         {
-            if (m_MainWindow->IsRunning() && !m_MainWindow->IsMinimized())
+            if (!m_MainWindow->IsRunning())
             {
-                m_MainWindow->PollInput();
+                m_bIsRunning = false;
+                break;
+            }
 
-                ++m_FrameCounter;
-                ++frameCount;
+            if (m_MainWindow->IsMinimized())
+            {
+                m_MainWindow->WaitEvents();  // don't burn cpu
+                continue;
+            }
 
-                auto currentTime = Timer::Now();
-                m_DeltaTime      = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - lastTime).count();
-                lastTime         = currentTime;
+            if (!m_Renderer->BeginFrame()) continue;
 
-                accumulatedDeltaTime += m_DeltaTime;
-                if (accumulatedDeltaTime >= 1.f || m_Description.FPSLimit != 0 && frameCount == m_Description.FPSLimit)
+            m_MainWindow->PollInput();
+
+            ++m_FrameCounter;
+            ++frameCount;
+
+            auto currentTime = Timer::Now();
+            m_DeltaTime      = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - lastTime).count();
+            lastTime         = currentTime;
+
+            accumulatedDeltaTime += m_DeltaTime;
+            if (accumulatedDeltaTime >= 1.f || m_Description.FPSLimit != 0 && frameCount == m_Description.FPSLimit)
+            {
+                std::stringstream ss;
+                ss << m_Description.Name;
+                ss << " / Frame: " << m_FrameCounter;
+                ss << " dt: " << m_DeltaTime;
+                ss << " FPS: " << frameCount;
+
+                m_MainWindow->SetTitle(ss.str());
+
+                frameCount           = 0;
+                accumulatedDeltaTime = 0.f;
+
+                if (m_Description.FPSLimit != 0)
                 {
-                    std::stringstream ss;
-                    ss << m_Description.Name;
-                    ss << " / Frame: " << m_FrameCounter;
-                    ss << " dt: " << m_DeltaTime;
-                    ss << " FPS: " << frameCount;
-
-                    m_MainWindow->SetTitle(ss.str());
-
-                    frameCount           = 0;
-                    accumulatedDeltaTime = 0.f;
-
                     const auto diff = 1.f / m_Description.FPSLimit - accumulatedDeltaTime;
                     std::this_thread::sleep_for(std::chrono::duration<float, std::chrono::seconds::period>(diff));
                 }
             }
 
-            if (!m_MainWindow->IsRunning()) m_bIsRunning = false;
+            m_Renderer->EndFrame();
         }
     }
 
     void Application::Shutdown() noexcept
     {
-        m_RenderSystem.reset();
-
         LOG_INFO("{}", __FUNCTION__);
         Log::Shutdown();
 

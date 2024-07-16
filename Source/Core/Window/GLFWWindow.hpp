@@ -25,6 +25,9 @@ namespace Radiant
         NODISCARD FORCEINLINE GLFWwindow* Get() const noexcept { return m_Handle; }
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
 
+        void WaitEvents() const noexcept;
+        NODISCARD std::vector<const char*> GetRequiredExtensions() const noexcept;
+
         void PollInput() noexcept;
 
         NODISCARD FORCEINLINE bool IsMinimized() const noexcept { return m_Description.Extent == glm::uvec2(0); }

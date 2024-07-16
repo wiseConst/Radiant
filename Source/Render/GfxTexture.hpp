@@ -1,6 +1,10 @@
 #pragma once
 
 #include <Core/Core.hpp>
+#include <Systems/RenderSystem.hpp>
+
+#define VK_NO_PROTOTYPES
+#include "vma/vk_mem_alloc.h"
 
 namespace Radiant
 {
@@ -18,17 +22,21 @@ namespace Radiant
         glm::uvec3 Dimensions{1};
     };
 
-    class GfxTexture
+    class GfxTexture final : private Uncopyable, private Unmovable
     {
       public:
         GfxTexture(const GfxTextureDescription& description) noexcept : m_Description(description){};
-        virtual ~GfxTexture() noexcept = default;
-
-      protected:
-        GfxTextureDescription m_Description{};
+        ~GfxTexture() noexcept = default;
 
       private:
+        GfxTextureDescription m_Description{};
+        vk::UniqueImage m_Image{nullptr};
+        VmaAllocation m_Allocation{};
+
         constexpr GfxTexture() noexcept = delete;
+
+        void Invalidate() noexcept;
+        void Shutdown() noexcept;
     };
 
 }  // namespace Radiant

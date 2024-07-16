@@ -9,8 +9,13 @@ namespace Radiant
 {
 
 #define NODISCARD [[nodiscard]]
+#if _MSC_VER
 #define FORCEINLINE __forceinline
+#else
+#define FORCEINLINE __attribute__((always_inline))
+#endif
 #define BIT(x) (1 << (x))
+#define FALLTHROUGH [[fallthrough]]
 
 // NOTE: In case you want to suppress the compiler warnings.
 #define MAYBE_UNUSED [[maybe_unused]]

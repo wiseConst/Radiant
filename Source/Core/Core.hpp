@@ -59,4 +59,39 @@ namespace Radiant
         bool m_bShutdownRequested{false};
     };
 
+    namespace CoreUtils
+    {
+
+        template <typename T> static std::vector<T> LoadData(const std::string_view& dataPath) noexcept
+        {
+            static_assert(std::is_trivial<T>::value, "T must be a trivial type");
+            RDNT_ASSERT(!dataPath.empty(), "Data path is invalid!");
+
+            std::ifstream input(dataPath.data(), std::ios::in | std::ios::binary | std::ios::ate);
+            RDNT_ASSERT(input.is_open(), "Failed to open: {}", dataPath);
+
+            const auto fileSize = input.tellg();
+            input.seekg(0, std::ios::beg);
+
+            std::vector<T> loadedData(fileSize / sizeof(T));
+            input.read(reinterpret_cast<char*>(loadedData.data()), fileSize);
+
+            input.close();
+            return loadedData;
+        }
+
+        template <typename T> static void SaveData(const std::string_view& dataPath, const std::vector<T>& data) noexcept
+        {
+            static_assert(std::is_trivial<T>::value, "T must be a trivial type");
+            RDNT_ASSERT(!dataPath.empty(), "Data path is invalid!");
+
+            std::ofstream output(dataPath.data(), std::ios::out | std::ios::binary | std::ios::trunc);
+            RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
+
+            output.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(data[0]));
+            output.close();
+        }
+
+    }  // namespace CoreUtils
+
 }  // namespace Radiant

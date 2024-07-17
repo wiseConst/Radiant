@@ -15,10 +15,11 @@ namespace Radiant
       private:
         glm::vec3 m_Position{0.f};
         float m_Zoom{90.f};
+        float m_Yaw{0.f};
+        float m_Pitch{0.f};
 
         glm::mat4 m_ProjectionMatrix;
         glm::mat4 m_ViewMatrix;
-
     };
 
 }  // namespace Radiant

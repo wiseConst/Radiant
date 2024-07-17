@@ -1,6 +1,5 @@
 #pragma once
 
-#include <Core/Core.hpp>
 #include <Render/CoreDefines.hpp>
 
 #ifdef RDNT_WINDOWS
@@ -14,21 +13,35 @@
 
 #include <vulkan/vulkan.hpp>
 
+// Including device first place ruins surface creation!
+#include <Render/GfxDevice.hpp>
+
 namespace Radiant
 {
 
-    class RenderSystem final : private Uncopyable, private Unmovable
+    class GfxContext final : private Uncopyable, private Unmovable
     {
       public:
-        RenderSystem() noexcept { Init(); }
-        ~RenderSystem() noexcept { Shutdown(); };
+        GfxContext() noexcept { Init(); }
+        ~GfxContext() noexcept { Shutdown(); };
 
         bool BeginFrame() noexcept;
         void EndFrame() noexcept;
 
+        NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return m_PipelineLayout; }
+        NODISCARD FORCEINLINE auto& GetDevice() const noexcept { return m_Device; }
+        NODISCARD FORCEINLINE auto& GetCurrentFrameData() const noexcept { return m_FrameData[m_CurrentFrameIndex]; }
+        NODISCARD FORCEINLINE const auto& GetSwapchainExtent() const noexcept { return m_SwapchainExtent; }
+        NODISCARD FORCEINLINE const auto& GetCurrentSwapchainImage() const noexcept { return m_SwapchainImages[m_CurrentImageIndex]; }
+        NODISCARD FORCEINLINE const auto& GetCurrentSwapchainImageView() const noexcept
+        {
+            return m_SwapchainImageViews[m_CurrentImageIndex];
+        }
+
       private:
         vk::UniqueInstance m_Instance{};
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
+        Unique<GfxDevice> m_Device{};
 
         struct FrameData
         {
@@ -43,20 +56,6 @@ namespace Radiant
             vk::UniqueDescriptorPool DescriptorPool{};
             vk::DescriptorSet DescriptorSet{};
         };
-
-        struct Queue
-        {
-            vk::Queue Handle{};
-            std::optional<std::uint32_t> QueueFamilyIndex{std::nullopt};
-        };
-
-        vk::UniqueDevice m_LogicalDevice{};
-        vk::PhysicalDevice m_PhysicalDevice{};
-        vk::UniquePipelineCache m_PipelineCache{};
-
-        Queue m_GCTQueue{};      // graphics / compute / transfer
-        Queue m_PresentQueue{};  // present
-
         std::array<FrameData, s_BufferedFrameCount> m_FrameData;
 
         // Bindless resources pt. 2
@@ -70,17 +69,12 @@ namespace Radiant
         std::uint32_t m_CurrentImageIndex{0};
         std::vector<vk::UniqueImageView> m_SwapchainImageViews;
         std::vector<vk::Image> m_SwapchainImages;
-
-        // Other shit not tied to this class
-        vk::UniquePipeline m_TriPipeline{};
+        bool m_bSwapchainNeedsResize{false};
 
         void Init() noexcept;
         void CreateInstanceAndDebugUtilsMessenger() noexcept;
-        void SelectGPUAndCreateLogicalDevice(std::vector<const char*>& requiredDeviceExtensions,
-                                             const vk::PhysicalDeviceFeatures& requiredDeviceFeatures,
-                                             const void* pNext = nullptr) noexcept;
+        void CreateSurface() noexcept;
         void InvalidateSwapchain() noexcept;
-        void LoadPipelineCache() noexcept;
         void CreateFrameResources() noexcept;
         void Shutdown() noexcept;
     };

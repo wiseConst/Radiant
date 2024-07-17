@@ -20,23 +20,13 @@ namespace Radiant
 // NOTE: In case you want to suppress the compiler warnings.
 #define MAYBE_UNUSED [[maybe_unused]]
 
-#define RDNT_ENUM_BITS(EnumType)                                                                                                           \
-    FORCEINLINE constexpr EnumType operator|(EnumType lhs, EnumType rhs) noexcept                                                          \
-    {                                                                                                                                      \
-        return EnumType(std::to_underlying(lhs) | std::to_underlying(rhs));                                                                \
-    }                                                                                                                                      \
-    FORCEINLINE constexpr bool operator&(EnumType lhs, EnumType rhs) noexcept                                                              \
-    {                                                                                                                                      \
-        return static_cast<std::underlying_type_t<EnumType>>(0) != (std::to_underlying(lhs) & std::to_underlying(rhs));                    \
-    }
-
     static constexpr std::string_view s_DEFAULT_STRING = "NONE";
 
     template <class Key, class T, class Hash = ankerl::unordered_dense::hash<Key>, class KeyEqual = std::equal_to<Key>>
     using UnorderedMap = ankerl::unordered_dense::map<Key, T, Hash, KeyEqual>;
 
     template <class Key, class Hash = ankerl::unordered_dense::hash<Key>, class KeyEqual = std::equal_to<Key>>
-    using UnorderedSet = ankerl::unordered_dense::set<Key, void, Hash, KeyEqual>;
+    using UnorderedSet = ankerl::unordered_dense::set<Key, Hash, KeyEqual>;
 
     template <class T> using Shared = std::shared_ptr<T>;
     template <class T, class... Args> NODISCARD FORCEINLINE Shared<T> MakeShared(Args&&... args) noexcept
@@ -100,6 +90,7 @@ namespace Radiant
         constexpr ~Unmovable() noexcept = default;
     };
 
+    // Simple type-erased handle inspired by Darianopolis.
     template <typename T> class Handle
     {
       public:

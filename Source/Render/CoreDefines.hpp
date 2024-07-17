@@ -15,6 +15,7 @@ namespace Radiant
         std::atomic<std::uint64_t> DrawCallCount;
         std::atomic<std::uint64_t> ComputeDispatchCount;
         std::atomic<double> RenderGraphBuildTime;  // Milliseconds
+        double GPUTime;                            // Milliseconds
     };
 
     enum class EResourceState : std::uint8_t
@@ -24,7 +25,6 @@ namespace Radiant
         RESOURCE_STATE_PRE_INITIALIZED,  // For images used by host only
         RESOURCE_STATE_VERTEX_BUFFER,
         RESOURCE_STATE_INDEX_BUFFER,
-        RESOURCE_STATE_UNIFORM_BUFFER,
         // StreamOutput,
         RESOURCE_STATE_SHADER_RESOURCE,
         RESOURCE_STATE_STORAGE_BUFFER,

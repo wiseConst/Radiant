@@ -46,6 +46,7 @@ namespace Radiant
             if (!m_Renderer->BeginFrame()) continue;
 
             m_MainWindow->PollInput();
+            m_Renderer->RenderFrame();
 
             ++m_FrameCounter;
             ++frameCount;
@@ -81,6 +82,9 @@ namespace Radiant
 
     void Application::Shutdown() noexcept
     {
+        m_Renderer.reset();
+        m_MainWindow.reset();
+
         LOG_INFO("{}", __FUNCTION__);
         Log::Shutdown();
 

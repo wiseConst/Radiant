@@ -12,7 +12,9 @@ namespace Radiant
         Scene(const std::string_view& name) noexcept : m_Name(name) {}
         ~Scene() = default;
 
-        void AddMesh(const std::string& meshPath) noexcept;
+        void LoadMesh(const std::string& meshPath) noexcept { 
+            m_StaticMeshes.emplace_back(meshPath); 
+        }
 
       private:
         std::string m_Name{s_DEFAULT_STRING};

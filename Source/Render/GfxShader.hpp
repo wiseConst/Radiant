@@ -3,40 +3,39 @@
 #include <Render/CoreDefines.hpp>
 #include <Render/GfxDevice.hpp>
 
-template <> struct ankerl::unordered_dense::hash<vk::ShaderStageFlags>
-{
-    using is_avalanching = void;
-
-    [[nodiscard]] auto operator()(const vk::ShaderStageFlags& x) const noexcept -> std::uint64_t
-    {
-        return detail::wyhash::hash(x.operator unsigned int());
-    }
-};
-
 namespace Radiant
 {
 
     struct GfxShaderDescription
     {
         // TODO: Per shader-stage defines
-        std::string Path;
+        std::string Path{s_DEFAULT_STRING};
     };
 
     class GfxShader final : private Uncopyable, private Unmovable
     {
       public:
-        GfxShader(const Unique<GfxDevice>& device, const GfxShaderDescription& shaderDesc) noexcept;
+        GfxShader(const Unique<GfxDevice>& device, const GfxShaderDescription& shaderDesc) noexcept
+            : m_Device(device), m_Description(shaderDesc)
+        {
+            Invalidate();
+        }
         ~GfxShader() noexcept = default;
 
-        void ClearModules() noexcept { m_Modules.clear(); }
+        NODISCARD std::vector<vk::PipelineShaderStageCreateInfo> GetShaderStages() const noexcept;
+        FORCEINLINE void HotReload() noexcept
+        {
+            m_ModuleMap.clear();
+            Invalidate();
+        }
 
       private:
         const Unique<GfxDevice>& m_Device;
         GfxShaderDescription m_Description{};
-        UnorderedMap<vk::ShaderStageFlags, vk::UniqueShaderModule> m_Modules;
+        UnorderedMap<vk::ShaderStageFlagBits, vk::UniqueShaderModule> m_ModuleMap;
 
         constexpr GfxShader() noexcept = delete;
-        void Init() noexcept;
+        void Invalidate() noexcept;
     };
 
 }  // namespace Radiant

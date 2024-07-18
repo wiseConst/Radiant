@@ -34,6 +34,11 @@ namespace Radiant
     }
 #endif
 
+    struct WindowResizeData
+    {
+        glm::uvec2 Dimensions;
+    };
+
     class ThreadPool final
     {
       public:

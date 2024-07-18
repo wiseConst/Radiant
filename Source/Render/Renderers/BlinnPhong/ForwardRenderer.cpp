@@ -1,22 +1,34 @@
 #include <pch.h>
 #include "ForwardRenderer.hpp"
 
+#include <Core/Application.hpp>
+#include <Core/Window/GLFWWindow.hpp>
+
+#include <GLFW/glfw3.h>
+
 namespace Radiant
 {
-    void ForwardBlinnPhongRenderer::Init() noexcept
+    ForwardBlinnPhongRenderer::ForwardBlinnPhongRenderer() noexcept
     {
+        m_MainCamera = MakeShared<Camera>(70.0f, static_cast<float>(m_ViewportExtent.width) / static_cast<float>(m_ViewportExtent.height));
+
         m_Scene = MakeUnique<Scene>("ForwardRendererTest");
+        m_Scene->LoadMesh("../Assets/Models/standard/bunny");
+        {
+            auto triShader =
+                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/shaders.slang"});
 
-        m_ViewportExtent = m_GfxContext->GetSwapchainExtent();
+            GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB8G8R8A8Unorm}, .CullMode{vk::CullModeFlagBits::eBack}};
+            GfxPipelineDescription pipelineDesc = {.DebugName = "TestTriangle", .PipelineOptions = gpo, .Shader = triShader};
+            m_TriPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+        }
 
-        GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB8G8R8A8Unorm}};
-        GfxPipelineDescription pipelineDesc = {.DebugName = "TestTriangle", .PipelineOptions = gpo};
-        m_TriPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
-    }
-
-    void ForwardBlinnPhongRenderer::Shutdown() noexcept
-    {
-        m_GfxContext->GetDevice()->WaitIdle();
+        {
+            //        auto blinnPhongShader =
+            //    MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/blinn_phong.slang"});
+            //          GfxGraphicsPipelineOptions gpo = {.RenderingFormats{vk::Format::eB8G8R8A8Unorm},
+            //          .CullMode{vk::CullModeFlagBits::eBack};
+        }
     }
 
     bool ForwardBlinnPhongRenderer::BeginFrame() noexcept
@@ -31,6 +43,14 @@ namespace Radiant
 
     void ForwardBlinnPhongRenderer::RenderFrame() noexcept
     {
+        auto& mainWindow = Application::Get().GetMainWindow();
+
+        // Testing shaders hot reload and deferred deletion queue.
+        if (mainWindow->IsKeyPressed(GLFW_KEY_V))
+        {
+            m_TriPipeline->HotReload();
+        }
+
         auto& frameData = m_GfxContext->GetCurrentFrameData();
 
         frameData.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
@@ -76,12 +96,7 @@ namespace Radiant
             glm::mat4 ProjectionMatrix;
             glm::mat4 ViewMatrix;
         };
-        PushConstantBlock pc{.ProjectionMatrix =
-                                 glm::perspective(glm::radians(80.0f), m_ViewportExtent.width / static_cast<float>(m_ViewportExtent.height),
-                                                  0.1f, 1000.0f) /**
-glm::scale(glm::vec3(1.0f, -1.0f, -1.0f))*/
-                             ,
-                             .ViewMatrix = glm::translate(glm::vec3(0.f, 0.0f, -1.0f)) * glm::scale(glm::vec3(10.f))};
+        PushConstantBlock pc{.ProjectionMatrix = m_MainCamera->GetProjectionMatrix(), .ViewMatrix = m_MainCamera->GetViewMatrix()};
         frameData.CommandBuffer.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                                  0, pc);
 

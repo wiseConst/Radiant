@@ -35,9 +35,20 @@ namespace Radiant
 
         void SetTitle(const std::string_view& title) noexcept;
 
+        bool IsMouseButtonPressed(const int32_t glfwKey) const noexcept;
+        bool IsKeyPressed(const int32_t glfwKey) const noexcept;
+        glm::vec2 GetCursorPos() const noexcept;
+
+        FORCEINLINE void SubscribeToResizeEvents(std::function<void(const WindowResizeData&)>&& func) noexcept
+        {
+            m_ResizeFuncQueue.emplace_back(std::forward<std::function<void(const WindowResizeData&)>>(func));
+        }
+
       private:
         WindowDescription m_Description{};
         GLFWwindow* m_Handle{nullptr};
+
+        std::deque<std::function<void(const WindowResizeData&)>> m_ResizeFuncQueue;
 
         void Init() noexcept;
         void Destroy() noexcept;

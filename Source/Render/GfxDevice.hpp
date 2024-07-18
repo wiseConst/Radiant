@@ -39,9 +39,15 @@ namespace Radiant
             return *m_Device;
         }
 
+        FORCEINLINE void PushObjectToDelete(std::move_only_function<void()>&& func) noexcept
+        {
+            m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<std::move_only_function<void()>>(func));
+        }
+
       private:
         vk::UniqueDevice m_Device{};
         vk::PhysicalDevice m_PhysicalDevice{};
+        vk::PhysicalDeviceProperties m_GPUProperties{};
 
         vk::UniquePipelineCache m_PipelineCache{};
 
@@ -54,17 +60,18 @@ namespace Radiant
         Queue m_PresentQueue{};  // present
 
         VmaAllocator m_Allocator{};
+        std::uint64_t m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
 
-        // TODO: std::vector<std::pair<std::uint64_t, DeferredDeletionQueue>> and PollDeletionQueues, std::uint64_t - frame number
         struct DeferredDeletionQueue
         {
-            using DeletionFunc = std::move_only_function<void()>;
-
           public:
             DeferredDeletionQueue() noexcept  = default;
             ~DeferredDeletionQueue() noexcept = default;
 
-            void EmplaceBack(DeletionFunc&& func) noexcept { Deque.emplace_back(std::forward<DeletionFunc>(func)); }
+            void EmplaceBack(std::move_only_function<void()>&& func) noexcept
+            {
+                Deque.emplace_back(std::forward<std::move_only_function<void()>>(func));
+            }
 
             void Flush() noexcept
             {
@@ -76,8 +83,31 @@ namespace Radiant
             }
 
           private:
-            std::deque<DeletionFunc> Deque;
+            std::deque<std::move_only_function<void()>> Deque;
         };
+
+        // NOTE: std::uint64_t - global frame number
+        // TODO: Fix compilation issues using UnorderedMap!
+        std::unordered_map<std::uint64_t, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
+
+        // NOTE: Only GfxContext can call it!
+        friend class GfxContext;
+        void PollDeletionQueues() noexcept
+        {
+            UnorderedSet<std::uint64_t> queuesToRemove;
+
+            for (auto& [frameNumber, deletionQueue] : m_DeletionQueuesPerFrame)
+            {
+                // We have to make sure that all buffered frames stopped using our resource!
+                if (frameNumber + s_BufferedFrameCount >= m_CurrentFrameNumber) continue;
+
+                deletionQueue.Flush();
+                queuesToRemove.emplace(frameNumber);
+            }
+
+            for (const auto queueFrameNumber : queuesToRemove)
+                m_DeletionQueuesPerFrame.erase(queueFrameNumber);
+        }
 
         constexpr GfxDevice() noexcept = delete;
         void Init(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface) noexcept;

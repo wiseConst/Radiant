@@ -54,7 +54,7 @@ namespace Radiant
             const auto gpuProperties = gpu.getProperties();
             LOG_TRACE("{}", gpuProperties.deviceName.data());
 
-            if (s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
+            if (gpus.size() == 1 || s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
                 !s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
             {
                 const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
@@ -136,6 +136,7 @@ namespace Radiant
                             "Required device features flags aren't present in available device features!");
 
                 m_PhysicalDevice = gpu;
+                m_GPUProperties  = gpuProperties;
                 LOG_INFO("Chosen GPU: {}", gpuProperties.deviceName.data());
             }
         }
@@ -197,7 +198,7 @@ namespace Radiant
 
     void GfxDevice::InitVMA(const vk::UniqueInstance& instance) noexcept
     {
-        // TODO: Expand flags to VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT
+        // TODO: Expand flags to VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT based on extension availability
         const VmaVulkanFunctions vulkanFunctions = {.vkGetInstanceProcAddr = instance.getDispatch().vkGetInstanceProcAddr,
                                                     .vkGetDeviceProcAddr   = m_Device.getDispatch().vkGetDeviceProcAddr};
         const VmaAllocatorCreateInfo allocatorCI = {.flags = VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
@@ -212,13 +213,32 @@ namespace Radiant
 
     void GfxDevice::LoadPipelineCache() noexcept
     {
-        // TODO: Validate before using.
         auto pipelineCacheCI = vk::PipelineCacheCreateInfo();
         std::vector<std::uint8_t> pipelineCacheBlob;
         if (std::filesystem::exists("pso_cache.bin"))
         {
             pipelineCacheBlob = CoreUtils::LoadData<std::uint8_t>("pso_cache.bin");
-            pipelineCacheCI.setInitialDataSize(pipelineCacheBlob.size() * pipelineCacheBlob[0]).setPInitialData(pipelineCacheBlob.data());
+
+            // Validate retrieved pipeline cache.
+            vk::PipelineCacheHeaderVersionOne pipelineCacheHeader{};
+            std::memcpy(&pipelineCacheHeader, pipelineCacheBlob.data(), sizeof(pipelineCacheHeader));
+
+            bool bPipelineCacheValid{true};
+            if (!pipelineCacheBlob.empty())
+            {
+                bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.vendorID == pipelineCacheHeader.vendorID);
+                bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.deviceID == pipelineCacheHeader.deviceID);
+                bPipelineCacheValid =
+                    bPipelineCacheValid && (std::memcmp(m_GPUProperties.pipelineCacheUUID, pipelineCacheHeader.pipelineCacheUUID,
+                                                        VK_UUID_SIZE * sizeof(std::uint8_t)) == 0);
+            }
+
+            LOG_INFO("Found pipeline cache {}!", bPipelineCacheValid ? "valid" : "invalid");
+
+            // NOTE: Currently on my AMD iGPU loading pipeline caches throws exception from (bcryptprimitives.dll)
+            if (bPipelineCacheValid && !s_bForceIGPU)
+                pipelineCacheCI.setInitialDataSize(pipelineCacheBlob.size() * pipelineCacheBlob[0])
+                    .setPInitialData(pipelineCacheBlob.data());
         }
 
         m_PipelineCache = m_Device->createPipelineCacheUnique(pipelineCacheCI);
@@ -231,4 +251,5 @@ namespace Radiant
         vmaDestroyAllocator(m_Allocator);
         CoreUtils::SaveData("pso_cache.bin", m_Device->getPipelineCacheData(*m_PipelineCache));
     }
+
 }  // namespace Radiant

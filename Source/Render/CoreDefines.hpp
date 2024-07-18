@@ -25,7 +25,6 @@ namespace Radiant
         RESOURCE_STATE_PRE_INITIALIZED,  // For images used by host only
         RESOURCE_STATE_VERTEX_BUFFER,
         RESOURCE_STATE_INDEX_BUFFER,
-        // StreamOutput,
         RESOURCE_STATE_SHADER_RESOURCE,
         RESOURCE_STATE_STORAGE_BUFFER,
         RESOURCE_STATE_RENDER_TARGET,  // Color attachments

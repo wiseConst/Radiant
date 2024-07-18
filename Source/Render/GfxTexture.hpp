@@ -13,8 +13,10 @@ namespace Radiant
     {
         vk::ImageType Type{vk::ImageType::e2D};
         glm::uvec3 Dimensions{1};
-        /*  bool bGenerateMips;
-          bool bExposeMips;*/
+        bool bExposeMips;  // Create image view per mip?
+        std::uint32_t LayerCount{1};
+        vk::Format Format{vk::Format::eR8G8B8A8Unorm};
+        vk::ImageUsageFlags UsageFlags{vk::ImageUsageFlagBits::eSampled};
     };
 
     class GfxTexture final : private Uncopyable, private Unmovable
@@ -23,9 +25,25 @@ namespace Radiant
         GfxTexture(const Unique<GfxDevice>& device, const GfxTextureDescription& textureDesc) noexcept
             : m_Device(device), m_Description(textureDesc)
         {
+            m_Description.UsageFlags |= vk::ImageUsageFlagBits::eSampled;
             Invalidate();
         };
         ~GfxTexture() noexcept { Shutdown(); }
+
+        NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept
+        {
+            switch (format)
+            {
+                case vk::Format::eD16Unorm:
+                case vk::Format::eX8D24UnormPack32:
+                case vk::Format::eD32Sfloat:
+                case vk::Format::eD16UnormS8Uint:
+                case vk::Format::eD24UnormS8Uint:
+                case vk::Format::eD32SfloatS8Uint: return true;
+            }
+
+            return false;
+        }
 
       private:
         const Unique<GfxDevice>& m_Device;

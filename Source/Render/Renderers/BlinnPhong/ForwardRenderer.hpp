@@ -8,8 +8,8 @@ namespace Radiant
     class ForwardBlinnPhongRenderer final : public Renderer
     {
       public:
-        ForwardBlinnPhongRenderer() noexcept : Renderer() { Init(); }
-        ~ForwardBlinnPhongRenderer() noexcept final override { Shutdown(); }
+        ForwardBlinnPhongRenderer() noexcept;
+        ~ForwardBlinnPhongRenderer() noexcept final override = default;
 
         bool BeginFrame() noexcept final override;
         void RenderFrame() noexcept final override;
@@ -17,10 +17,7 @@ namespace Radiant
 
       private:
         Unique<GfxPipeline> m_TriPipeline{nullptr};
-        vk::Extent2D m_ViewportExtent{};
-
-        void Init() noexcept;
-        void Shutdown() noexcept;
+        Unique<GfxPipeline> m_BlinnPhongPipeline{nullptr};
     };
 
 }  // namespace Radiant

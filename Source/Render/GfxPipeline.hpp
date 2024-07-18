@@ -9,8 +9,20 @@ namespace Radiant
 {
 
     // NOTE: Use vulkan type_traits to fill in
-    struct BufferLayout
+    struct VertexBufferLayout
     {
+      public:
+        struct VertexBufferElement
+        {
+            std::uint32_t Offset{0};
+            std::uint32_t Size{0};
+        };
+
+      private:
+        std::uint32_t m_Stride{0};
+        std::vector<VertexBufferElement> m_Elements{};
+
+        void CalculateStride() noexcept;
     };
 
     struct GfxGraphicsPipelineOptions
@@ -74,7 +86,7 @@ namespace Radiant
 
         operator const vk::Pipeline&() const noexcept { return *m_Handle; }
 
-        void Invalidate() noexcept;
+        void HotReload() noexcept;
 
       private:
         const Unique<GfxDevice>& m_Device;
@@ -84,6 +96,7 @@ namespace Radiant
         vk::UniquePipeline m_Handle{};
 
         constexpr GfxPipeline() noexcept = delete;
+        void Invalidate() noexcept;
     };
 
 }  // namespace Radiant

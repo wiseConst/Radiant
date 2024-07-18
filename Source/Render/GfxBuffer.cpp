@@ -4,4 +4,6 @@
 namespace Radiant
 {
 
-}
+    void GfxBuffer::Shutdown() noexcept {}
+
+}  // namespace Radiant

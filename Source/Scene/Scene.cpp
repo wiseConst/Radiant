@@ -4,4 +4,4 @@
 namespace Radiant
 {
 
-}
+}  // namespace Radiant

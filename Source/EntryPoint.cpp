@@ -1,7 +1,5 @@
 #include <Core/Application.hpp>
 
-// KISS
-
 int32_t main(uint32_t argc, char** argv) noexcept
 {
     using namespace Radiant;

@@ -24,11 +24,14 @@ namespace Radiant
 
     bool GfxContext::BeginFrame() noexcept
     {
+        m_Device->PollDeletionQueues();
+
         if (m_bSwapchainNeedsResize)
         {
             m_Device->WaitIdle();
             InvalidateSwapchain();
-            m_bSwapchainNeedsResize = false;
+            m_bSwapchainNeedsResize        = false;
+            m_Device->m_CurrentFrameNumber = m_GlobalFrameNumber = 0;
             return false;
         }
 
@@ -99,6 +102,8 @@ namespace Radiant
         }
 
         m_CurrentFrameIndex = (m_CurrentFrameIndex + 1) % s_BufferedFrameCount;
+        ++m_Device->m_CurrentFrameNumber;
+        ++m_GlobalFrameNumber;
     }
 
     void GfxContext::Init() noexcept
@@ -150,7 +155,7 @@ namespace Radiant
             bool bLayerSupported{false};
             for (const auto& il : instanceLayers)
             {
-                LOG_TRACE("{}", il.layerName.data());
+                // LOG_TRACE("{}", il.layerName.data());
                 if (strcmp(eil, il.layerName.data()) != 0) continue;
 
                 bLayerSupported = true;
@@ -214,12 +219,12 @@ namespace Radiant
 
     void GfxContext::CreateSurface() noexcept
     {
-#ifdef RDNT_WINDOWS
         const auto& mainWindow = Application::Get().GetMainWindow();
-
+#ifdef RDNT_WINDOWS
         const auto win32SurfaceCI =
             vk::Win32SurfaceCreateInfoKHR().setHwnd(glfwGetWin32Window(mainWindow->Get())).setHinstance(GetModuleHandle(nullptr));
         m_Surface = m_Instance->createWin32SurfaceKHRUnique(win32SurfaceCI);
+//#elif defined(RDNT_LINUX)
 #else
 #error Do override surface khr creation on other platforms
 #endif

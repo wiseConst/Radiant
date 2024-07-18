@@ -37,6 +37,7 @@ namespace Radiant
         {
             return m_SwapchainImageViews[m_CurrentImageIndex];
         }
+        NODISCARD FORCEINLINE const auto GetGlobalFrameNumber() const noexcept { return m_GlobalFrameNumber; }
 
       private:
         vk::UniqueInstance m_Instance{};
@@ -62,6 +63,7 @@ namespace Radiant
         vk::UniqueDescriptorSetLayout m_DescriptorSetLayout{};
         vk::UniquePipelineLayout m_PipelineLayout{};
 
+        std::uint64_t m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
         vk::Extent2D m_SwapchainExtent{};
         vk::UniqueSurfaceKHR m_Surface{};
         vk::UniqueSwapchainKHR m_Swapchain{};

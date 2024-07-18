@@ -46,6 +46,7 @@ namespace Radiant
             if (!m_Renderer->BeginFrame()) continue;
 
             m_MainWindow->PollInput();
+            m_Renderer->UpdateMainCamera(m_DeltaTime);
             m_Renderer->RenderFrame();
 
             ++m_FrameCounter;

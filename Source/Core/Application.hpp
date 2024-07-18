@@ -22,7 +22,6 @@ namespace Radiant
         uint32_t FPSLimit{60};
     };
 
-    class Scene;
     class Application final
     {
       public:
@@ -39,6 +38,7 @@ namespace Radiant
 
         NODISCARD FORCEINLINE const auto& GetMainWindow() const noexcept { return m_MainWindow; }
 
+        NODISCARD FORCEINLINE const auto GetDeltaTime() const noexcept { return m_DeltaTime; }
         NODISCARD FORCEINLINE static const auto& Get() noexcept
         {
             RDNT_ASSERT(s_Instance, "Application instance invalid!");
@@ -49,7 +49,6 @@ namespace Radiant
         static inline Application* s_Instance{nullptr};
         Unique<GLFWWindow> m_MainWindow{nullptr};
         Unique<Renderer> m_Renderer{nullptr};
-        Shared<Scene> m_Scene{nullptr};
 
         ApplicationDescription m_Description{};
         bool m_bIsRunning{false};

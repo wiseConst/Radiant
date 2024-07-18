@@ -4,8 +4,6 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-#include <Core/Application.hpp>  // To query current RHI
-
 namespace Radiant
 {
 
@@ -71,6 +69,25 @@ namespace Radiant
         glfwSetWindowTitle(m_Handle, title.data());
     }
 
+    bool GLFWWindow::IsMouseButtonPressed(const int32_t glfwKey) const noexcept
+    {
+        RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
+        return glfwGetMouseButton(m_Handle, glfwKey) == GLFW_PRESS;
+    }
+
+    bool GLFWWindow::IsKeyPressed(const int32_t glfwKey) const noexcept
+    {
+        RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
+        return glfwGetKey(m_Handle, glfwKey) == GLFW_PRESS;
+    }
+
+    glm::vec2 GLFWWindow::GetCursorPos() const noexcept
+    {
+        double xPos{0.}, yPos{0.};
+        glfwGetCursorPos(m_Handle, &xPos, &yPos);
+        return glm::vec2(xPos, yPos);
+    }
+
     void GLFWWindow::Init() noexcept
     {
         GLFWUtils::InitGLFW();
@@ -78,24 +95,28 @@ namespace Radiant
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
         m_Handle = glfwCreateWindow(m_Description.Extent.x, m_Description.Extent.y, m_Description.Name.data(), nullptr, nullptr);
-        if (!m_Handle)
-        {
-            LOG_ERROR("Failed to create GLFW window!");
-            glfwTerminate();
-            return;
-        }
+        RDNT_ASSERT(m_Handle, "Failed to create GLFW window!");
+
+        // NOTE: Works only when cursor is disabled.
+        //  if (glfwRawMouseMotionSupported()) glfwSetInputMode(m_Handle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
 
         GLFWUtils::s_GLFWActiveWindowCount.fetch_add(1);
 
-        glfwSetWindowUserPointer(m_Handle, &m_Description);
+        glfwSetWindowUserPointer(m_Handle, this);
         glfwSetFramebufferSizeCallback(m_Handle,
                                        [](GLFWwindow* window, std::int32_t width, std::int32_t height)
                                        {
                                            void* data = glfwGetWindowUserPointer(window);
                                            RDNT_ASSERT(data, "glfwGetWindowUserPointer() returned invalid data!");
 
-                                           WindowDescription& desc = *(static_cast<WindowDescription*>(data));
-                                           desc.Extent             = glm::uvec2{width, height};
+                                           GLFWWindow& actualWindow          = *(static_cast<GLFWWindow*>(data));
+                                           actualWindow.m_Description.Extent = glm::uvec2{width, height};
+
+                                           const WindowResizeData wrd{.Dimensions = actualWindow.m_Description.Extent};
+                                           for (const auto& func : actualWindow.m_ResizeFuncQueue)
+                                           {
+                                               func(wrd);
+                                           }
                                        });
     }
 

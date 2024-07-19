@@ -5,17 +5,21 @@
 
 namespace Radiant
 {
-
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr bool s_bForceIGPU                 = true;
     static constexpr std::uint8_t s_BufferedFrameCount = 2;
 
-    struct RendererStatistics
+    enum class EBlendMode : std::uint8_t
     {
-        std::atomic<std::uint64_t> DrawCallCount;
-        std::atomic<std::uint64_t> ComputeDispatchCount;
-        std::atomic<double> RenderGraphBuildTime;  // Milliseconds
-        double GPUTime;                            // Milliseconds
+        BLEND_MODE_ADDITIVE,
+        BLEND_MODE_ALPHA,
+    };
+
+    enum class EExtraBufferFlag : std::uint8_t
+    {
+        EXTRA_BUFFER_FLAG_DEVICE_LOCAL,  // Default memory - host, but this flag implies device memory and buffer device address(GPU virtual
+                                         // address)
+        EXTRA_BUFFER_FLAG_MAPPED,
     };
 
     enum class EResourceState : std::uint8_t

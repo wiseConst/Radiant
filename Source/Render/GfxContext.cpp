@@ -32,6 +32,8 @@ namespace Radiant
             InvalidateSwapchain();
             m_bSwapchainNeedsResize        = false;
             m_Device->m_CurrentFrameNumber = m_GlobalFrameNumber = 0;
+            m_Device->PollDeletionQueues(true);
+
             return false;
         }
 
@@ -69,8 +71,12 @@ namespace Radiant
 
     void GfxContext::EndFrame() noexcept
     {
+        // NOTE: In future I might upscale(compute) or load into swapchain image or render into so here's optimal flags.
         const vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                                                        vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader;
+                                                        vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader |
+                                                        vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                                                        vk::PipelineStageFlagBits::eLateFragmentTests;
+
         const auto& presentQueue = m_Device->GetPresentQueue().Handle;
         presentQueue.submit(vk::SubmitInfo()
                                 .setCommandBuffers(m_FrameData[m_CurrentFrameIndex].CommandBuffer)
@@ -108,6 +114,8 @@ namespace Radiant
 
     void GfxContext::Init() noexcept
     {
+        RDNT_ASSERT(!s_Instance, "GfxContext already exists!");
+        s_Instance = this;
         LOG_INFO("{}", __FUNCTION__);
 
         // Initialize minimal set of function pointers.
@@ -224,7 +232,7 @@ namespace Radiant
         const auto win32SurfaceCI =
             vk::Win32SurfaceCreateInfoKHR().setHwnd(glfwGetWin32Window(mainWindow->Get())).setHinstance(GetModuleHandle(nullptr));
         m_Surface = m_Instance->createWin32SurfaceKHRUnique(win32SurfaceCI);
-//#elif defined(RDNT_LINUX)
+// #elif defined(RDNT_LINUX)
 #else
 #error Do override surface khr creation on other platforms
 #endif

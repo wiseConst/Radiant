@@ -28,7 +28,9 @@ namespace Radiant
             m_Description.UsageFlags |= vk::ImageUsageFlagBits::eSampled;
             Invalidate();
         };
-        ~GfxTexture() noexcept { Shutdown(); }
+        ~GfxTexture() noexcept { Destroy(); }
+
+        operator const vk::Image&() const noexcept { return m_Image; }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept
         {
@@ -45,17 +47,33 @@ namespace Radiant
             return false;
         }
 
+        void Resize(const glm::uvec3& dimensions) noexcept;
+
+        NODISCARD FORCEINLINE vk::RenderingAttachmentInfo GetRenderingAttachmentInfo(const vk::ImageLayout imageLayout,
+                                                                                     const vk::ClearValue& clearValue,
+                                                                                     const vk::AttachmentLoadOp loadOp,
+                                                                                     const vk::AttachmentStoreOp storeOp,
+                                                                                     const std::uint8_t mipLevel = 0) const noexcept
+        {
+            return vk::RenderingAttachmentInfo()
+                .setImageView(*m_MipChain[mipLevel])
+                .setImageLayout(imageLayout)
+                .setClearValue(clearValue)
+                .setLoadOp(loadOp)
+                .setStoreOp(storeOp);
+        }
+
       private:
+        //  std::size_t m_UUID{0};
         const Unique<GfxDevice>& m_Device;
         GfxTextureDescription m_Description{};
-        vk::UniqueImage m_Image{nullptr};
-        vk::UniqueImageView m_ImageView{nullptr};  // Base mip level(0)
+        vk::Image m_Image{};
         std::vector<vk::UniqueImageView> m_MipChain{};
         VmaAllocation m_Allocation{};
 
         constexpr GfxTexture() noexcept = delete;
         void Invalidate() noexcept;
-        void Shutdown() noexcept;
+        void Destroy() noexcept;
     };
 
 }  // namespace Radiant

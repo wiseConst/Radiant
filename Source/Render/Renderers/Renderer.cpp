@@ -23,7 +23,6 @@ namespace Radiant
 
     void Renderer::UpdateMainCamera(const float deltaTime) noexcept
     {
-
         auto& mainWindow = Application::Get().GetMainWindow();
         if (mainWindow->IsMouseButtonPressed(GLFW_MOUSE_BUTTON_1))
             m_MainCamera->Rotate(Application::Get().GetDeltaTime(), mainWindow->GetCursorPos());

@@ -44,6 +44,16 @@ namespace Radiant
             m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<std::move_only_function<void()>>(func));
         }
 
+        void AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept;
+        void DeallocateTexture(VkImage& image, VmaAllocation& allocation) const noexcept;
+
+        void AllocateBuffer(const EExtraBufferFlag extraBufferFlag, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
+                            VmaAllocation& allocation) const noexcept;
+        void DeallocateBuffer(VkBuffer& buffer, VmaAllocation& allocation) const noexcept;
+
+        void* Map(VmaAllocation& allocation) const noexcept;
+        void Unmap(VmaAllocation& allocation) const noexcept;
+
       private:
         vk::UniqueDevice m_Device{};
         vk::PhysicalDevice m_PhysicalDevice{};
@@ -92,14 +102,15 @@ namespace Radiant
 
         // NOTE: Only GfxContext can call it!
         friend class GfxContext;
-        void PollDeletionQueues() noexcept
+        void PollDeletionQueues(const bool bImmediate = false /* means somewhere before waitIdle was called, so GPU is free! */) noexcept
         {
             UnorderedSet<std::uint64_t> queuesToRemove;
 
             for (auto& [frameNumber, deletionQueue] : m_DeletionQueuesPerFrame)
             {
                 // We have to make sure that all buffered frames stopped using our resource!
-                if (frameNumber + s_BufferedFrameCount >= m_CurrentFrameNumber) continue;
+                const std::uint64_t framesPast = frameNumber + static_cast<std::uint64_t>(s_BufferedFrameCount);
+                if (!bImmediate && framesPast >= m_CurrentFrameNumber) continue;
 
                 deletionQueue.Flush();
                 queuesToRemove.emplace(frameNumber);

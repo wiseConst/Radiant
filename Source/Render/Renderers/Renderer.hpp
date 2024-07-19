@@ -3,7 +3,7 @@
 #include <Render/CoreDefines.hpp>
 #include <Render/GfxContext.hpp>
 
-#include <Render/RenderGraph/RenderGraph.hpp>
+#include <Render/RenderGraph.hpp>
 #include <Render/GfxPipeline.hpp>
 #include <Render/GfxTexture.hpp>
 #include <Render/GfxBuffer.hpp>
@@ -11,6 +11,9 @@
 #include <Render/Camera.hpp>
 
 #include <Scene/Scene.hpp>
+
+// NOTE: Used only for input mappings.
+#include <GLFW/glfw3.h>
 
 namespace Radiant
 {

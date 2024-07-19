@@ -16,8 +16,8 @@ namespace Radiant
         void EndFrame() noexcept final override;
 
       private:
-        Unique<GfxPipeline> m_TriPipeline{nullptr};
         Unique<GfxPipeline> m_BlinnPhongPipeline{nullptr};
+        Unique<GfxTexture> m_DepthTexture{nullptr};
     };
 
 }  // namespace Radiant

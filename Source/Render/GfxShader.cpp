@@ -81,15 +81,16 @@ namespace Radiant
         RDNT_ASSERT(SLANG_SUCCEEDED(slangResult), "SLANG: Failed to create global session!");
 
         // Next we create a compilation session to generate SPIRV code from Slang source.
-        slang::SessionDesc sessionDesc         = {};
-        slang::TargetDesc targetDesc           = {};
-        targetDesc.format                      = SLANG_SPIRV;
-        targetDesc.profile                     = slangGlobalSession->findProfile("spirv_1_6");
-        targetDesc.flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
-        targetDesc.forceGLSLScalarBufferLayout = true;
+        const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
+                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460" */"spirv_1_6"),
+                                              .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
+                                              .forceGLSLScalarBufferLayout = true};
 
-        sessionDesc.targets     = &targetDesc;
-        sessionDesc.targetCount = 1;
+        const slang::SessionDesc sessionDesc = {
+            .targets                 = &targetDesc,
+            .targetCount             = 1,
+            .defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
+        };
 
         ComPtr<slang::ISession> localSession;
         slangResult = slangGlobalSession->createSession(sessionDesc, localSession.writeRef());

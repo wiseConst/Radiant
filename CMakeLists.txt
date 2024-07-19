@@ -218,18 +218,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb_image)
 target_include_directories(${PROJECT_NAME} PRIVATE ${stb_image_SOURCE_DIR})
 
-# tracy profiler
-message(STATUS "Fetching tracy profiler...")
-FetchContent_Declare(
-        tracy
-        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-        GIT_TAG master
-        GIT_SHALLOW true
-)
-FetchContent_MakeAvailable(tracy)
-target_link_libraries(${PROJECT_NAME} PRIVATE Tracy::TracyClient)
-set_target_properties(TracyClient PROPERTIES FOLDER "ThirdParty")
-
 # ankerl's robin_hood backward shift deletion hashmap/set
 message(STATUS "Fetching unordered_dense...")
 FetchContent_Declare(

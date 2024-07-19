@@ -69,7 +69,21 @@ namespace Radiant
             m_ProjectionMatrix = glm::perspective(glm::radians(m_Zoom), m_AR, m_zNear, m_zFar) * glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
         }
 
+        NODISCARD FORCEINLINE const auto& GetShaderData() noexcept
+        {
+            m_InternalData = {.ProjectionMatrix     = m_ProjectionMatrix,
+                              .ViewMatrix           = m_ViewMatrix,
+                              .ViewProjectionMatrix = GetViewProjectionMatrix(),
+                              .Position             = m_Position,
+                              .zNear                = m_zNear,
+                              .zFar                 = m_zFar};
+            return m_InternalData;
+        }
+
+        NODISCARD FORCEINLINE glm::mat4 GetViewProjectionMatrix() const noexcept { return m_ProjectionMatrix * m_ViewMatrix; }
+
       private:
+        CameraData m_InternalData{};
         glm::vec3 m_Velocity{1.0f};
         glm::vec3 m_Position{0.f};
         float m_Zoom{90.f};

@@ -4,12 +4,6 @@
 #include <Render/GfxShader.hpp>
 #include <Render/GfxTexture.hpp>
 
-#include <vulkan/vulkan_format_traits.hpp>
-
-// NOTE: Used only for base viewport construction.
-#include <Core/Application.hpp>
-#include <Core/Window/GLFWWindow.hpp>
-
 namespace Radiant
 {
     void GfxPipeline::HotReload() noexcept
@@ -46,19 +40,20 @@ namespace Radiant
             }
             dynamicRenderingInfo.setColorAttachmentFormats(colorAttachmentFormats);
 
-            const auto inputAssemblyStateCI =
-                vk::PipelineInputAssemblyStateCreateInfo().setTopology(gpo->PrimitiveTopology).setPrimitiveRestartEnable(vk::False);
-            const auto vtxInputStateCI     = vk::PipelineVertexInputStateCreateInfo();
             const auto depthStencilStateCI = vk::PipelineDepthStencilStateCreateInfo()
                                                  .setBack(gpo->Back)
                                                  .setFront(gpo->Front)
                                                  .setStencilTestEnable(gpo->bStencilTest)
-                                                 .setDepthBoundsTestEnable(vk::True)
+                                                 .setDepthBoundsTestEnable(gpo->DepthBounds != glm::vec2{0.f})
                                                  .setDepthCompareOp(gpo->DepthCompareOp)
                                                  .setDepthTestEnable(gpo->bDepthTest)
                                                  .setDepthWriteEnable(gpo->bDepthWrite)
-                                                 .setMaxDepthBounds(1.0f)
-                                                 .setMinDepthBounds(0.f);
+                                                 .setMinDepthBounds(gpo->DepthBounds.x)
+                                                 .setMaxDepthBounds(gpo->DepthBounds.y);
+
+            const auto inputAssemblyStateCI =
+                vk::PipelineInputAssemblyStateCreateInfo().setTopology(gpo->PrimitiveTopology).setPrimitiveRestartEnable(vk::False);
+            const auto vtxInputStateCI = vk::PipelineVertexInputStateCreateInfo();
             const auto colorBlendAttachment =
                 vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                                                                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
@@ -74,31 +69,21 @@ namespace Radiant
             // TODO:
             const auto msaaStateCI = vk::PipelineMultisampleStateCreateInfo().setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
-            const auto& windowExtent = Application::Get().GetMainWindow()->GetDescription().Extent;
-            const auto scissor       = vk::Rect2D().setExtent(vk::Extent2D().setWidth(windowExtent.x).setHeight(windowExtent.y));
-            const auto viewport      = vk::Viewport()
-                                      .setMinDepth(0.0f)
-                                      .setMaxDepth(1.0f)
-                                      .setWidth(static_cast<float>(windowExtent.x))
-                                      .setHeight(static_cast<float>(windowExtent.y));
-            const auto viewportStateCI = vk::PipelineViewportStateCreateInfo().setScissors(scissor).setViewports(viewport);
-
             // NOTE: Unfortunately vulkan.hpp doesn't recognize ankerl's unordered set.
             std::vector<vk::DynamicState> dynamicStates;
             for (const auto& dynamicState : gpo->DynamicStates)
                 dynamicStates.emplace_back(dynamicState);
-
-            const auto shaderStages   = m_Description.Shader->GetShaderStages();
             const auto dynamicStateCI = vk::PipelineDynamicStateCreateInfo().setDynamicStates(dynamicStates);
-            auto [result, pipeline]   = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
+
+            const auto shaderStages = m_Description.Shader->GetShaderStages();
+            auto [result, pipeline] = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
                 m_Device->GetPipelineCache(), vk::GraphicsPipelineCreateInfo()
                                                   .setLayout(*m_BindlessPipelineLayout)
                                                   .setStages(shaderStages)
+                                                  .setPDepthStencilState(&depthStencilStateCI)
                                                   .setPNext(&dynamicRenderingInfo)
                                                   .setPInputAssemblyState(gpo->bMeshShading ? nullptr : &inputAssemblyStateCI)
                                                   .setPVertexInputState(gpo->bMeshShading ? nullptr : &vtxInputStateCI)
-                                                  .setPDepthStencilState(&depthStencilStateCI)
-                                                  .setPViewportState(&viewportStateCI)
                                                   .setPColorBlendState(&blendStateCI)
                                                   .setPRasterizationState(&rasterizationStateCI)
                                                   .setPMultisampleState(&msaaStateCI)
@@ -122,6 +107,11 @@ namespace Radiant
         }
         else
             RDNT_ASSERT(false, "This shouldn't happen! {}", __FUNCTION__);
+    }
+
+    void GfxPipeline::Destroy() noexcept
+    {
+        m_Device->PushObjectToDelete([oldPipeline = std::move(m_Handle)]() {});
     }
 
 }  // namespace Radiant

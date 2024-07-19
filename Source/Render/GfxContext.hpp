@@ -39,7 +39,24 @@ namespace Radiant
         }
         NODISCARD FORCEINLINE const auto GetGlobalFrameNumber() const noexcept { return m_GlobalFrameNumber; }
 
+        NODISCARD vk::UniqueCommandBuffer AllocateCommandBuffer() noexcept
+        {
+            return std::move(m_Device->GetLogicalDevice()
+                                 ->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo()
+                                                                    .setCommandBufferCount(1)
+                                                                    .setLevel(vk::CommandBufferLevel::ePrimary)
+                                                                    .setCommandPool(*m_FrameData[m_CurrentFrameIndex].CommandPool))
+                                 .back());
+        }
+
+        NODISCARD FORCEINLINE static const auto& Get() noexcept
+        {
+            RDNT_ASSERT(s_Instance, "GfxContext instance is invalid!");
+            return *s_Instance;
+        }
+
       private:
+        static inline GfxContext* s_Instance{nullptr};  // NOTE: Used only for safely pushing objects through device into deletion queue.
         vk::UniqueInstance m_Instance{};
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
         Unique<GfxDevice> m_Device{};

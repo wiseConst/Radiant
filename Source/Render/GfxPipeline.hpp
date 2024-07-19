@@ -8,26 +8,9 @@
 namespace Radiant
 {
 
-    // NOTE: Use vulkan type_traits to fill in
-    struct VertexBufferLayout
-    {
-      public:
-        struct VertexBufferElement
-        {
-            std::uint32_t Offset{0};
-            std::uint32_t Size{0};
-        };
-
-      private:
-        std::uint32_t m_Stride{0};
-        std::vector<VertexBufferElement> m_Elements{};
-
-        void CalculateStride() noexcept;
-    };
-
+    // NOTE: Programmable Vertex Pulling only.
     struct GfxGraphicsPipelineOptions
     {
-        // TODO: std::vector<BufferLayout> VertexStreams;
         std::vector<vk::Format> RenderingFormats{};
         UnorderedSet<vk::DynamicState> DynamicStates{};
 
@@ -46,8 +29,9 @@ namespace Radiant
         vk::StencilOp Back{vk::StencilOp::eZero};
         vk::StencilOp Front{vk::StencilOp::eZero};
 
+        glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
         bool bBlendEnable{false};
-        // TODO: Blend flags
+        EBlendMode BlendMode{EBlendMode::BLEND_MODE_ALPHA};
     };
 
     struct GfxComputePipelineOptions
@@ -77,12 +61,12 @@ namespace Radiant
         {
             if (auto* gpo = std::get_if<GfxGraphicsPipelineOptions>(&m_Description.PipelineOptions); gpo)
             {
-                gpo->DynamicStates.insert(vk::DynamicState::eViewport);
-                gpo->DynamicStates.insert(vk::DynamicState::eScissor);
+                gpo->DynamicStates.insert(vk::DynamicState::eViewportWithCount);
+                gpo->DynamicStates.insert(vk::DynamicState::eScissorWithCount);
             }
             Invalidate();
         }
-        ~GfxPipeline() noexcept = default;
+        ~GfxPipeline() noexcept { Destroy(); }
 
         operator const vk::Pipeline&() const noexcept { return *m_Handle; }
 
@@ -97,6 +81,7 @@ namespace Radiant
 
         constexpr GfxPipeline() noexcept = delete;
         void Invalidate() noexcept;
+        void Destroy() noexcept;
     };
 
 }  // namespace Radiant

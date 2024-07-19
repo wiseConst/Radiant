@@ -3,6 +3,8 @@
 
 #define VMA_IMPLEMENTATION
 #define VK_NO_PROTOTYPES
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "vma/vk_mem_alloc.h"
 
 namespace Radiant
@@ -10,8 +12,9 @@ namespace Radiant
     void GfxDevice::Init(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface) noexcept
     {
         std::vector<const char*> requiredDeviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,          // For rendering into OS-window
-            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,  // Neglect render passes, required by ImGui, core in vk 1.3
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // For rendering into OS-window
+            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,        // Neglect render passes, required by ImGui, core in vk 1.3
+            VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME  // To neglect viewport state definition on pipeline creation
         };
 
         auto vkFeatures13 =
@@ -34,6 +37,11 @@ namespace Radiant
 
         *paravozik = &vkFeatures12;
         paravozik  = &vkFeatures12.pNext;
+
+        auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features().setVariablePointers(vk::True).setVariablePointersStorageBuffer(vk::True);
+
+        *paravozik = &vkFeatures11;
+        paravozik  = &vkFeatures11.pNext;
 
         constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures =
             vk::PhysicalDeviceFeatures().setShaderInt16(vk::True).setShaderInt64(vk::True).setFillModeNonSolid(vk::True);
@@ -244,9 +252,58 @@ namespace Radiant
         m_PipelineCache = m_Device->createPipelineCacheUnique(pipelineCacheCI);
     }
 
+    void GfxDevice::AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept
+    {
+        const VmaAllocationCreateInfo allocationCI = {.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
+
+        const VkImageCreateInfo& oldVkImageCI = imageCI;
+        RDNT_ASSERT(vmaCreateImage(m_Allocator, &oldVkImageCI, &allocationCI, &image, &allocation, nullptr) == VK_SUCCESS,
+                    "VMA: Failed to allocate image!");
+    }
+
+    void GfxDevice::DeallocateTexture(VkImage& image, VmaAllocation& allocation) const noexcept
+    {
+        vmaDestroyImage(m_Allocator, image, allocation);
+    }
+
+    void GfxDevice::AllocateBuffer(const EExtraBufferFlag extraBufferFlag, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
+                                   VmaAllocation& allocation) const noexcept
+    {
+        const bool bIsDeviceLocal = extraBufferFlag == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+        const VmaAllocationCreateFlags allocationCreateFlags =
+            bIsDeviceLocal ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        const VmaAllocationCreateInfo allocationCI = {.flags = allocationCreateFlags,
+                                                      .usage = VMA_MEMORY_USAGE_AUTO,
+                                                      .requiredFlags =
+                                                          bIsDeviceLocal ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : VkMemoryPropertyFlags{0}};
+
+        const VkBufferCreateInfo& oldVkBufferCI = bufferCI;
+        RDNT_ASSERT(vmaCreateBuffer(m_Allocator, &oldVkBufferCI, &allocationCI, &buffer, &allocation, nullptr) == VK_SUCCESS,
+                    "VMA: Failed to allocate buffer!");
+    }
+
+    void GfxDevice::DeallocateBuffer(VkBuffer& buffer, VmaAllocation& allocation) const noexcept
+    {
+        vmaDestroyBuffer(m_Allocator, buffer, allocation);
+    }
+
+    void* GfxDevice::Map(VmaAllocation& allocation) const noexcept
+    {
+        void* mapped{nullptr};
+
+        RDNT_ASSERT(vmaMapMemory(m_Allocator, allocation, &mapped) == VK_SUCCESS, "VMA: Failed to map memory!");
+        return mapped;
+    }
+
+    void GfxDevice::Unmap(VmaAllocation& allocation) const noexcept
+    {
+        vmaUnmapMemory(m_Allocator, allocation);
+    }
+
     void GfxDevice::Shutdown() noexcept
     {
         m_Device->waitIdle();
+        PollDeletionQueues(true);
 
         vmaDestroyAllocator(m_Allocator);
         CoreUtils::SaveData("pso_cache.bin", m_Device->getPipelineCacheData(*m_PipelineCache));

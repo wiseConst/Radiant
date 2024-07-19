@@ -15,7 +15,7 @@ namespace Radiant
 
     static constexpr const char* s_ENGINE_NAME = "RADIANT";
 
-#ifdef RDNT_DEBUG
+#if RDNT_DEBUG
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
     if (!(cond))                                                                                                                           \
     {                                                                                                                                      \
@@ -25,7 +25,7 @@ namespace Radiant
     }
 #endif
 
-#ifdef RDNT_RELEASE
+#if RDNT_RELEASE
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
     if (!(cond))                                                                                                                           \
     {                                                                                                                                      \

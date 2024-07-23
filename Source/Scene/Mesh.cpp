@@ -122,7 +122,7 @@ namespace Radiant
                 auto& submesh = Submeshes.emplace_back();
 
                 const auto& device       = gfxContext->GetDevice();
-                auto loaderCommandBuffer = gfxContext->AllocateCommandBuffer();
+                auto loaderCommandBuffer = gfxContext->AllocateTransferCommandBuffer();
                 loaderCommandBuffer->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
                 vk::Buffer vpbScratch{};
@@ -139,10 +139,10 @@ namespace Radiant
                 std::memcpy(vpbHostMemory, vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
                 device->Unmap(vpbScratchAllocation);
 
-                const GfxBufferDescription vpb = {.Capacity        = vertexPositions.size() * sizeof(vertexPositions[0]),
-                                                  .ElementSize     = sizeof(vertexPositions[0]),
-                                                  .UsageFlags      = vk::BufferUsageFlagBits::eStorageBuffer,
-                                                  .ExtraBufferFlag = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
+                const GfxBufferDescription vpb = {.Capacity    = vertexPositions.size() * sizeof(vertexPositions[0]),
+                                                  .ElementSize = sizeof(vertexPositions[0]),
+                                                  .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer,
+                                                  .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
                 submesh.VertexPosBuffer        = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), vpb);
 
                 loaderCommandBuffer->copyBuffer(vpbScratch, *submesh.VertexPosBuffer,
@@ -164,7 +164,8 @@ namespace Radiant
 
                 const GfxBufferDescription vab = {.Capacity    = vertexAttributes.size() * sizeof(vertexAttributes[0]),
                                                   .ElementSize = sizeof(vertexAttributes[0]),
-                                                  .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer};
+                                                  .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer,
+                                                  .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
                 submesh.VertexAttribBuffer     = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), vab);
 
                 loaderCommandBuffer->copyBuffer(vabScratch, *submesh.VertexAttribBuffer,
@@ -187,15 +188,16 @@ namespace Radiant
                 const GfxBufferDescription ib = {.Capacity    = indices.size() * sizeof(indices[0]),
                                                  .ElementSize = sizeof(indices[0]),
                                                  .UsageFlags =
-                                                     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer};
+                                                     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
+                                                 .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
                 submesh.IndexBuffer           = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), ib);
 
                 loaderCommandBuffer->copyBuffer(ibScratch, *submesh.IndexBuffer,
                                                 vk::BufferCopy().setSize(indices.size() * sizeof(indices[0])));
 
                 loaderCommandBuffer->end();
-                gfxContext->GetDevice()->GetGCTQueue().Handle.submit(vk::SubmitInfo().setCommandBuffers(*loaderCommandBuffer));
-                gfxContext->GetDevice()->GetGCTQueue().Handle.waitIdle();
+                gfxContext->GetDevice()->GetTransferQueue().Handle.submit(vk::SubmitInfo().setCommandBuffers(*loaderCommandBuffer));
+                gfxContext->GetDevice()->GetTransferQueue().Handle.waitIdle();
 
                 device->DeallocateBuffer(*(VkBuffer*)&vpbScratch, vpbScratchAllocation);
                 device->DeallocateBuffer(*(VkBuffer*)&vabScratch, vabScratchAllocation);

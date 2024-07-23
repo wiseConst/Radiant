@@ -30,8 +30,13 @@ namespace Radiant
         vk::StencilOp Front{vk::StencilOp::eZero};
 
         glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
-        bool bBlendEnable{false};
-        EBlendMode BlendMode{EBlendMode::BLEND_MODE_ALPHA};
+
+        enum class EBlendMode : std::uint8_t
+        {
+            BLEND_MODE_NONE,
+            BLEND_MODE_ADDITIVE,
+            BLEND_MODE_ALPHA,
+        } BlendMode{EBlendMode::BLEND_MODE_NONE};
     };
 
     struct GfxComputePipelineOptions

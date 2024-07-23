@@ -56,11 +56,11 @@ namespace Radiant
                                                    const vk::PhysicalDeviceFeatures& requiredDeviceFeatures, const void* pNext) noexcept
     {
         const auto gpus = instance->enumeratePhysicalDevices();
-        LOG_TRACE("{} gpus present.", gpus.size());
+        LOG_TRACE("Found {} GPUs.", gpus.size());
         for (auto& gpu : gpus)
         {
             const auto gpuProperties = gpu.getProperties();
-            LOG_TRACE("{}", gpuProperties.deviceName.data());
+            LOG_TRACE("\t{}", gpuProperties.deviceName.data());
 
             if (gpus.size() == 1 || s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
                 !s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
@@ -159,34 +159,57 @@ namespace Radiant
 
             const auto queueFlags = qfProperties[i].queueFlags;
 
-            // Check if DMA engine is present.
-            if (queueFlags == vk::QueueFlagBits::eTransfer ||
-                queueFlags == (vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding))
+            constexpr auto generalQueueFlags = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer;
+            if (!m_GeneralQueue.QueueFamilyIndex.has_value() && (queueFlags & generalQueueFlags) == generalQueueFlags)
             {
-                LOG_INFO("Found DMA engine at queue family [{}]", i);
-            }
+                m_GeneralQueue.QueueFamilyIndex = i;
 
-            constexpr auto gctQueueFlags = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer;
-            if (!m_GCTQueue.QueueFamilyIndex.has_value() && (queueFlags & gctQueueFlags) == gctQueueFlags)
-            {
-                m_GCTQueue.QueueFamilyIndex = i;
+                if (!m_PresentQueue.QueueFamilyIndex.has_value() && m_PhysicalDevice.getSurfaceSupportKHR(i, *surface))
+                    m_PresentQueue.QueueFamilyIndex = i;
+
+                continue;
             }
 
             if (!m_PresentQueue.QueueFamilyIndex.has_value() && m_PhysicalDevice.getSurfaceSupportKHR(i, *surface))
             {
+                LOG_INFO("Found Dedicated-Present queue at family [{}] ??", i);
                 m_PresentQueue.QueueFamilyIndex = i;
+                continue;
+            }
+
+            // Check if DMA engine is present.
+            const bool bIsDedicatedTransfer = (queueFlags == vk::QueueFlagBits::eTransfer ||
+                                               queueFlags == (vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding));
+            if (!m_TransferQueue.QueueFamilyIndex.has_value() && bIsDedicatedTransfer)
+            {
+                LOG_INFO("Found DMA engine at queue family [{}]", i);
+                m_TransferQueue.QueueFamilyIndex = i;
+                continue;
+            }
+
+            const bool bIsAsyncCompute =
+                (queueFlags == vk::QueueFlagBits::eCompute ||
+                 queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eSparseBinding) ||
+                 queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer) ||
+                 queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding));
+            if (!m_ComputeQueue.QueueFamilyIndex.has_value() && bIsAsyncCompute)
+            {
+                LOG_INFO("Found Async-Compute queue at family [{}]", i);
+                m_ComputeQueue.QueueFamilyIndex = i;
             }
         }
-        RDNT_ASSERT(m_GCTQueue.QueueFamilyIndex.has_value(), "Failed to find GCT Queue Family Index!");
+        RDNT_ASSERT(m_GeneralQueue.QueueFamilyIndex.has_value(), "Failed to find General Queue Family Index!");
         RDNT_ASSERT(m_PresentQueue.QueueFamilyIndex.has_value(), "Failed to find Present Queue Family Index!");
+        RDNT_ASSERT(m_TransferQueue.QueueFamilyIndex.has_value(), "Failed to find Dedicated-Transfer Queue Family Index!");
+        RDNT_ASSERT(m_ComputeQueue.QueueFamilyIndex.has_value(), "Failed to find Async-Compute Queue Family Index!");
 
         constexpr float queuePriority = 1.0f;
-
         std::vector<vk::DeviceQueueCreateInfo> queuesCI;
-        for (const std::set<std::uint32_t> uniqueQFIndices{*m_GCTQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex};
+        for (const std::set<std::uint32_t> uniqueQFIndices{*m_GeneralQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex,
+                                                           *m_TransferQueue.QueueFamilyIndex, *m_ComputeQueue.QueueFamilyIndex};
              const auto qfIndex : uniqueQFIndices)
         {
-            queuesCI.emplace_back().setPQueuePriorities(&queuePriority).setQueueCount(1).setQueueFamilyIndex(qfIndex);
+            queuesCI.emplace_back().setQueuePriorities(queuePriority).setQueueCount(1).setQueueFamilyIndex(qfIndex);
         }
 
         const auto logicalDeviceCI = vk::DeviceCreateInfo()
@@ -200,8 +223,10 @@ namespace Radiant
         // Load device functions.
         VULKAN_HPP_DEFAULT_DISPATCHER.init(*m_Device);
 
-        m_GCTQueue.Handle     = m_Device->getQueue(*m_GCTQueue.QueueFamilyIndex, 0);
-        m_PresentQueue.Handle = m_Device->getQueue(*m_PresentQueue.QueueFamilyIndex, 0);
+        m_GeneralQueue.Handle  = m_Device->getQueue(*m_GeneralQueue.QueueFamilyIndex, 0);
+        m_PresentQueue.Handle  = m_Device->getQueue(*m_PresentQueue.QueueFamilyIndex, 0);
+        m_TransferQueue.Handle = m_Device->getQueue(*m_TransferQueue.QueueFamilyIndex, 0);
+        m_ComputeQueue.Handle  = m_Device->getQueue(*m_ComputeQueue.QueueFamilyIndex, 0);
     }
 
     void GfxDevice::InitVMA(const vk::UniqueInstance& instance) noexcept
@@ -266,10 +291,11 @@ namespace Radiant
         vmaDestroyImage(m_Allocator, image, allocation);
     }
 
-    void GfxDevice::AllocateBuffer(const EExtraBufferFlag extraBufferFlag, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
+    void GfxDevice::AllocateBuffer(const ExtraBufferFlags extraBufferFlags, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
                                    VmaAllocation& allocation) const noexcept
     {
-        const bool bIsDeviceLocal = extraBufferFlag == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+        const bool bIsDeviceLocal =
+            (extraBufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
         const VmaAllocationCreateFlags allocationCreateFlags =
             bIsDeviceLocal ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
         const VmaAllocationCreateInfo allocationCI = {.flags = allocationCreateFlags,

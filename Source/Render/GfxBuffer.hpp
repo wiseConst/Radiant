@@ -14,7 +14,13 @@ namespace Radiant
         std::size_t Capacity{};
         std::size_t ElementSize{};
         vk::BufferUsageFlags UsageFlags;
-        EExtraBufferFlag ExtraBufferFlag{};
+        ExtraBufferFlags ExtraFlags{};
+
+        // NOTE: We don't care about capacity cuz we can resize wherever we want.
+        bool operator!=(const GfxBufferDescription& other) const noexcept
+        {
+            return std::tie(UsageFlags, ExtraFlags) != std::tie(other.UsageFlags, other.ExtraFlags);
+        }
     };
 
     class GfxBuffer final : private Uncopyable, private Unmovable
@@ -23,25 +29,46 @@ namespace Radiant
         GfxBuffer(const Unique<GfxDevice>& device, const GfxBufferDescription& bufferDesc) noexcept
             : m_Device(device), m_Description(bufferDesc)
         {
-            if (m_Description.ExtraBufferFlag == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
+            if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) ==
+                EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
             {
                 m_Description.UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
             }
-            else if (m_Description.ExtraBufferFlag == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
+
+            if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
             {
                 m_Description.UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
             }
-            else
-                RDNT_ASSERT(false, "Unknown extra buffer flag! THIS SHOULDN'T HAPPEN!");
+
+            RDNT_ASSERT(m_Description.ExtraFlags > 0, "Unknown extra buffer usage flags!");
 
             Invalidate();
         }
         ~GfxBuffer() noexcept { Destroy(); }
 
+        NODISCARD FORCEINLINE const auto& GetDescription() noexcept { return m_Description; }
+
         NODISCARD FORCEINLINE const vk::DeviceAddress& GetBDA() const noexcept
         {
             RDNT_ASSERT(m_BDA.has_value(), "BDA is invalid!");
             return m_BDA.value();
+        }
+
+        void SetData(const void* data, const std::size_t dataSize) noexcept
+        {
+            if (!m_Mapped) return;
+
+            if (m_Description.Capacity < dataSize) Resize(dataSize);
+            std::memcpy(m_Mapped, data, dataSize);
+        }
+
+        void Resize(const std::size_t newCapacity, const std::size_t newElementSize = std::numeric_limits<std::size_t>::max()) noexcept
+        {
+            if (newElementSize != std::numeric_limits<std::size_t>::max()) m_Description.ElementSize = newElementSize;
+
+            m_Description.Capacity = newCapacity;
+            Destroy();
+            Invalidate();
         }
 
         NODISCARD std::size_t GetElementCount() const noexcept

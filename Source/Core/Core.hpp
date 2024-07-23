@@ -15,12 +15,16 @@ namespace Radiant
 
     static constexpr const char* s_ENGINE_NAME = "RADIANT";
 
+#if _MSC_VER
+#define RDNT_DEBUGBREAK __debugbreak()
+#endif
+
 #if RDNT_DEBUG
 #define RDNT_ASSERT(cond, ...)                                                                                                             \
     if (!(cond))                                                                                                                           \
     {                                                                                                                                      \
         LOG_ERROR(__VA_ARGS__);                                                                                                            \
-        __debugbreak();                                                                                                                    \
+        RDNT_DEBUGBREAK;                                                                                                                   \
         std::terminate();                                                                                                                  \
     }
 #endif
@@ -95,6 +99,17 @@ namespace Radiant
             RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
 
             output.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(data[0]));
+            output.close();
+        }
+
+        static void SaveData(const std::string_view& dataPath, const std::stringstream& data) noexcept
+        {
+            RDNT_ASSERT(!dataPath.empty(), "Data path is invalid!");
+
+            std::ofstream output(dataPath.data(), std::ios::out | std::ios::binary | std::ios::trunc);
+            RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
+
+            output.write(reinterpret_cast<const char*>(data.str().c_str()), data.str().size() * sizeof(data.str()[0]));
             output.close();
         }
 

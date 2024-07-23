@@ -8,7 +8,9 @@
 
 namespace Radiant
 {
-    Renderer::Renderer() noexcept : m_GfxContext(MakeUnique<GfxContext>())
+    Renderer::Renderer() noexcept
+        : m_GfxContext(MakeUnique<GfxContext>()), m_RenderGraphResourcePool(MakeUnique<RenderGraphResourcePool>(m_GfxContext->GetDevice())),
+          m_UIRenderer(MakeUnique<ImGuiRenderer>(m_GfxContext))
     {
         Application::Get().GetMainWindow()->SubscribeToResizeEvents([=](const WindowResizeData& wrd)
                                                                     { m_MainCamera->OnResized(wrd.Dimensions); });

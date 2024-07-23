@@ -10,6 +10,8 @@
 #include <Render/GfxShader.hpp>
 #include <Render/Camera.hpp>
 
+#include <Render/Renderers/ImGuiRenderer.hpp>
+
 #include <Scene/Scene.hpp>
 
 // NOTE: Used only for input mappings.
@@ -32,9 +34,11 @@ namespace Radiant
 
       protected:
         Unique<GfxContext> m_GfxContext{nullptr};
+        Unique<RenderGraphResourcePool> m_RenderGraphResourcePool{nullptr};
         Unique<RenderGraph> m_RenderGraph{nullptr};
         Unique<Scene> m_Scene{nullptr};
         Shared<Camera> m_MainCamera{nullptr};
+        Unique<ImGuiRenderer> m_UIRenderer{nullptr};
 
         vk::Extent2D m_ViewportExtent{};
     };

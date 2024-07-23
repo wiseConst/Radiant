@@ -10,7 +10,7 @@ namespace Radiant
     {
         RDNT_ASSERT(m_Description.Shader, "Pipeline hasn't shader attached to it!");
 
-        m_Device->PushObjectToDelete([oldPipeline = std::move(m_Handle)]() {});
+        m_Device->PushObjectToDelete(std::move(m_Handle));
         m_Description.Shader->HotReload();
         Invalidate();
     }
@@ -54,10 +54,43 @@ namespace Radiant
             const auto inputAssemblyStateCI =
                 vk::PipelineInputAssemblyStateCreateInfo().setTopology(gpo->PrimitiveTopology).setPrimitiveRestartEnable(vk::False);
             const auto vtxInputStateCI = vk::PipelineVertexInputStateCreateInfo();
-            const auto colorBlendAttachment =
-                vk::PipelineColorBlendAttachmentState().setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                                                                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
-            const auto blendStateCI         = vk::PipelineColorBlendStateCreateInfo().setAttachments(colorBlendAttachment);
+
+            std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments;
+            for (const auto format : colorAttachmentFormats)
+            {
+                auto& colorBlendAttachment = colorBlendAttachments.emplace_back(vk::PipelineColorBlendAttachmentState().setColorWriteMask(
+                    vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+                    vk::ColorComponentFlagBits::eA));
+
+                switch (gpo->BlendMode)
+                {
+                    case GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_NONE: break;
+                    case GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ALPHA:
+                    {
+                        colorBlendAttachment.setBlendEnable(vk::True)
+                            .setColorBlendOp(vk::BlendOp::eAdd)
+                            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                            .setAlphaBlendOp(vk::BlendOp::eAdd)
+                            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                            .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
+                        break;
+                    }
+                    case GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ADDITIVE:
+                    {
+                        colorBlendAttachment.setBlendEnable(vk::True)
+                            .setColorBlendOp(vk::BlendOp::eAdd)
+                            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                            .setDstColorBlendFactor(vk::BlendFactor::eOne)
+                            .setAlphaBlendOp(vk::BlendOp::eAdd)
+                            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                            .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
+                        break;
+                    }
+                }
+            }
+
+            const auto blendStateCI         = vk::PipelineColorBlendStateCreateInfo().setAttachments(colorBlendAttachments);
             const auto rasterizationStateCI = vk::PipelineRasterizationStateCreateInfo()
                                                   .setCullMode(gpo->CullMode)
                                                   .setFrontFace(gpo->FrontFace)
@@ -111,7 +144,7 @@ namespace Radiant
 
     void GfxPipeline::Destroy() noexcept
     {
-        m_Device->PushObjectToDelete([oldPipeline = std::move(m_Handle)]() {});
+        m_Device->PushObjectToDelete(std::move(m_Handle));
     }
 
 }  // namespace Radiant

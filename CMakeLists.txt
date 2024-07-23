@@ -89,8 +89,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/include)
 
  if (WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/lib/slang.lib)
-elseif(UNIX)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/lib/slang.a)
 endif()
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -127,26 +125,26 @@ target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
 set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
 # imgui 
-#message(STATUS "Fetching imgui...")
-#FetchContent_Declare(
-#        imgui
-#        GIT_REPOSITORY https://github.com/ocornut/imgui.git
-#        GIT_TAG docking
-#        GIT_SHALLOW true
-#)
+message(STATUS "Fetching imgui...")
+FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG master
+        GIT_SHALLOW true
+)
 
-#FetchContent_MakeAvailable(imgui)
-#target_include_directories(${PROJECT_NAME} PRIVATE ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+FetchContent_MakeAvailable(imgui)
+target_include_directories(${PROJECT_NAME} PRIVATE ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 
 # Manually creating imgui lib since it hasn't CMakeLists.txt (what a pity...)
-#file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
-#add_library(imgui STATIC ${IMGUI_SOURCES})
-#target_compile_definitions(imgui PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
-#target_include_directories(imgui PRIVATE ${imgui_SOURCE_DIR} ${Vulkan_INCLUDE_DIRS} ${glfw_SOURCE_DIR}/include)
+file(GLOB IMGUI_SOURCES ${imgui_SOURCE_DIR}/*.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+add_library(imgui STATIC ${IMGUI_SOURCES})
+target_compile_definitions(imgui PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+target_include_directories(imgui PRIVATE ${imgui_SOURCE_DIR} ${Vulkan_INCLUDE_DIRS} ${glfw_SOURCE_DIR}/include)
 
-#target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
-#target_link_libraries(${PROJECT_NAME} PRIVATE imgui)
-#set_target_properties(imgui PROPERTIES FOLDER "ThirdParty")
+target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+target_link_libraries(${PROJECT_NAME} PRIVATE imgui)
+set_target_properties(imgui PROPERTIES FOLDER "ThirdParty")
 
 # glm
 message(STATUS "Fetching glm...")

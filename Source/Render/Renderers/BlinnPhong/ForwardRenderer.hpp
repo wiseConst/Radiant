@@ -17,7 +17,7 @@ namespace Radiant
 
       private:
         Unique<GfxPipeline> m_BlinnPhongPipeline{nullptr};
-        Unique<GfxTexture> m_DepthTexture{nullptr};
+        Unique<GfxPipeline> m_FullScreenQuadPipeline{nullptr};
     };
 
 }  // namespace Radiant

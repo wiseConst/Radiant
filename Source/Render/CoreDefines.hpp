@@ -9,27 +9,26 @@ namespace Radiant
     static constexpr bool s_bForceIGPU                 = true;
     static constexpr std::uint8_t s_BufferedFrameCount = 2;
 
-    enum class EBlendMode : std::uint8_t
+    using ExtraBufferFlags = std::uint32_t;
+    enum EExtraBufferFlag : ExtraBufferFlags
     {
-        BLEND_MODE_ADDITIVE,
-        BLEND_MODE_ALPHA,
+        EXTRA_BUFFER_FLAG_ADDRESSABLE  = BIT(0),
+        EXTRA_BUFFER_FLAG_DEVICE_LOCAL = BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE,  // Default memory - host, but this
+                                                                                  // flag implies device memory
+                                                                                  // and buffer device address(GPU virtual address)
+        EXTRA_BUFFER_FLAG_MAPPED = BIT(2),
     };
 
-    enum class EExtraBufferFlag : std::uint8_t
+    using ResourceStateFlags = std::uint8_t;
+    enum EResourceState : ResourceStateFlags
     {
-        EXTRA_BUFFER_FLAG_DEVICE_LOCAL,  // Default memory - host, but this flag implies device memory and buffer device address(GPU virtual
-                                         // address)
-        EXTRA_BUFFER_FLAG_MAPPED,
-    };
-
-    enum class EResourceState : std::uint8_t
-    {
-        RESOURCE_STATE_UNDEFINED,        // Init
-        RESOURCE_STATE_GENERAL,          // Mostly used by compute shaders for storage images
-        RESOURCE_STATE_PRE_INITIALIZED,  // For images used by host only
+        RESOURCE_STATE_UNDEFINED,  // Init
+        RESOURCE_STATE_GENERAL,    // Mostly used by compute shaders for storage images
         RESOURCE_STATE_VERTEX_BUFFER,
         RESOURCE_STATE_INDEX_BUFFER,
-        RESOURCE_STATE_SHADER_RESOURCE,
+        RESOURCE_STATE_VERTEX_SHADER_RESOURCE,
+        RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE,
+        RESOURCE_STATE_COMPUTE_SHADER_RESOURCE,
         RESOURCE_STATE_STORAGE_BUFFER,
         RESOURCE_STATE_RENDER_TARGET,  // Color attachments
         RESOURCE_STATE_DEPTH_READ,
@@ -42,8 +41,6 @@ namespace Radiant
         RESOURCE_STATE_RESOLVE_DESTINATION,
         RESOURCE_STATE_ACCELERATION_STRUCTURE,
         RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT,
-        RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
     };
 
 }  // namespace Radiant

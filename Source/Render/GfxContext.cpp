@@ -65,7 +65,7 @@ namespace Radiant
             return false;
         }
 
-        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].CommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].GeneralCommandPool);
         return true;
     }
 
@@ -79,7 +79,7 @@ namespace Radiant
 
         const auto& presentQueue = m_Device->GetPresentQueue().Handle;
         presentQueue.submit(vk::SubmitInfo()
-                                .setCommandBuffers(m_FrameData[m_CurrentFrameIndex].CommandBuffer)
+                                .setCommandBuffers(m_FrameData[m_CurrentFrameIndex].GeneralCommandBuffer)
                                 .setSignalSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore)
                                 .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].ImageAvailableSemaphore)
                                 .setWaitDstStageMask(waitDstStageMask),
@@ -88,10 +88,11 @@ namespace Radiant
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
         {
-            auto result = presentQueue.presentKHR(vk::PresentInfoKHR()
-                                                      .setImageIndices(m_CurrentImageIndex)
-                                                      .setSwapchains(*m_Swapchain)
-                                                      .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore));
+            auto result = m_Device->GetPresentQueue().Handle.presentKHR(
+                vk::PresentInfoKHR()
+                    .setImageIndices(m_CurrentImageIndex)
+                    .setSwapchains(*m_Swapchain)
+                    .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore));
 
             if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
             {
@@ -118,8 +119,6 @@ namespace Radiant
         s_Instance = this;
         LOG_INFO("{}", __FUNCTION__);
 
-        // Initialize minimal set of function pointers.
-        VULKAN_HPP_DEFAULT_DISPATCHER.init();
         CreateInstanceAndDebugUtilsMessenger();
         CreateSurface();
         m_Device = MakeUnique<GfxDevice>(m_Instance, m_Surface);
@@ -130,6 +129,9 @@ namespace Radiant
 
     void GfxContext::CreateInstanceAndDebugUtilsMessenger() noexcept
     {
+        // Initialize minimal set of function pointers.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init();
+
         std::vector<const char*> enabledInstanceLayers;
         std::vector<const char*> enabledInstanceExtensions;
 
@@ -229,9 +231,8 @@ namespace Radiant
     {
         const auto& mainWindow = Application::Get().GetMainWindow();
 #ifdef RDNT_WINDOWS
-        const auto win32SurfaceCI =
-            vk::Win32SurfaceCreateInfoKHR().setHwnd(glfwGetWin32Window(mainWindow->Get())).setHinstance(GetModuleHandle(nullptr));
-        m_Surface = m_Instance->createWin32SurfaceKHRUnique(win32SurfaceCI);
+        m_Surface = m_Instance->createWin32SurfaceKHRUnique(
+            vk::Win32SurfaceCreateInfoKHR().setHwnd(glfwGetWin32Window(mainWindow->Get())).setHinstance(GetModuleHandle(nullptr)));
 // #elif defined(RDNT_LINUX)
 #else
 #error Do override surface khr creation on other platforms
@@ -284,15 +285,21 @@ namespace Radiant
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
         for (std::uint8_t i{}; i < s_BufferedFrameCount; ++i)
         {
-            m_FrameData[i].CommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
-                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetGCTQueue().QueueFamilyIndex));
+            m_FrameData[i].GeneralCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex));
 
-            m_FrameData[i].CommandBuffer = m_Device->GetLogicalDevice()
-                                               ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
-                                                                            .setCommandBufferCount(1)
-                                                                            .setCommandPool(*m_FrameData[i].CommandPool)
-                                                                            .setLevel(vk::CommandBufferLevel::ePrimary))
-                                               .back();
+            m_FrameData[i].AsyncComputeCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex));
+
+            m_FrameData[i].DedicatedTransferCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex));
+
+            m_FrameData[i].GeneralCommandBuffer = m_Device->GetLogicalDevice()
+                                                      ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
+                                                                                   .setCommandBufferCount(1)
+                                                                                   .setCommandPool(*m_FrameData[i].GeneralCommandPool)
+                                                                                   .setLevel(vk::CommandBufferLevel::ePrimary))
+                                                      .back();
 
             m_FrameData[i].RenderFinishedFence =
                 m_Device->GetLogicalDevice()->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
@@ -364,12 +371,13 @@ namespace Radiant
         // The FIFO present mode is guaranteed by the spec.
         const auto presentMode = vk::PresentModeKHR::eFifo;
 
+        m_SwapchainImageFormat = imageFormat;
         auto swapchainCI =
             vk::SwapchainCreateInfoKHR()
                 .setSurface(*m_Surface)
                 .setImageSharingMode(vk::SharingMode::eExclusive)
                 .setQueueFamilyIndexCount(1)
-                .setPQueueFamilyIndices(&m_Device->GetGCTQueue().QueueFamilyIndex.value())
+                .setPQueueFamilyIndices(&m_Device->GetGeneralQueue().QueueFamilyIndex.value())
                 .setCompositeAlpha(compositeAlpha)
                 .setPresentMode(presentMode)
                 .setImageFormat(imageFormat)
@@ -379,9 +387,9 @@ namespace Radiant
                 .setMinImageCount(std::clamp(3u, availableSurfaceCapabilities.minImageCount, availableSurfaceCapabilities.maxImageCount))
                 .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
                 .setImageUsage(requestedImageUsageFlags);
-        const std::array<std::uint32_t, 2> queueFamilyIndices{*m_Device->GetGCTQueue().QueueFamilyIndex,
+        const std::array<std::uint32_t, 2> queueFamilyIndices{*m_Device->GetGeneralQueue().QueueFamilyIndex,
                                                               *m_Device->GetPresentQueue().QueueFamilyIndex};
-        if (m_Device->GetGCTQueue().QueueFamilyIndex != m_Device->GetPresentQueue().QueueFamilyIndex)
+        if (m_Device->GetGeneralQueue().QueueFamilyIndex != m_Device->GetPresentQueue().QueueFamilyIndex)
         {
             // If the graphics and present queues are from different queue families, we either have to explicitly transfer
             // ownership of images between the queues, or we have to create the swapchain with imageSharingMode as
@@ -405,10 +413,16 @@ namespace Radiant
         m_SwapchainImageViews.reserve(m_SwapchainImages.size());
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, imageFormat, {},
                                                     {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-        for (const auto& image : m_SwapchainImages)
+        for (std::uint32_t i{}; i < m_SwapchainImages.size(); ++i)
         {
-            imageViewCreateInfo.image = image;
+            imageViewCreateInfo.image = m_SwapchainImages[i];
             m_SwapchainImageViews.emplace_back(m_Device->GetLogicalDevice()->createImageViewUnique(imageViewCreateInfo));
+
+            const std::string swapchainImageName = "SwapchainImage[" + std::to_string(i) + "]";
+            m_Device->SetDebugName(swapchainImageName, m_SwapchainImages[i]);
+
+            const std::string swapchainImageViewName = "SwapchainImageView[" + std::to_string(i) + "]";
+            m_Device->SetDebugName(swapchainImageViewName, *m_SwapchainImageViews[i]);
         }
     }
 

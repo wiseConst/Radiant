@@ -38,7 +38,7 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput) : SV_Target
 {
     const float3 N = normalize(fsInput.Normal);
-    const float3 L = -normalize(float3(0.5f, 5.0f, 6.0f));
+    const float3 L = normalize(float3(0.5f, 5.0f, 6.0f));
     const float NdotL = max(dot(L, N), 0.f);
 
     return float4(fsInput.Color.xyz * NdotL, fsInput.Color.w);

@@ -28,25 +28,30 @@ namespace Radiant
         bool BeginFrame() noexcept;
         void EndFrame() noexcept;
 
+        NODISCARD FORCEINLINE const auto GetGlobalFrameNumber() const noexcept { return m_GlobalFrameNumber; }
+        NODISCARD FORCEINLINE auto& GetCurrentFrameData() const noexcept { return m_FrameData[m_CurrentFrameIndex]; }
+        NODISCARD FORCEINLINE const auto& GetInstance() const noexcept { return m_Instance; }
         NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return m_PipelineLayout; }
         NODISCARD FORCEINLINE auto& GetDevice() const noexcept { return m_Device; }
-        NODISCARD FORCEINLINE auto& GetCurrentFrameData() const noexcept { return m_FrameData[m_CurrentFrameIndex]; }
+
+        NODISCARD FORCEINLINE const auto GetSwapchainImageFormat() const noexcept { return m_SwapchainImageFormat; }
         NODISCARD FORCEINLINE const auto& GetSwapchainExtent() const noexcept { return m_SwapchainExtent; }
         NODISCARD FORCEINLINE const auto& GetCurrentSwapchainImage() const noexcept { return m_SwapchainImages[m_CurrentImageIndex]; }
         NODISCARD FORCEINLINE const auto& GetCurrentSwapchainImageView() const noexcept
         {
             return m_SwapchainImageViews[m_CurrentImageIndex];
         }
-        NODISCARD FORCEINLINE const auto GetGlobalFrameNumber() const noexcept { return m_GlobalFrameNumber; }
+        NODISCARD FORCEINLINE const auto GetSwapchainImageCount() const noexcept { return m_SwapchainImages.size(); }
 
-        NODISCARD vk::UniqueCommandBuffer AllocateCommandBuffer() noexcept
+        NODISCARD vk::UniqueCommandBuffer AllocateTransferCommandBuffer() noexcept
         {
-            return std::move(m_Device->GetLogicalDevice()
-                                 ->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo()
-                                                                    .setCommandBufferCount(1)
-                                                                    .setLevel(vk::CommandBufferLevel::ePrimary)
-                                                                    .setCommandPool(*m_FrameData[m_CurrentFrameIndex].CommandPool))
-                                 .back());
+            return std::move(
+                m_Device->GetLogicalDevice()
+                    ->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo()
+                                                       .setCommandBufferCount(1)
+                                                       .setLevel(vk::CommandBufferLevel::ePrimary)
+                                                       .setCommandPool(*m_FrameData[m_CurrentFrameIndex].DedicatedTransferCommandPool))
+                    .back());
         }
 
         NODISCARD FORCEINLINE static const auto& Get() noexcept
@@ -63,8 +68,11 @@ namespace Radiant
 
         struct FrameData
         {
-            vk::UniqueCommandPool CommandPool{};
-            vk::CommandBuffer CommandBuffer{};
+            vk::UniqueCommandPool GeneralCommandPool{};
+            vk::CommandBuffer GeneralCommandBuffer{};
+
+            vk::UniqueCommandPool AsyncComputeCommandPool{};
+            vk::UniqueCommandPool DedicatedTransferCommandPool{};
 
             vk::UniqueFence RenderFinishedFence{};
             vk::UniqueSemaphore ImageAvailableSemaphore{};
@@ -82,6 +90,7 @@ namespace Radiant
 
         std::uint64_t m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
         vk::Extent2D m_SwapchainExtent{};
+        vk::Format m_SwapchainImageFormat{};
         vk::UniqueSurfaceKHR m_Surface{};
         vk::UniqueSwapchainKHR m_Swapchain{};
         std::uint32_t m_CurrentFrameIndex{0};

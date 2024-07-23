@@ -90,21 +90,85 @@ namespace Radiant
         constexpr ~Unmovable() noexcept = default;
     };
 
-    // Simple type-erased handle inspired by Darianopolis.
-    template <typename T> class Handle
+    using PoolID = std::uint64_t;
+    template <typename T> class Pool
     {
       public:
-        Handle() noexcept  = default;
-        ~Handle() noexcept = default;
+        constexpr Pool() noexcept = default;
+        ~Pool() noexcept          = default;
 
-        NODISCARD FORCEINLINE T Get() const noexcept { return std::static_pointer_cast<T>(m_Impl); }
+        void Release(PoolID& poolID) noexcept
+        {
+            RDNT_ASSERT(poolID < m_Objects.size() && m_bPresentObjects[poolID], "Invalid PoolID!");
+
+            m_bPresentObjects[poolID] = false;
+            m_FreeIDs.emplace_back(poolID);
+        }
+
+        NODISCARD PoolID Emplace(T&& element) noexcept
+        {
+            if (m_FreeIDs.empty())
+            {
+                const PoolID poolID = m_Objects.size();
+                m_Objects.emplace_back(std::forward<T>(element));
+                m_bPresentObjects.emplace_back(true);
+                return poolID;
+            }
+
+            const PoolID poolID = m_FreeIDs.back();
+            m_FreeIDs.pop_back();
+            m_bPresentObjects[poolID] = true;
+            m_Objects[poolID]         = std::forward<T>(element);
+
+            return poolID;
+        }
+
+        NODISCARD FORCEINLINE T& Get(const PoolID& poolID) noexcept
+        {
+            RDNT_ASSERT(poolID < m_Objects.size() && m_bPresentObjects[poolID], "Object is not present in pool!");
+            return m_Objects[poolID];
+        }
+
+        NODISCARD FORCEINLINE const auto GetSize() const noexcept { return m_Objects.size(); }
+        NODISCARD FORCEINLINE bool IsPresent(const PoolID& poolID) const noexcept
+        {
+            return poolID < m_bPresentObjects.size() && m_bPresentObjects[poolID];
+        }
+
+        class PoolIterator
+        {
+          public:
+            PoolIterator(Pool<T>& pool, PoolID& poolID) noexcept : m_Pool(pool), m_ID(poolID) { NextPresentElement(); }
+            ~PoolIterator() noexcept = default;
+
+            NODISCARD FORCEINLINE T& operator*() noexcept { return m_Pool.Get(m_ID); }
+            NODISCARD FORCEINLINE void operator++() noexcept
+            {
+                ++m_ID;
+                NextPresentElement();
+            }
+
+            NODISCARD FORCEINLINE bool operator!=(const PoolIterator& other) const noexcept { return m_ID != other.m_ID; }
+
+          private:
+            Pool<T>& m_Pool;
+            PoolID m_ID{};
+
+            void NextPresentElement() noexcept
+            {
+                while (m_ID < m_Pool.GetSize() && !m_Pool.IsPresent(m_ID))
+                    ++m_ID;
+            }
+            constexpr PoolIterator() noexcept = delete;
+        };
+
+        NODISCARD FORCEINLINE PoolIterator begin() noexcept { return PoolIterator(*this, 0); }
+        NODISCARD FORCEINLINE PoolIterator end() noexcept { return PoolIterator(*this, GetSize()); }
 
       private:
-        class Impl;
-        friend T;
-
-      protected:
-        Shared<Impl> m_Impl = nullptr;
+        std::vector<T> m_Objects;
+        std::vector<bool> m_bPresentObjects;
+        std::vector<PoolID> m_FreeIDs;
     };
 
 }  // namespace Radiant

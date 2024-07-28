@@ -25,11 +25,12 @@ namespace Radiant
         bool bDepthWrite{false};
         vk::CompareOp DepthCompareOp{vk::CompareOp::eNever};
 
-        bool bStencilTest{false};
+        glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
+
         vk::StencilOp Back{vk::StencilOp::eZero};
         vk::StencilOp Front{vk::StencilOp::eZero};
-
-        glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
+        bool bStencilTest{false};
+        bool bMultisample{false};
 
         enum class EBlendMode : std::uint8_t
         {

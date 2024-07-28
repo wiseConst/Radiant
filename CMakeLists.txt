@@ -105,7 +105,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 message(STATUS "Looking for Vulkan SDK...")
 find_package(Vulkan REQUIRED)
 target_compile_definitions(${PROJECT_NAME} PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
-target_include_directories(${PROJECT_NAME} PRIVATE ${Vulkan_INCLUDE_DIRS})
+target_include_directories(${PROJECT_NAME} PRIVATE ${Vulkan_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS}/vma)
 
 # glfw
 message(STATUS "Fetching GLFW...")

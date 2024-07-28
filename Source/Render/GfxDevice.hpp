@@ -4,9 +4,25 @@
 #include <vulkan/vulkan.hpp>
 
 #define VK_NO_PROTOTYPES
-#include "vma/vk_mem_alloc.h"
+#include <vk_mem_alloc.h>
 
 #include <deque>
+
+template <> struct ankerl::unordered_dense::hash<vk::SamplerCreateInfo>
+{
+    using is_avalanching = void;
+
+    [[nodiscard]] auto operator()(const vk::SamplerCreateInfo& x) const noexcept -> uint64_t
+    {
+        return detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter) +
+                                    static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
+                                    static_cast<std::uint64_t>(x.addressModeV) + static_cast<std::uint64_t>(x.addressModeW) +
+                                    static_cast<std::uint64_t>(x.mipLodBias) + static_cast<std::uint64_t>(x.anisotropyEnable) +
+                                    static_cast<std::uint64_t>(x.maxAnisotropy) + static_cast<std::uint64_t>(x.compareEnable) +
+                                    static_cast<std::uint64_t>(x.compareOp) + static_cast<std::uint64_t>(x.minLod) +
+                                    static_cast<std::uint64_t>(x.maxLod) + static_cast<std::uint64_t>(x.borderColor));
+    }
+};
 
 namespace Radiant
 {
@@ -34,6 +50,7 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto& GetTransferQueue() const noexcept { return m_TransferQueue; }
         NODISCARD FORCEINLINE const auto& GetComputeQueue() const noexcept { return m_ComputeQueue; }
         NODISCARD FORCEINLINE const auto& GetPresentQueue() const noexcept { return m_PresentQueue; }
+        NODISCARD FORCEINLINE const auto& GetGPUProperties() const noexcept { return m_GPUProperties; }
 
         template <typename TObject> void SetDebugName(const std::string& name, const TObject& object) const noexcept
         {
@@ -49,9 +66,9 @@ namespace Radiant
             return *m_Device;
         }
 
-        FORCEINLINE void PushObjectToDelete(std::move_only_function<void()>&& func) noexcept
+        FORCEINLINE void PushObjectToDelete(std::move_only_function<void() noexcept>&& func) noexcept
         {
-            m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<std::move_only_function<void()>>(func));
+            m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<std::move_only_function<void() noexcept>>(func));
         }
 
         FORCEINLINE void PushObjectToDelete(vk::UniquePipeline&& pipeline) noexcept
@@ -75,6 +92,33 @@ namespace Radiant
         void* Map(VmaAllocation& allocation) const noexcept;
         void Unmap(VmaAllocation& allocation) const noexcept;
 
+        NODISCARD const vk::Sampler& GetSampler(const vk::SamplerCreateInfo& samplerCI) noexcept
+        {
+            if (!m_SamplerMap.contains(samplerCI)) m_SamplerMap[samplerCI] = m_Device->createSamplerUnique(samplerCI);
+            return *m_SamplerMap[samplerCI];
+        }
+
+        NODISCARD const vk::Sampler& GetDefaultSampler() noexcept
+        {
+            const auto defaultSamplerCI = vk::SamplerCreateInfo()
+                                              .setUnnormalizedCoordinates(vk::False)
+                                              .setAddressModeU(vk::SamplerAddressMode::eRepeat)
+                                              .setAddressModeV(vk::SamplerAddressMode::eRepeat)
+                                              .setAddressModeW(vk::SamplerAddressMode::eRepeat)
+                                              .setMagFilter(vk::Filter::eNearest)
+                                              .setMinFilter(vk::Filter::eNearest)
+                                              .setMipmapMode(vk::SamplerMipmapMode::eNearest)
+                                              .setMinLod(0.0f)
+                                              .setMaxLod(1.0f)
+                                              .setMaxLod(vk::LodClampNone)
+                                              .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+                                              .setAnisotropyEnable(vk::True)
+                                              .setMaxAnisotropy(m_GPUProperties.limits.maxSamplerAnisotropy);
+            return GetSampler(defaultSamplerCI);
+        }
+
+        FORCEINLINE const auto GetMSAASamples() const noexcept { return m_MSAASamples; }
+
       private:
         vk::UniqueDevice m_Device{};
         vk::PhysicalDevice m_PhysicalDevice{};
@@ -82,18 +126,16 @@ namespace Radiant
 
         vk::UniquePipelineCache m_PipelineCache{};
 
+        UnorderedMap<vk::SamplerCreateInfo, vk::UniqueSampler> m_SamplerMap{};
+
         struct Queue
         {
             vk::Queue Handle{};
             std::optional<std::uint32_t> QueueFamilyIndex{std::nullopt};
-        };
-        Queue m_GeneralQueue{};   // graphics / compute / transfer
-        Queue m_PresentQueue{};   // present
-        Queue m_TransferQueue{};  // dedicated transfer
-        Queue m_ComputeQueue{};   // async compute
+        } m_GeneralQueue{}, m_PresentQueue{}, m_TransferQueue{}, m_ComputeQueue{};
 
         VmaAllocator m_Allocator{};
-        std::uint64_t m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
+        vk::SampleCountFlagBits m_MSAASamples{vk::SampleCountFlagBits::e1};
 
         struct DeferredDeletionQueue
         {
@@ -101,9 +143,9 @@ namespace Radiant
             DeferredDeletionQueue() noexcept  = default;
             ~DeferredDeletionQueue() noexcept = default;
 
-            void EmplaceBack(std::move_only_function<void()>&& func) noexcept
+            void EmplaceBack(std::move_only_function<void() noexcept>&& func) noexcept
             {
-                Deque.emplace_back(std::forward<std::move_only_function<void()>>(func));
+                Deque.emplace_back(std::forward<std::move_only_function<void() noexcept>>(func));
             }
 
             void EmplaceBack(vk::UniquePipeline&& pipeline) noexcept
@@ -130,11 +172,9 @@ namespace Radiant
             }
 
           private:
-            std::deque<std::move_only_function<void()>> Deque;  // In case something special happens.
+            std::deque<std::move_only_function<void() noexcept>> Deque;  // In case something special happens.
 
             std::deque<vk::UniquePipeline> PipelineHandlesDeque;
-
-            std::move_only_function<void(VkBuffer&, VmaAllocation&)> BufferRemoveFunc;
             std::deque<std::pair<vk::Buffer, VmaAllocation>> BufferHandlesDeque;
 
             friend class GfxDevice;
@@ -143,6 +183,7 @@ namespace Radiant
         // NOTE: std::uint64_t - global frame number
         // TODO: Fix compilation issues using UnorderedMap!
         std::unordered_map<std::uint64_t, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
+        std::uint64_t m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
 
         // NOTE: Only GfxContext can call it!
         friend class GfxContext;
@@ -180,6 +221,7 @@ namespace Radiant
                                             const vk::PhysicalDeviceFeatures& requiredDeviceFeatures, const void* pNext = nullptr) noexcept;
         void InitVMA(const vk::UniqueInstance& instance) noexcept;
         void LoadPipelineCache() noexcept;
+
         void Shutdown() noexcept;
     };
 

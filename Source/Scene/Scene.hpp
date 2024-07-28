@@ -14,28 +14,24 @@ namespace Radiant
 
         void LoadMesh(const Unique<GfxContext>& gfxContext, const std::string& meshPath) noexcept
         {
-            m_StaticMeshes.emplace_back(gfxContext, meshPath);
+            m_Meshes.emplace_back(gfxContext, meshPath);
         }
 
-        // VertexPosBuffer, VertexAttribBuffer, IndexBuffer
-        using IterateFunc = std::function<void(const Unique<GfxBuffer>&, const Unique<GfxBuffer>&, const Unique<GfxBuffer>&)>;
-        void IterateObjects(IterateFunc&& func) noexcept
+        void IterateObjects(DrawContext& drawContext) noexcept
         {
-            for (const auto& staticMesh : m_StaticMeshes)
+            for (const auto& mesh : m_Meshes)
             {
-                for (const auto& staticSubmesh : staticMesh.Submeshes)
+                for (const auto& rootNode : mesh.RootNodes)
                 {
-                    RDNT_ASSERT(staticSubmesh.VertexPosBuffer && staticSubmesh.VertexAttribBuffer && staticSubmesh.IndexBuffer,
-                                "Static submesh is invalid!");
-
-                    func(staticSubmesh.VertexPosBuffer, staticSubmesh.VertexAttribBuffer, staticSubmesh.IndexBuffer);
+                    rootNode->Iterate(drawContext, mesh.VertexPositionBuffers, mesh.VertexAttributeBuffers, mesh.IndexBuffers,
+                                      mesh.MaterialBuffers, rootNode->WorldTransform);
                 }
             }
         }
 
       private:
         std::string m_Name{s_DEFAULT_STRING};
-        std::vector<StaticMesh> m_StaticMeshes;
+        std::vector<Mesh> m_Meshes;
     };
 
 }  // namespace Radiant

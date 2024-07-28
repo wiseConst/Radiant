@@ -3,7 +3,6 @@
 
 #include <Render/GfxDevice.hpp>
 
-#include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
@@ -90,8 +89,8 @@ namespace Radiant
         ImGui::DestroyContext();
     }
 
-    void ImGuiRenderer::RenderFrame(const vk::Extent2D& viewportExtent, Unique<RenderGraph>& renderGraph,
-                                    const std::string& backbufferName) noexcept
+    void ImGuiRenderer::RenderFrame(const vk::Extent2D& viewportExtent, Unique<RenderGraph>& renderGraph, const std::string& backbufferName,
+                                    std::function<void()>&& uiFunc) noexcept
     {
         // Start the Dear ImGui frame
         ImGui_ImplVulkan_NewFrame();
@@ -107,7 +106,7 @@ namespace Radiant
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(viewportExtent.width).setHeight(viewportExtent.height),
                     vk::Rect2D().setExtent(viewportExtent));
             },
-            [&](RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            [&, uiFunc](RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
                 auto& backBufferSrcTexture = scheduler.GetTexture(m_ImGuiPassData.BackbufferTexture);
 
@@ -117,17 +116,16 @@ namespace Radiant
                                                                  .setAspectMask(vk::ImageAspectFlagBits::eColor)
                                                                  .setBaseMipLevel(0)
                                                                  .setLevelCount(1);
-                cmd.pipelineBarrier2(vk::DependencyInfo()
-                                         .setDependencyFlags(vk::DependencyFlagBits::eByRegion)
-                                         .setImageMemoryBarriers(vk::ImageMemoryBarrier2()
-                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
-                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
-                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eNone)
-                                                                     .setSrcStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)
-                                                                     .setOldLayout(vk::ImageLayout::eUndefined)
-                                                                     .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
-                                                                     .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                                                     .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
+                cmd.pipelineBarrier2(
+                    vk::DependencyInfo().setImageMemoryBarriers(vk::ImageMemoryBarrier2()
+                                                                    .setImage(m_GfxContext->GetCurrentSwapchainImage())
+                                                                    .setSubresourceRange(backbufferImageSubresourceRange)
+                                                                    .setSrcAccessMask(vk::AccessFlagBits2::eNone)
+                                                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)
+                                                                    .setOldLayout(vk::ImageLayout::eUndefined)
+                                                                    .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                                                                    .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                                                                    .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
 
                 const auto backbufferImageSubresourceLayers = vk::ImageSubresourceLayers()
                                                                   .setAspectMask(vk::ImageAspectFlagBits::eColor)
@@ -148,18 +146,16 @@ namespace Radiant
                                                                      static_cast<int32_t>(viewportExtent.height), 1)}),
                     vk::Filter::eLinear);
 
-                cmd.pipelineBarrier2(vk::DependencyInfo()
-                                         .setDependencyFlags(vk::DependencyFlagBits::eByRegion)
-                                         .setImageMemoryBarriers(vk::ImageMemoryBarrier2()
-                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
-                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
-                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                                                     .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
-                                                                     .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
-                                                                     .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                                                                     .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite |
-                                                                                       vk::AccessFlagBits2::eColorAttachmentRead)
-                                                                     .setDstStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)));
+                cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                    vk::ImageMemoryBarrier2()
+                        .setImage(m_GfxContext->GetCurrentSwapchainImage())
+                        .setSubresourceRange(backbufferImageSubresourceRange)
+                        .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                        .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                        .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                        .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                        .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
+                        .setDstStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)));
 
                 const auto swapchainAttachmentInfo = vk::RenderingAttachmentInfo()
                                                          .setLoadOp(vk::AttachmentLoadOp::eLoad)
@@ -171,24 +167,24 @@ namespace Radiant
                                        .setLayerCount(1)
                                        .setRenderArea(vk::Rect2D().setExtent(viewportExtent)));
 
-                ImGui::ShowDemoWindow();
+                uiFunc();
 
                 // Rendering
+                ImGui::EndFrame();
                 ImGui::Render();
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
                 cmd.endRendering();
-                cmd.pipelineBarrier2(vk::DependencyInfo()
-                                         .setDependencyFlags(vk::DependencyFlagBits::eByRegion)
-                                         .setImageMemoryBarriers(vk::ImageMemoryBarrier2()
-                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
-                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
-                                                                     .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
-                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
-                                                                     .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                                                                     .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
-                                                                     .setDstAccessMask(vk::AccessFlagBits2::eNone)
-                                                                     .setDstStageMask(vk::PipelineStageFlagBits2::eNone)));
+                cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                    vk::ImageMemoryBarrier2()
+                        .setImage(m_GfxContext->GetCurrentSwapchainImage())
+                        .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
+                        .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                        .setSubresourceRange(backbufferImageSubresourceRange)
+                        .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                        .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+                        .setDstAccessMask(vk::AccessFlagBits2::eNone)
+                        .setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)));
             });
     }
 

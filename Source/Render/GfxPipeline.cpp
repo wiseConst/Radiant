@@ -99,8 +99,10 @@ namespace Radiant
                                                   .setDepthClampEnable(gpo->bDepthClamp)
                                                   .setLineWidth(1.0f);
 
-            // TODO:
-            const auto msaaStateCI = vk::PipelineMultisampleStateCreateInfo().setRasterizationSamples(vk::SampleCountFlagBits::e1);
+            const auto msaaStateCI =
+                vk::PipelineMultisampleStateCreateInfo()
+                    .setRasterizationSamples(gpo->bMultisample ? m_Device->GetMSAASamples() : vk::SampleCountFlagBits::e1)
+                    .setMinSampleShading(1.0f);
 
             // NOTE: Unfortunately vulkan.hpp doesn't recognize ankerl's unordered set.
             std::vector<vk::DynamicState> dynamicStates;

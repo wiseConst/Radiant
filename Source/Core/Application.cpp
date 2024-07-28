@@ -1,7 +1,7 @@
 #include <pch.h>
 #include "Application.hpp"
 
-#include <Render/Renderers/BlinnPhong/ForwardRenderer.hpp>
+#include <Render/Renderers/SimpleRenderer/ForwardRenderer.hpp>
 
 namespace Radiant
 {
@@ -17,7 +17,7 @@ namespace Radiant
         m_MainWindow = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
 
         // Simply decide which renderer to use lol.
-        m_Renderer = MakeUnique<ForwardBlinnPhongRenderer>();
+        m_Renderer = MakeUnique<ForwardRenderer>();
     }
 
     void Application::Run() noexcept
@@ -60,10 +60,7 @@ namespace Radiant
             if (accumulatedDeltaTime >= 1.f || m_Description.FPSLimit != 0 && frameCount == m_Description.FPSLimit)
             {
                 std::stringstream ss;
-                ss << m_Description.Name;
-                ss << " / Frame: " << m_FrameCounter;
-                ss << " dt: " << m_DeltaTime;
-                ss << " FPS: " << frameCount;
+                ss << m_Description.Name << " / Frame: " << m_FrameCounter << " dt: " << m_DeltaTime << " FPS: " << frameCount;
 
                 m_MainWindow->SetTitle(ss.str());
 

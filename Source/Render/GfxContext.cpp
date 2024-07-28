@@ -1,8 +1,14 @@
 #include <pch.h>
 #include "GfxContext.hpp"
 
+#include <Render/GfxTexture.hpp>
+#include <Render/GfxBuffer.hpp>
+
 #include <Core/Application.hpp>
 #include <Core/Window/GLFWWindow.hpp>
+
+#include <Render/GfxBuffer.hpp>
+#include <Render/GfxTexture.hpp>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -242,17 +248,17 @@ namespace Radiant
     void GfxContext::CreateFrameResources() noexcept
     {
         constexpr std::array<vk::DescriptorSetLayoutBinding, 3> bindings{vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(0)
+                                                                             .setBinding(Shaders::s_BINDLESS_IMAGE_BINDING)
                                                                              .setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES)
                                                                              .setStageFlags(vk::ShaderStageFlagBits::eAll)
                                                                              .setDescriptorType(vk::DescriptorType::eStorageImage),
                                                                          vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(1)
+                                                                             .setBinding(Shaders::s_BINDLESS_TEXTURE_BINDING)
                                                                              .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
                                                                              .setStageFlags(vk::ShaderStageFlagBits::eAll)
                                                                              .setDescriptorType(vk::DescriptorType::eCombinedImageSampler),
                                                                          vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(2)
+                                                                             .setBinding(Shaders::s_BINDLESS_SAMPLER_BINDING)
                                                                              .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS)
                                                                              .setStageFlags(vk::ShaderStageFlagBits::eAll)
                                                                              .setDescriptorType(vk::DescriptorType::eSampler)};
@@ -317,6 +323,59 @@ namespace Radiant
                                                                             .setDescriptorPool(*m_FrameData[i].DescriptorPool)
                                                                             .setSetLayouts(*m_DescriptorSetLayout))
                                                .back();
+        }
+
+        // Creating default white texture 1x1.
+        {
+            constexpr uint32_t whiteTextureData = 0xFFFFFFFF;
+            m_DefaultWhiteTexture               = MakeUnique<GfxTexture>(
+                m_Device, GfxTextureDescription{.Dimensions{1, 1, 1}, .UsageFlags = vk::ImageUsageFlagBits::eTransferDst});
+
+            m_Device->SetDebugName("RDNT_DEFAULT_WHITE_TEX", (const vk::Image&)*m_DefaultWhiteTexture);
+
+            auto stagingBuffer = MakeUnique<GfxBuffer>(
+                m_Device, GfxBufferDescription{.Capacity = sizeof(whiteTextureData), .ExtraFlags = EXTRA_BUFFER_FLAG_MAPPED});
+
+            stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
+
+            const auto [cmd, queue] = AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER);
+            cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                vk::ImageMemoryBarrier2()
+                    .setImage(*m_DefaultWhiteTexture)
+                    .setSubresourceRange(
+                        vk::ImageSubresourceRange().setBaseArrayLayer(0).setBaseMipLevel(0).setLevelCount(1).setLayerCount(1).setAspectMask(
+                            vk::ImageAspectFlagBits::eColor))
+                    .setOldLayout(vk::ImageLayout::eUndefined)
+                    .setSrcAccessMask(vk::AccessFlagBits2::eNone)
+                    .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
+                    .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                    .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                    .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
+
+            cmd->copyBufferToImage(
+                *stagingBuffer, *m_DefaultWhiteTexture, vk::ImageLayout::eTransferDstOptimal,
+                vk::BufferImageCopy()
+                    .setImageSubresource(vk::ImageSubresourceLayers().setLayerCount(1).setAspectMask(vk::ImageAspectFlagBits::eColor))
+                    .setImageExtent(vk::Extent3D(1, 1, 1)));
+
+            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                vk::ImageMemoryBarrier2()
+                    .setImage(*m_DefaultWhiteTexture)
+                    .setSubresourceRange(
+                        vk::ImageSubresourceRange().setBaseArrayLayer(0).setBaseMipLevel(0).setLevelCount(1).setLayerCount(1).setAspectMask(
+                            vk::ImageAspectFlagBits::eColor))
+                    .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                    .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                    .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                    .setDstAccessMask(vk::AccessFlagBits2::eNone)
+                    .setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)));
+
+            cmd->end();
+            queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
+            queue.waitIdle();
         }
     }
 

@@ -10,7 +10,7 @@
 #include <Render/GfxShader.hpp>
 #include <Render/Camera.hpp>
 
-#include <Render/Renderers/ImGuiRenderer.hpp>
+#include <Render/Renderers/Common/ImGuiRenderer.hpp>
 
 #include <Scene/Scene.hpp>
 
@@ -39,6 +39,7 @@ namespace Radiant
         Unique<Scene> m_Scene{nullptr};
         Shared<Camera> m_MainCamera{nullptr};
         Unique<ImGuiRenderer> m_UIRenderer{nullptr};
+        DrawContext m_DrawContext = {};
 
         vk::Extent2D m_ViewportExtent{};
     };

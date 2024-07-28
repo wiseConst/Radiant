@@ -5,14 +5,52 @@
 #include <fastgltf/types.hpp>
 #include <fastgltf/core.hpp>
 
-#include <Render/GfxContext.hpp>
+#include <Render/GfxTexture.hpp>
 
 namespace Radiant
 {
 
     namespace FastGltfUtils
     {
-        NODISCARD static vk::Filter FastGltfFilterToVulkan(const fastgltf::Filter filter)
+        NODISCARD static EAlphaMode ConvertAlphaModeToRadiant(const fastgltf::AlphaMode alphaMode) noexcept
+        {
+            switch (alphaMode)
+            {
+                case fastgltf::AlphaMode::Opaque: return EAlphaMode::ALPHA_MODE_OPAQUE;
+                case fastgltf::AlphaMode::Mask: return EAlphaMode::ALPHA_MODE_MASK;
+                case fastgltf::AlphaMode::Blend: return EAlphaMode::ALPHA_MODE_BLEND;
+                default: return EAlphaMode::ALPHA_MODE_OPAQUE;
+            }
+        }
+
+        NODISCARD static vk::PrimitiveTopology ConvertPrimitiveTypeToVulkanPrimitiveTopology(
+            const fastgltf::PrimitiveType primitiveType) noexcept
+        {
+            switch (primitiveType)
+            {
+                case fastgltf::PrimitiveType::Points: return vk::PrimitiveTopology::ePointList;
+                case fastgltf::PrimitiveType::Lines:
+                case fastgltf::PrimitiveType::LineLoop: return vk::PrimitiveTopology::eLineList;
+                case fastgltf::PrimitiveType::LineStrip: return vk::PrimitiveTopology::eLineStrip;
+                case fastgltf::PrimitiveType::Triangles: return vk::PrimitiveTopology::eTriangleList;
+                case fastgltf::PrimitiveType::TriangleStrip: return vk::PrimitiveTopology::eTriangleStrip;
+                case fastgltf::PrimitiveType::TriangleFan: return vk::PrimitiveTopology::eTriangleFan;
+                default: return vk::PrimitiveTopology::eTriangleList;
+            }
+        }
+
+        NODISCARD static vk::SamplerAddressMode ConvertWrapToVulkan(const fastgltf::Wrap wrap) noexcept
+        {
+            switch (wrap)
+            {
+                case fastgltf::Wrap::Repeat: return vk::SamplerAddressMode::eRepeat;
+                case fastgltf::Wrap::MirroredRepeat: return vk::SamplerAddressMode::eMirroredRepeat;
+                case fastgltf::Wrap::ClampToEdge: return vk::SamplerAddressMode::eClampToEdge;
+                default: return vk::SamplerAddressMode::eRepeat;
+            }
+        }
+
+        NODISCARD static vk::Filter ConvertFilterToVulkan(const fastgltf::Filter filter)
         {
             switch (filter)
             {
@@ -27,7 +65,7 @@ namespace Radiant
             }
         }
 
-        NODISCARD static vk::SamplerMipmapMode FastGltfMipMapModeToVulkan(const fastgltf::Filter filter)
+        NODISCARD static vk::SamplerMipmapMode ConvertMipMapModeToVulkan(const fastgltf::Filter filter)
         {
             switch (filter)
             {
@@ -40,169 +78,524 @@ namespace Radiant
             }
         }
 
+        // NOTE: For simplicity, usage of the same texture with multiple samplers isn't supported at least for now!
+        NODISCARD static std::string LoadTexture(UnorderedMap<std::string, Shared<GfxTexture>>& textureMap,
+                                                 const std::filesystem::path& meshParentPath, const Unique<GfxContext>& gfxContext,
+                                                 const fastgltf::Asset& asset, const fastgltf::Texture& texture,
+                                                 const std::vector<vk::SamplerCreateInfo>& samplerCIs) noexcept
+        {
+            if (!texture.imageIndex.has_value())
+            {
+                LOG_WARN("fastgltf: Texture has no image attached to it! Returning default white texture!");
+                const std::string defaultWhiteTextureName{"RDNT_DEFAULT_WHITE_TEX"};
+                if (textureMap.contains(defaultWhiteTextureName)) return defaultWhiteTextureName;
+
+                textureMap[defaultWhiteTextureName] = gfxContext->GetDefaultWhiteTexture();
+                return defaultWhiteTextureName;
+            }
+            int32_t width{1}, height{1}, channels{4};
+
+            std::string textureName{s_DEFAULT_STRING};
+            Shared<GfxTexture> loadedTexture{nullptr};
+            std::visit(
+                fastgltf::visitor{
+                    [](auto& arg) { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!") },
+                    [&](const fastgltf::sources::URI& filePath)
+                    {
+                        RDNT_ASSERT(filePath.fileByteOffset == 0, "fastgltf: We don't support offsets with stbi!");
+                        RDNT_ASSERT(filePath.uri.isLocalPath(), "fastgltf: We're only capable of loading local files!");
+
+                        textureName = filePath.uri.path();
+                        RDNT_ASSERT(!textureName.empty(), "fastgltf: Texture name is empty!");
+                        if (textureMap.contains(textureName)) return;
+
+                        const auto textureFilePath = meshParentPath / textureName;
+                        void* imageData            = GfxTextureUtils::LoadImage(textureFilePath.string(), width, height, channels);
+                        RDNT_ASSERT(imageData, "fastgltf: Failed to load image data!");
+
+                        constexpr bool bGenerateMipMaps = true;
+                        std::optional<vk::SamplerCreateInfo> samplerCI{std::nullopt};
+                        if (texture.samplerIndex.has_value())
+                        {
+                            samplerCI = samplerCIs[*texture.samplerIndex];
+                            if (bGenerateMipMaps) samplerCI->maxLod = GfxTextureUtils::GetMipLevelCount(width, height);
+                        }
+
+                        loadedTexture = MakeShared<GfxTexture>(gfxContext->GetDevice(),
+                                                               GfxTextureDescription{.Type{vk::ImageType::e2D},
+                                                                                     .Dimensions{width, height, 1},
+                                                                                     .bExposeMips{false},
+                                                                                     .bGenerateMips{bGenerateMipMaps},
+                                                                                     .LayerCount{1},
+                                                                                     .Format{vk::Format::eR8G8B8A8Unorm},
+                                                                                     .UsageFlags{vk::ImageUsageFlagBits::eColorAttachment |
+                                                                                                 vk::ImageUsageFlagBits::eTransferDst},
+                                                                                     .SamplerCreateInfo{samplerCI}});
+
+                        const auto imageSize = static_cast<std::size_t>(width * height * channels);
+                        auto stagingBuffer   = MakeUnique<GfxBuffer>(
+                            gfxContext->GetDevice(), GfxBufferDescription{.Capacity = imageSize, .ExtraFlags = EXTRA_BUFFER_FLAG_MAPPED});
+
+                        stagingBuffer->SetData(imageData, imageSize);
+
+                        const auto [cmd, queue] =
+                            gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                        cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+                        cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                            vk::ImageMemoryBarrier2()
+                                .setImage(*loadedTexture)
+                                .setSubresourceRange(
+                                    vk::ImageSubresourceRange()
+                                        .setBaseArrayLayer(0)
+                                        .setBaseMipLevel(0)
+                                        .setLevelCount(bGenerateMipMaps ? GfxTextureUtils::GetMipLevelCount(width, height) : 1)
+                                        .setLayerCount(1)
+                                        .setAspectMask(vk::ImageAspectFlagBits::eColor))
+                                .setOldLayout(vk::ImageLayout::eUndefined)
+                                .setSrcAccessMask(vk::AccessFlagBits2::eNone)
+                                .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
+                                .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                                .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                                .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
+
+                        cmd->copyBufferToImage(*stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
+                                               vk::BufferImageCopy()
+                                                   .setImageSubresource(vk::ImageSubresourceLayers()
+                                                                            .setLayerCount(1)
+                                                                            .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                                                            .setBaseArrayLayer(0)
+                                                                            .setMipLevel(0))
+                                                   .setImageExtent(vk::Extent3D(width, height, 1)));
+
+                        if (bGenerateMipMaps)
+                            loadedTexture->GenerateMipMaps(cmd);
+                        else
+                        {
+                            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                                vk::ImageMemoryBarrier2()
+                                    .setImage(*loadedTexture)
+                                    .setSubresourceRange(vk::ImageSubresourceRange()
+                                                             .setBaseArrayLayer(0)
+                                                             .setBaseMipLevel(0)
+                                                             .setLevelCount(1)
+                                                             .setLayerCount(1)
+                                                             .setAspectMask(vk::ImageAspectFlagBits::eColor))
+                                    .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                                    .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                                    .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
+                                    .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader |
+                                                     vk::PipelineStageFlagBits2::eComputeShader)));
+                        }
+
+                        cmd->end();
+                        queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
+                        queue.waitIdle();
+
+                        GfxTextureUtils::UnloadImage(imageData);
+                    },
+                    [&](const fastgltf::sources::Vector& vector)
+                    {
+                        RDNT_ASSERT(false, "{}: NOT IMPLEMENTED!", __FUNCTION__);
+
+                        void* imageData = GfxTextureUtils::LoadImage(vector.bytes.data(), vector.bytes.size(), width, height, channels);
+                        RDNT_ASSERT(imageData, "Failed to load image data!");
+
+                        GfxTextureUtils::UnloadImage(imageData);
+                    },
+                    [&](const fastgltf::sources::BufferView& view)
+                    {
+                        RDNT_ASSERT(false, "{}: NOT IMPLEMENTED!", __FUNCTION__);
+
+                        const auto& bufferView = asset.bufferViews[view.bufferViewIndex];
+                        const auto& buffer     = asset.buffers[bufferView.bufferIndex];
+
+                        std::visit(fastgltf::visitor{// We only care about VectorWithMime here, because we
+                                                     // specify LoadExternalBuffers, meaning all buffers
+                                                     // are already loaded into a vector.
+                                                     [](auto& arg) {},
+                                                     [&](fastgltf::sources::Vector& vector)
+                                                     {
+                                                         void* imageData =
+                                                             GfxTextureUtils::LoadImage(vector.bytes.data() + bufferView.byteOffset,
+                                                                                        bufferView.byteLength, width, height, channels);
+                                                         RDNT_ASSERT(imageData, "Failed to load image data!");
+
+                                                         GfxTextureUtils::UnloadImage(imageData);
+                                                     }},
+                                   buffer.data);
+                    },
+                },
+                asset.images[*texture.imageIndex].data);
+
+            if (loadedTexture) textureMap[textureName] = loadedTexture;
+            return textureName;
+        }
+
+        // NOTE: Given only a normal vector, finds a valid tangent.
+        // This uses the technique from "Improved accuracy when building an orthonormal
+        // basis" by Nelson Max, https://jcgt.org/published/0006/01/02.
+        // Any tangent-generating algorithm must produce at least one discontinuity
+        // when operating on a sphere (due to the hairy ball theorem); this has a
+        // small ring-shaped discontinuity at normal.z == -0.99998796.
+        NODISCARD static glm::vec4 MakeFastTangent(const glm::vec3& n) noexcept
+        {
+            if (n.z < -0.99998796F)  // Handle the singularity
+                return glm::vec4(0.0F, -1.0F, 0.0F, 1.0F);
+
+            const float a = 1.0F / (1.0F + n.z);
+            const float b = -n.x * n.y * a;
+            return glm::vec4(1.0F - n.x * n.x * a, b, -n.x, 1.0F);
+        }
+
     }  // namespace FastGltfUtils
 
-    StaticMesh::StaticMesh(const Unique<GfxContext>& gfxContext, const std::filesystem::path& meshFilePath) noexcept
+    Mesh::Mesh(const Unique<GfxContext>& gfxContext, const std::filesystem::path& meshFilePath) noexcept
     {
-        constexpr auto gltfLoadOptions =
-            fastgltf::Options::LoadGLBBuffers | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::GenerateMeshIndices;
+        constexpr auto gltfLoadOptions = fastgltf::Options::DontRequireValidAssetMember | fastgltf::Options::LoadGLBBuffers |
+                                         fastgltf::Options::LoadExternalBuffers | fastgltf::Options::GenerateMeshIndices;
 
         auto gltfFile = fastgltf::MappedGltfFile::FromPath(meshFilePath);
         RDNT_ASSERT(gltfFile.error() == fastgltf::Error::None, "fastgltf: failed to open glTF file: {}",
                     fastgltf::getErrorMessage(gltfFile.error()));
 
-        fastgltf::Parser parser;
-        auto asset = parser.loadGltf(gltfFile.get(), meshFilePath.parent_path(), gltfLoadOptions);
+        constexpr fastgltf::Extensions gltfExtensions = fastgltf::Extensions::KHR_materials_emissive_strength;
+
+        const auto meshParentPath = meshFilePath.parent_path();
+        fastgltf::Parser parser(gltfExtensions);
+        auto asset = parser.loadGltf(gltfFile.get(), meshParentPath, gltfLoadOptions);
         RDNT_ASSERT(asset.error() == fastgltf::Error::None, "fastgltf: failed to load glTF file: {}",
                     fastgltf::getErrorMessage(asset.error()));
 
-        // use the same vectors for all meshes so that the memory doesnt reallocate as
-        // often
+        std::vector<vk::SamplerCreateInfo> samplerCIs(asset->samplers.size());
+        for (std::uint32_t i{}; i < samplerCIs.size(); ++i)
+        {
+            const auto& currentSamplerInfo = asset->samplers[i];
+            samplerCIs[i] =
+                vk::SamplerCreateInfo()
+                    .setMinLod(0.0f)
+                    .setMaxLod(vk::LodClampNone)
+                    .setMagFilter(FastGltfUtils::ConvertFilterToVulkan(currentSamplerInfo.magFilter.value_or(fastgltf::Filter::Linear)))
+                    .setMinFilter(FastGltfUtils::ConvertFilterToVulkan(currentSamplerInfo.minFilter.value_or(fastgltf::Filter::Linear)))
+                    .setMipmapMode(
+                        FastGltfUtils::ConvertMipMapModeToVulkan(currentSamplerInfo.minFilter.value_or(fastgltf::Filter::Linear)))
+                    .setAddressModeU(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapS))
+                    .setAddressModeV(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
+                    .setAddressModeW(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
+                    .setUnnormalizedCoordinates(vk::False)
+                    .setBorderColor(vk::BorderColor::eFloatOpaqueWhite)
+                    .setAnisotropyEnable(vk::True)
+                    .setMaxAnisotropy(gfxContext->GetDevice()->GetGPUProperties().limits.maxSamplerAnisotropy);
+        }
+
+        // NOTE: textureIndex -> name, since multiple materials can reference the same textures but with different samplers, so there's no
+        // need same texture N times.
+        UnorderedMap<std::size_t, std::string> textureNameLUT{};
+        textureNameLUT.reserve(asset->textures.size());
+        TextureMap.reserve(asset->textures.size());
+        for (std::size_t textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
+        {
+            textureNameLUT[textureIndex] =
+                FastGltfUtils::LoadTexture(TextureMap, meshParentPath, gfxContext, asset.get(), asset->textures[textureIndex], samplerCIs);
+        }
+
+        MaterialMap.reserve(asset->materials.size());
+        for (const auto& fastgltfMaterial : asset->materials)
+        {
+            RDNT_ASSERT(!fastgltfMaterial.name.empty(), "fastgltf: Material has no name!");
+
+            std::uint32_t albedoTextureID{0};
+            if (fastgltfMaterial.pbrData.baseColorTexture.has_value())
+            {
+                albedoTextureID =
+                    TextureMap[textureNameLUT[fastgltfMaterial.pbrData.baseColorTexture->textureIndex]]->GetBindlessTextureID();
+            }
+
+            std::uint32_t metallicRoughnessTextureID{0};
+            if (fastgltfMaterial.pbrData.metallicRoughnessTexture.has_value())
+            {
+                metallicRoughnessTextureID =
+                    TextureMap[textureNameLUT[fastgltfMaterial.pbrData.metallicRoughnessTexture->textureIndex]]->GetBindlessTextureID();
+            }
+
+            std::uint32_t normalTextureID{0};
+            float normalScale{1.0f};
+            if (fastgltfMaterial.normalTexture.has_value())
+            {
+                normalTextureID = TextureMap[textureNameLUT[fastgltfMaterial.normalTexture->textureIndex]]->GetBindlessTextureID();
+                normalScale     = fastgltfMaterial.normalTexture->scale;
+            }
+
+            std::uint32_t occlusionTextureID{0};
+            float occlusionStrength{1.0f};
+            if (fastgltfMaterial.occlusionTexture.has_value())
+            {
+                occlusionTextureID = TextureMap[textureNameLUT[fastgltfMaterial.occlusionTexture->textureIndex]]->GetBindlessTextureID();
+                occlusionStrength  = fastgltfMaterial.occlusionTexture->strength;
+            }
+
+            std::uint32_t emissiveTextureID{0};
+            if (fastgltfMaterial.emissiveTexture.has_value())
+            {
+                emissiveTextureID = TextureMap[textureNameLUT[fastgltfMaterial.emissiveTexture->textureIndex]]->GetBindlessTextureID();
+            }
+
+            const std::string materialName{fastgltfMaterial.name};
+            MaterialMap[materialName] = {.PbrData{.BaseColorFactor{(glm::vec4&)fastgltfMaterial.pbrData.baseColorFactor},
+                                                  .MetallicFactor{fastgltfMaterial.pbrData.metallicFactor},
+                                                  .RoughnessFactor{fastgltfMaterial.pbrData.roughnessFactor},
+                                                  .AlbedoTextureID{albedoTextureID},
+                                                  .MetallicRoughnessTextureID{metallicRoughnessTextureID}},
+                                         .NormalTextureID{normalTextureID},
+                                         .NormalScale{normalScale},
+                                         .OcclusionTextureID{occlusionTextureID},
+                                         .OcclusionStrength{occlusionStrength},
+                                         .EmissiveTextureID{emissiveTextureID},
+                                         .EmissiveFactor{(glm::vec3&)fastgltfMaterial.emissiveFactor * fastgltfMaterial.emissiveStrength},
+                                         .AlphaCutoff{fastgltfMaterial.alphaCutoff}};
+        }
+
+        // Use the same vectors for all meshes so that the memory doesnt reallocate as often.
         std::vector<std::uint32_t> indices;
         std::vector<VertexPosition> vertexPositions;
         std::vector<VertexAttribute> vertexAttributes;
-        LOG_INFO("Loading mesh: {}", meshFilePath.string());
-        for (auto& mesh : asset->meshes)
+        LOG_INFO("Loading scene: {}", meshFilePath.string());
+
+        std::vector<std::string> meshAssetLUT{};
+        MeshAssetMap.reserve(asset->meshes.size());
+        for (const auto& fastgltfMesh : asset->meshes)
         {
-            LOG_INFO("Loading submesh: {}", mesh.name);
+            RDNT_ASSERT(!fastgltfMesh.name.empty(), "fastgltf: Mesh has no name!");
+
+            const std::string meshName{fastgltfMesh.name};
+            LOG_INFO("Loading submesh: {}", meshName);
 
             indices.clear();
             vertexPositions.clear();
             vertexAttributes.clear();
-            for (auto primIt = mesh.primitives.cbegin(); primIt != mesh.primitives.cend(); ++primIt)
-            {
-                auto* positionIt = primIt->findAttribute("POSITION");
-                RDNT_ASSERT(positionIt != primIt->attributes.end(),
-                            "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
-                RDNT_ASSERT(primIt->indicesAccessor.has_value(),
-                            "fastgltf: We specify GenerateMeshIndices, so we should always have indices.");
 
-                // Loading indices
+            meshAssetLUT.emplace_back(meshName);
+            MeshAssetMap[meshName]       = MakeShared<MeshAsset>();
+            MeshAssetMap[meshName]->Name = meshName;
+
+            for (const auto& primitve : fastgltfMesh.primitives)
+            {
+                RDNT_ASSERT(primitve.indicesAccessor.has_value(),
+                            "fastgltf: We specify GenerateMeshIndices, so we should always have indices!");
+                const auto* positionIt = primitve.findAttribute("POSITION");
+                RDNT_ASSERT(positionIt != primitve.attributes.end(),
+                            "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
+
+                MeshAssetMap[meshName]->Surfaces.emplace_back(
+                    GeometryData{.StartIndex{static_cast<std::uint32_t>(indices.size())},
+                                 .Count{static_cast<std::uint32_t>(asset->accessors[*primitve.indicesAccessor].count)},
+                                 .MaterialID{0},
+                                 .PrimitiveTopology{FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitve.type)}});
+
+                MeshAssetMap[meshName]->Surfaces.back().MaterialID = primitve.materialIndex.value_or(0);
+                MeshAssetMap[meshName]->Surfaces.back().AlphaMode =
+                    FastGltfUtils::ConvertAlphaModeToRadiant(asset->materials[primitve.materialIndex.value_or(0)].alphaMode);
+                MeshAssetMap[meshName]->Surfaces.back().CullMode = asset->materials[primitve.materialIndex.value_or(0)].doubleSided
+                                                                       ? vk::CullModeFlagBits::eNone
+                                                                       : vk::CullModeFlagBits::eBack;
+
+                const auto initialVertexIndex{vertexPositions.size()};
+
+                // Loading indices.
                 {
-                    auto& indicesAccessor = asset->accessors[primIt->indicesAccessor.value()];
+                    const auto& indicesAccessor = asset->accessors[*primitve.indicesAccessor];
                     indices.reserve(indices.size() + indicesAccessor.count);
 
                     fastgltf::iterateAccessor<std::uint32_t>(asset.get(), indicesAccessor,
-                                                             [&](std::uint32_t idx) { indices.emplace_back(idx); });
+                                                             [&](std::uint32_t idx) { indices.emplace_back(initialVertexIndex + idx); });
                 }
 
-                // Load vertex positions
+                // Load vertex positions.
                 {
-                    auto& posAccessor = asset->accessors[positionIt->accessorIndex];
-                    vertexPositions.resize(posAccessor.count);
-                    vertexAttributes.resize(posAccessor.count, VertexAttribute{.Normal{0, 0, 0}, .Color{1.0f, 1.0f, 1.0f, 1.0f}});
+                    const auto& posAccessor = asset->accessors[positionIt->accessorIndex];
+
+                    // Extend current vertex buffers
+                    vertexPositions.resize(vertexPositions.size() + posAccessor.count);
+                    vertexAttributes.resize(vertexAttributes.size() + posAccessor.count);
 
                     fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), posAccessor,
                                                                   [&](const glm::vec3& v, const std::size_t index)
-                                                                  { vertexPositions[index].Position = v; });
+                                                                  { vertexPositions[initialVertexIndex + index].Position = v; });
                 }
 
-                // Load vertex attributes
+                // Load vertex attributes.
                 {
-                    // 1. Normals
+                    // 1. Vertex colors
+                    if (const auto* colorsAttribute = primitve.findAttribute("COLOR_0"); colorsAttribute != primitve.attributes.end())
+                    {
+                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
+                                                                      [&](const glm::vec4& vertexColor, const std::size_t index) {
+                                                                          vertexAttributes[initialVertexIndex + index].Color = vertexColor;
+                                                                      });
+                    }
 
-                    if (auto* normalsAttribute = primIt->findAttribute("NORMAL"); normalsAttribute != primIt->attributes.end())
+                    // 2. Normals
+                    if (const auto* normalsAttribute = primitve.findAttribute("NORMAL"); normalsAttribute != primitve.attributes.end())
                     {
 
                         fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), asset->accessors[normalsAttribute->accessorIndex],
                                                                       [&](const glm::vec3& n, const std::size_t index)
-                                                                      { vertexAttributes[index].Normal = n; });
+                                                                      { vertexAttributes[initialVertexIndex + index].Normal = n; });
                     }
 
-                    // 2. Vertex colors
-
-                    if (auto* colorsAttribute = primIt->findAttribute("COLOR_0"); colorsAttribute != primIt->attributes.end())
+                    // 3. Tangents
+                    if (const auto* tangentAttribute = primitve.findAttribute("TANGENT"); tangentAttribute != primitve.attributes.end())
                     {
-                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
-                                                                      [&](const glm::vec4& vertexColor, const std::size_t index)
-                                                                      { vertexAttributes[index].Color = vertexColor; });
+                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[tangentAttribute->accessorIndex],
+                                                                      [&](const glm::vec4& t, const std::size_t index)
+                                                                      { vertexAttributes[initialVertexIndex + index].Tangent = t; });
+                    }
+
+                    // 4. UV
+                    if (const auto* uvAttribute = primitve.findAttribute("TEXCOORD_0"); uvAttribute != primitve.attributes.end())
+                    {
+                        fastgltf::iterateAccessorWithIndex<glm::vec2>(asset.get(), asset->accessors[uvAttribute->accessorIndex],
+                                                                      [&](const glm::vec2& uv, const std::size_t index)
+                                                                      { vertexAttributes[initialVertexIndex + index].UV = uv; });
                     }
                 }
-
-                auto& submesh = Submeshes.emplace_back();
-
-                const auto& device       = gfxContext->GetDevice();
-                auto loaderCommandBuffer = gfxContext->AllocateTransferCommandBuffer();
-                loaderCommandBuffer->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-
-                vk::Buffer vpbScratch{};
-                VmaAllocation vpbScratchAllocation{};
-                {
-                    const auto bufferCI = vk::BufferCreateInfo()
-                                              .setSharingMode(vk::SharingMode::eExclusive)
-                                              .setUsage(vk::BufferUsageFlagBits::eTransferSrc)
-                                              .setSize(vertexPositions.size() * sizeof(vertexPositions[0]));
-                    device->AllocateBuffer(EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED, bufferCI, *(VkBuffer*)&vpbScratch,
-                                           vpbScratchAllocation);
-                }
-                void* vpbHostMemory = device->Map(vpbScratchAllocation);
-                std::memcpy(vpbHostMemory, vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
-                device->Unmap(vpbScratchAllocation);
-
-                const GfxBufferDescription vpb = {.Capacity    = vertexPositions.size() * sizeof(vertexPositions[0]),
-                                                  .ElementSize = sizeof(vertexPositions[0]),
-                                                  .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer,
-                                                  .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
-                submesh.VertexPosBuffer        = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), vpb);
-
-                loaderCommandBuffer->copyBuffer(vpbScratch, *submesh.VertexPosBuffer,
-                                                vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
-
-                vk::Buffer vabScratch{};
-                VmaAllocation vabScratchAllocation{};
-                {
-                    const auto bufferCI = vk::BufferCreateInfo()
-                                              .setSharingMode(vk::SharingMode::eExclusive)
-                                              .setUsage(vk::BufferUsageFlagBits::eTransferSrc)
-                                              .setSize(vertexAttributes.size() * sizeof(vertexAttributes[0]));
-                    device->AllocateBuffer(EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED, bufferCI, *(VkBuffer*)&vabScratch,
-                                           vabScratchAllocation);
-                }
-                void* vabHostMemory = device->Map(vabScratchAllocation);
-                std::memcpy(vabHostMemory, vertexAttributes.data(), vertexAttributes.size() * sizeof(vertexAttributes[0]));
-                device->Unmap(vabScratchAllocation);
-
-                const GfxBufferDescription vab = {.Capacity    = vertexAttributes.size() * sizeof(vertexAttributes[0]),
-                                                  .ElementSize = sizeof(vertexAttributes[0]),
-                                                  .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer,
-                                                  .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
-                submesh.VertexAttribBuffer     = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), vab);
-
-                loaderCommandBuffer->copyBuffer(vabScratch, *submesh.VertexAttribBuffer,
-                                                vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
-
-                vk::Buffer ibScratch{};
-                VmaAllocation ibScratchAllocation{};
-                {
-                    const auto bufferCI = vk::BufferCreateInfo()
-                                              .setSharingMode(vk::SharingMode::eExclusive)
-                                              .setUsage(vk::BufferUsageFlagBits::eTransferSrc)
-                                              .setSize(indices.size() * sizeof(indices[0]));
-                    device->AllocateBuffer(EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED, bufferCI, *(VkBuffer*)&ibScratch,
-                                           ibScratchAllocation);
-                }
-                void* ibHostMemory = device->Map(ibScratchAllocation);
-                std::memcpy(ibHostMemory, indices.data(), indices.size() * sizeof(indices[0]));
-                device->Unmap(ibScratchAllocation);
-
-                const GfxBufferDescription ib = {.Capacity    = indices.size() * sizeof(indices[0]),
-                                                 .ElementSize = sizeof(indices[0]),
-                                                 .UsageFlags =
-                                                     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
-                                                 .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL};
-                submesh.IndexBuffer           = MakeUnique<GfxBuffer>(gfxContext->GetDevice(), ib);
-
-                loaderCommandBuffer->copyBuffer(ibScratch, *submesh.IndexBuffer,
-                                                vk::BufferCopy().setSize(indices.size() * sizeof(indices[0])));
-
-                loaderCommandBuffer->end();
-                gfxContext->GetDevice()->GetTransferQueue().Handle.submit(vk::SubmitInfo().setCommandBuffers(*loaderCommandBuffer));
-                gfxContext->GetDevice()->GetTransferQueue().Handle.waitIdle();
-
-                device->DeallocateBuffer(*(VkBuffer*)&vpbScratch, vpbScratchAllocation);
-                device->DeallocateBuffer(*(VkBuffer*)&vabScratch, vabScratchAllocation);
-                device->DeallocateBuffer(*(VkBuffer*)&ibScratch, ibScratchAllocation);
             }
+
+            MeshAssetMap[meshName]->IndexBufferID           = IndexBuffers.size();
+            MeshAssetMap[meshName]->VertexPositionBufferID  = VertexPositionBuffers.size();
+            MeshAssetMap[meshName]->VertexAttributeBufferID = VertexAttributeBuffers.size();
+
+            const auto [cmd, queue] =
+                gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER);
+            cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+            // Handle vertex positions.
+            auto vbpStagingBuffer = MakeUnique<GfxBuffer>(
+                gfxContext->GetDevice(), GfxBufferDescription{.Capacity   = vertexPositions.size() * sizeof(vertexPositions[0]),
+                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
+                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+            vbpStagingBuffer->SetData(vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
+
+            auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(),
+                GfxBufferDescription{.Capacity    = vertexPositions.size() * sizeof(vertexPositions[0]),
+                                     .ElementSize = sizeof(vertexPositions[0]),
+                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
+                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+            cmd->copyBuffer(*vbpStagingBuffer, *vtxPosBuffer,
+                            vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
+
+            // Handle vertex attributes.
+            auto vabStagingBuffer = MakeUnique<GfxBuffer>(
+                gfxContext->GetDevice(), GfxBufferDescription{.Capacity   = vertexAttributes.size() * sizeof(vertexAttributes[0]),
+                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
+                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+            vabStagingBuffer->SetData(vertexAttributes.data(), vertexAttributes.size() * sizeof(vertexAttributes[0]));
+
+            auto& vtxAttribBuffer = VertexAttributeBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(),
+                GfxBufferDescription{.Capacity    = vertexAttributes.size() * sizeof(vertexAttributes[0]),
+                                     .ElementSize = sizeof(vertexAttributes[0]),
+                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
+                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+            cmd->copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
+                            vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
+
+            // Handle indices.
+            auto ibStagingBuffer = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
+                                                         GfxBufferDescription{.Capacity   = indices.size() * sizeof(indices[0]),
+                                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
+                                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+            ibStagingBuffer->SetData(indices.data(), indices.size() * sizeof(indices[0]));
+
+            auto& ibBuffer = IndexBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(),
+                GfxBufferDescription{.Capacity    = indices.size() * sizeof(indices[0]),
+                                     .ElementSize = sizeof(indices[0]),
+                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
+                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(indices.size() * sizeof(indices[0])));
+
+            cmd->end();
+            queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
+            queue.waitIdle();
+        }
+        meshAssetLUT.shrink_to_fit();
+
+        std::vector<Shared<RenderNode>> nodesToConfigureLater;
+        for (const auto& gltfNode : asset->nodes)
+        {
+            RDNT_ASSERT(!gltfNode.name.empty(), "fastgltf: Node has no name!");
+
+            const std::string nodeName{gltfNode.name};
+            Shared<RenderNode> newNode{MakeShared<RenderNode>()};
+            newNode->Name = nodeName;
+
+            // Find if the node has a mesh, and if it does hook it to the mesh pointer and allocate it with the RenderNode class.
+            if (gltfNode.meshIndex.has_value())
+            {
+                newNode->MeshAsset = MeshAssetMap[meshAssetLUT[*gltfNode.meshIndex]];
+            }
+            RenderNodes[nodeName] = newNode;
+            nodesToConfigureLater.emplace_back(newNode);
+
+            std::visit(fastgltf::visitor{[](auto& arg) {
+                                             RDNT_ASSERT(
+                                                 false,
+                                                 "fastgltf: Default argument when parsing transformation matrices! This shouldn't happen!")
+                                         },
+                                         [&](const fastgltf::math::fmat4x4& trsMatrix)
+                                         { memcpy(&newNode->LocalTransform, trsMatrix.data(), sizeof(trsMatrix)); },
+                                         [&](const fastgltf::TRS& trsMatrix)
+                                         {
+                                             const glm::vec3 tl{(glm::vec3&)trsMatrix.translation};
+                                             const glm::quat rot{(glm::quat&)trsMatrix.rotation};
+                                             const glm::vec3 sc{(glm::vec3&)trsMatrix.scale};
+
+                                             const glm::mat4 tm{glm::translate(glm::mat4(1.f), tl)};
+                                             const glm::mat4 rm{glm::toMat4(rot)};
+                                             const glm::mat4 sm{glm::scale(glm::mat4(1.f), sc)};
+
+                                             newNode->LocalTransform = tm * rm * sm;
+                                         }},
+                       gltfNode.transform);
+        }
+
+        // Setup transform hierarchy.
+        for (std::uint32_t i{}; i < asset->nodes.size(); ++i)
+        {
+            const auto& node = asset->nodes[i];
+            auto& renderNode = nodesToConfigureLater[i];
+
+            for (const auto& childrenIndex : node.children)
+            {
+                nodesToConfigureLater[childrenIndex]->Parent = renderNode;
+                renderNode->Children.emplace_back(nodesToConfigureLater[childrenIndex]);
+            }
+        }
+
+        // Find the root nodes.
+        for (auto& renderNode : nodesToConfigureLater)
+        {
+            if (renderNode->Parent.lock()) continue;
+
+            RootNodes.emplace_back(renderNode);
+            renderNode->RefreshTransform(glm::mat4{1.f});
+        }
+
+        // TODO: Store materials in VRAM?
+        // Load material buffers.
+        for (const auto& [_, gltfMaterial] : MaterialMap)
+        {
+            MaterialBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(), GfxBufferDescription{.Capacity    = sizeof(Shaders::GLTFMaterial),
+                                                              .ElementSize = sizeof(Shaders::GLTFMaterial),
+                                                              .UsageFlags  = vk::BufferUsageFlagBits::eUniformBuffer,
+                                                              .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED |
+                                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE}));
+            MaterialBuffers.back()->SetData(&gltfMaterial, sizeof(gltfMaterial));
         }
     }
 

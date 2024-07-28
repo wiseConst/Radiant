@@ -7,11 +7,12 @@ namespace Radiant
 {
     void GfxBuffer::Invalidate() noexcept
     {
-        const auto bufferCI = vk::BufferCreateInfo()
-                                  .setSharingMode(vk::SharingMode::eExclusive)
-                                  .setUsage(m_Description.UsageFlags)
-                                  .setSize(m_Description.Capacity);
-        m_Device->AllocateBuffer(m_Description.ExtraFlags, bufferCI, *(VkBuffer*)&m_Handle, m_Allocation);
+        m_Device->AllocateBuffer(m_Description.ExtraFlags,
+                                 vk::BufferCreateInfo()
+                                     .setSharingMode(vk::SharingMode::eExclusive)
+                                     .setUsage(m_Description.UsageFlags)
+                                     .setSize(m_Description.Capacity),
+                                 (VkBuffer&)m_Handle, m_Allocation);
 
         if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
             m_BDA = m_Device->GetLogicalDevice()->getBufferAddress(vk::BufferDeviceAddressInfo().setBuffer(m_Handle));

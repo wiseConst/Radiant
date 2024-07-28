@@ -1,13 +1,13 @@
 #pragma once
 
-#include <Core/Core.hpp>
 #include <Render/CoreDefines.hpp>
 
 namespace Radiant
 {
 
-    static constexpr float s_MouseSensitivity = 50.f;
-
+    static constexpr float s_MouseSensitivity      = 15.f;
+    static constexpr float s_CameraSpeed           = 0.1f;
+    
     class Camera final : private Uncopyable, private Unmovable
     {
       public:
@@ -36,7 +36,7 @@ namespace Radiant
         {
             if (m_Velocity == glm::vec3{0.f}) return;
 
-            m_Position += glm::vec3(GetRotationMatrix() * glm::vec4(m_Velocity, 1.0f)) * deltaTime;
+            m_Position += glm::vec3(GetRotationMatrix() * glm::vec4(m_Velocity, 1.0f)) * deltaTime * s_CameraSpeed;
             RecalculateViewMatrix();
         }
 

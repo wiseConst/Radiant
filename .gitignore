@@ -34,3 +34,5 @@
 # My files
 build
 ThirdParty
+Assets/Models/
+!Assets/Models/standard

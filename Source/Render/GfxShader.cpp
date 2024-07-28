@@ -67,12 +67,9 @@ namespace Radiant
         // For convenience, we define a subroutine that will dump the information
         // in a diagnostic blob if one is produced, and skip it otherwise.
         //
-        const auto diagnoseSlangBlob = [](slang::IBlob* diagnosticsBlob)
+        const auto diagnoseSlangBlob = [](slang::IBlob* diagnosticsBlob) noexcept
         {
-            if (diagnosticsBlob)
-            {
-                LOG_ERROR("{}", (const char*)diagnosticsBlob->getBufferPointer());
-            }
+            if (diagnosticsBlob) LOG_ERROR("{}", (const char*)diagnosticsBlob->getBufferPointer());
         };
 
         // First we need to create slang global session with work with the Slang API.
@@ -82,7 +79,7 @@ namespace Radiant
 
         // Next we create a compilation session to generate SPIRV code from Slang source.
         const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
-                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460" */"spirv_1_6"),
+                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460"*/"spirv_1_6"),
                                               .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
                                               .forceGLSLScalarBufferLayout = true};
 

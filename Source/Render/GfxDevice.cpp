@@ -5,7 +5,7 @@
 #define VK_NO_PROTOTYPES
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include "vma/vk_mem_alloc.h"
+#include <vk_mem_alloc.h>
 
 namespace Radiant
 {
@@ -33,7 +33,8 @@ namespace Radiant
                                 .setDescriptorBindingPartiallyBound(vk::True)
                                 .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
                                 .setDescriptorBindingStorageImageUpdateAfterBind(vk::True)
-                                .setDescriptorBindingUpdateUnusedWhilePending(vk::True);
+                                .setDescriptorBindingUpdateUnusedWhilePending(vk::True)
+                                .setRuntimeDescriptorArray(vk::True);
 
         *paravozik = &vkFeatures12;
         paravozik  = &vkFeatures12.pNext;
@@ -43,8 +44,11 @@ namespace Radiant
         *paravozik = &vkFeatures11;
         paravozik  = &vkFeatures11.pNext;
 
-        constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures =
-            vk::PhysicalDeviceFeatures().setShaderInt16(vk::True).setShaderInt64(vk::True).setFillModeNonSolid(vk::True);
+        constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures = vk::PhysicalDeviceFeatures()
+                                                                          .setShaderInt16(vk::True)
+                                                                          .setShaderInt64(vk::True)
+                                                                          .setFillModeNonSolid(vk::True)
+                                                                          .setSamplerAnisotropy(vk::True);
         SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, requiredDeviceFeatures, &vkFeatures13);
 
         InitVMA(instance);
@@ -143,8 +147,35 @@ namespace Radiant
                 RDNT_ASSERT(AreAllFlagsSet(requiredDeviceFeatures, gpu.getFeatures()),
                             "Required device features flags aren't present in available device features!");
 
-                m_PhysicalDevice = gpu;
-                m_GPUProperties  = gpuProperties;
+                m_PhysicalDevice          = gpu;
+                m_GPUProperties           = gpuProperties;
+                const auto maxMSAASamples = m_GPUProperties.limits.sampledImageColorSampleCounts &
+                                            m_GPUProperties.limits.sampledImageDepthSampleCounts &
+                                            m_GPUProperties.limits.sampledImageStencilSampleCounts;
+                if ((maxMSAASamples & vk::SampleCountFlagBits::e64) == vk::SampleCountFlagBits::e64)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e64;
+                }
+                else if ((maxMSAASamples & vk::SampleCountFlagBits::e32) == vk::SampleCountFlagBits::e32)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e32;
+                }
+                else if ((maxMSAASamples & vk::SampleCountFlagBits::e16) == vk::SampleCountFlagBits::e16)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e16;
+                }
+                else if ((maxMSAASamples & vk::SampleCountFlagBits::e8) == vk::SampleCountFlagBits::e8)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e8;
+                }
+                else if ((maxMSAASamples & vk::SampleCountFlagBits::e4) == vk::SampleCountFlagBits::e4)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e4;
+                }
+                else if ((maxMSAASamples & vk::SampleCountFlagBits::e2) == vk::SampleCountFlagBits::e2)
+                {
+                    m_MSAASamples = vk::SampleCountFlagBits::e2;
+                }
                 LOG_INFO("Chosen GPU: {}", gpuProperties.deviceName.data());
             }
         }
@@ -223,10 +254,21 @@ namespace Radiant
         // Load device functions.
         VULKAN_HPP_DEFAULT_DISPATCHER.init(*m_Device);
 
+        SetDebugName(m_GPUProperties.deviceName, *m_Device);
+
         m_GeneralQueue.Handle  = m_Device->getQueue(*m_GeneralQueue.QueueFamilyIndex, 0);
         m_PresentQueue.Handle  = m_Device->getQueue(*m_PresentQueue.QueueFamilyIndex, 0);
         m_TransferQueue.Handle = m_Device->getQueue(*m_TransferQueue.QueueFamilyIndex, 0);
         m_ComputeQueue.Handle  = m_Device->getQueue(*m_ComputeQueue.QueueFamilyIndex, 0);
+
+        SetDebugName("COMMAND_QUEUE_TRANSFER", m_TransferQueue.Handle);
+        SetDebugName("COMMAND_QUEUE_COMPUTE", m_ComputeQueue.Handle);
+        SetDebugName("COMMAND_QUEUE_GRAPHICS_PRESENT", m_GeneralQueue.Handle);
+        if (m_GeneralQueue.Handle != m_PresentQueue.Handle)
+        {
+            SetDebugName("COMMAND_QUEUE_PRESENT", m_PresentQueue.Handle);
+            SetDebugName("COMMAND_QUEUE_GRAPHICS", m_GeneralQueue.Handle);
+        }
     }
 
     void GfxDevice::InitVMA(const vk::UniqueInstance& instance) noexcept

@@ -37,9 +37,10 @@ namespace Radiant
         }
 
         NODISCARD FORCEINLINE const auto& GetMainWindow() const noexcept { return m_MainWindow; }
+        NODISCARD FORCEINLINE auto& GetThreadPool() noexcept { return m_ThreadPool; }
 
         NODISCARD FORCEINLINE const auto GetDeltaTime() const noexcept { return m_DeltaTime; }
-        NODISCARD FORCEINLINE static const auto& Get() noexcept
+        NODISCARD FORCEINLINE static auto& Get() noexcept
         {
             RDNT_ASSERT(s_Instance, "Application instance invalid!");
             return *s_Instance;
@@ -49,11 +50,11 @@ namespace Radiant
         static inline Application* s_Instance{nullptr};
         Unique<GLFWWindow> m_MainWindow{nullptr};
         Unique<Renderer> m_Renderer{nullptr};
+        ThreadPool m_ThreadPool = {};
 
         ApplicationDescription m_Description{};
         bool m_bIsRunning{false};
         float m_DeltaTime{0.f};
-        uint64_t m_FrameCounter{0};
 
         constexpr Application() noexcept = delete;
         void Init() noexcept;

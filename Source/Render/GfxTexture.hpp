@@ -77,7 +77,7 @@ namespace Radiant
             return false;
         }
 
-        void GenerateMipMaps(const vk::UniqueCommandBuffer& cmd) const noexcept;
+        void GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept;
         void Resize(const glm::uvec3& dimensions) noexcept;
 
         NODISCARD FORCEINLINE std::uint32_t GetBindlessImageID(const std::uint8_t mipLevel = 0) const noexcept

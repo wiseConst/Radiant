@@ -49,7 +49,6 @@ namespace Radiant
             m_Renderer->UpdateMainCamera(m_DeltaTime);
             m_Renderer->RenderFrame();
 
-            ++m_FrameCounter;
             ++frameCount;
 
             auto currentTime = Timer::Now();
@@ -59,11 +58,6 @@ namespace Radiant
             accumulatedDeltaTime += m_DeltaTime;
             if (accumulatedDeltaTime >= 1.f || m_Description.FPSLimit != 0 && frameCount == m_Description.FPSLimit)
             {
-                std::stringstream ss;
-                ss << m_Description.Name << " / Frame: " << m_FrameCounter << " dt: " << m_DeltaTime << " FPS: " << frameCount;
-
-                m_MainWindow->SetTitle(ss.str());
-
                 frameCount           = 0;
                 accumulatedDeltaTime = 0.f;
 

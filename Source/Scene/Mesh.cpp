@@ -6,6 +6,7 @@
 #include <fastgltf/core.hpp>
 
 #include <Render/GfxTexture.hpp>
+#include <Core/Application.hpp>
 
 namespace Radiant
 {
@@ -50,7 +51,7 @@ namespace Radiant
             }
         }
 
-        NODISCARD static vk::Filter ConvertFilterToVulkan(const fastgltf::Filter filter)
+        NODISCARD static vk::Filter ConvertFilterToVulkan(const fastgltf::Filter filter) noexcept
         {
             switch (filter)
             {
@@ -65,7 +66,7 @@ namespace Radiant
             }
         }
 
-        NODISCARD static vk::SamplerMipmapMode ConvertMipMapModeToVulkan(const fastgltf::Filter filter)
+        NODISCARD static vk::SamplerMipmapMode ConvertMipMapModeToVulkan(const fastgltf::Filter filter) noexcept
         {
             switch (filter)
             {
@@ -79,7 +80,7 @@ namespace Radiant
         }
 
         // NOTE: For simplicity, usage of the same texture with multiple samplers isn't supported at least for now!
-        NODISCARD static std::string LoadTexture(UnorderedMap<std::string, Shared<GfxTexture>>& textureMap,
+        NODISCARD static std::string LoadTexture(std::mutex& loaderMutex, UnorderedMap<std::string, Shared<GfxTexture>>& textureMap,
                                                  const std::filesystem::path& meshParentPath, const Unique<GfxContext>& gfxContext,
                                                  const fastgltf::Asset& asset, const fastgltf::Texture& texture,
                                                  const std::vector<vk::SamplerCreateInfo>& samplerCIs) noexcept
@@ -88,6 +89,8 @@ namespace Radiant
             {
                 LOG_WARN("fastgltf: Texture has no image attached to it! Returning default white texture!");
                 const std::string defaultWhiteTextureName{"RDNT_DEFAULT_WHITE_TEX"};
+
+                std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap
                 if (textureMap.contains(defaultWhiteTextureName)) return defaultWhiteTextureName;
 
                 textureMap[defaultWhiteTextureName] = gfxContext->GetDefaultWhiteTexture();
@@ -95,6 +98,7 @@ namespace Radiant
             }
             int32_t width{1}, height{1}, channels{4};
 
+            ImmediateExecuteContext executionContext = {};
             std::string textureName{s_DEFAULT_STRING};
             Shared<GfxTexture> loadedTexture{nullptr};
             std::visit(
@@ -107,7 +111,13 @@ namespace Radiant
 
                         textureName = filePath.uri.path();
                         RDNT_ASSERT(!textureName.empty(), "fastgltf: Texture name is empty!");
-                        if (textureMap.contains(textureName)) return;
+                        {
+                            std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap by putting dummy(null) texture
+                            if (textureMap.contains(textureName))
+                                return;
+                            else
+                                textureMap[textureName] = loadedTexture;
+                        }
 
                         const auto textureFilePath = meshParentPath / textureName;
                         void* imageData            = GfxTextureUtils::LoadImage(textureFilePath.string(), width, height, channels);
@@ -121,16 +131,20 @@ namespace Radiant
                             if (bGenerateMipMaps) samplerCI->maxLod = GfxTextureUtils::GetMipLevelCount(width, height);
                         }
 
-                        loadedTexture = MakeShared<GfxTexture>(gfxContext->GetDevice(),
-                                                               GfxTextureDescription{.Type{vk::ImageType::e2D},
-                                                                                     .Dimensions{width, height, 1},
-                                                                                     .bExposeMips{false},
-                                                                                     .bGenerateMips{bGenerateMipMaps},
-                                                                                     .LayerCount{1},
-                                                                                     .Format{vk::Format::eR8G8B8A8Unorm},
-                                                                                     .UsageFlags{vk::ImageUsageFlagBits::eColorAttachment |
-                                                                                                 vk::ImageUsageFlagBits::eTransferDst},
-                                                                                     .SamplerCreateInfo{samplerCI}});
+                        {
+                            std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap by loading actual texture
+                            loadedTexture = MakeShared<GfxTexture>(
+                                gfxContext->GetDevice(), GfxTextureDescription{.Type{vk::ImageType::e2D},
+                                                                               .Dimensions{width, height, 1},
+                                                                               .bExposeMips{false},
+                                                                               .bGenerateMips{bGenerateMipMaps},
+                                                                               .LayerCount{1},
+                                                                               .Format{vk::Format::eR8G8B8A8Unorm},
+                                                                               .UsageFlags{vk::ImageUsageFlagBits::eColorAttachment |
+                                                                                           vk::ImageUsageFlagBits::eTransferDst},
+                                                                               .SamplerCreateInfo{samplerCI}});
+                            textureMap[textureName] = loadedTexture;
+                        }
 
                         const auto imageSize = static_cast<std::size_t>(width * height * channels);
                         auto stagingBuffer   = MakeUnique<GfxBuffer>(
@@ -138,11 +152,11 @@ namespace Radiant
 
                         stagingBuffer->SetData(imageData, imageSize);
 
-                        const auto [cmd, queue] =
-                            gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
-                        cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+                        executionContext = gfxContext->CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                        executionContext.CommandBuffer.begin(
+                            vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-                        cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                        executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                             vk::ImageMemoryBarrier2()
                                 .setImage(*loadedTexture)
                                 .setSubresourceRange(
@@ -157,22 +171,23 @@ namespace Radiant
                                 .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
                                 .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
                                 .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
+                                .setDstStageMask(vk::PipelineStageFlagBits2::eCopy)));
 
-                        cmd->copyBufferToImage(*stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
-                                               vk::BufferImageCopy()
-                                                   .setImageSubresource(vk::ImageSubresourceLayers()
-                                                                            .setLayerCount(1)
-                                                                            .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                                            .setBaseArrayLayer(0)
-                                                                            .setMipLevel(0))
-                                                   .setImageExtent(vk::Extent3D(width, height, 1)));
+                        executionContext.CommandBuffer.copyBufferToImage(
+                            *stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
+                            vk::BufferImageCopy()
+                                .setImageSubresource(vk::ImageSubresourceLayers()
+                                                         .setLayerCount(1)
+                                                         .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                                         .setBaseArrayLayer(0)
+                                                         .setMipLevel(0))
+                                .setImageExtent(vk::Extent3D(width, height, 1)));
 
                         if (bGenerateMipMaps)
-                            loadedTexture->GenerateMipMaps(cmd);
+                            loadedTexture->GenerateMipMaps(executionContext.CommandBuffer);
                         else
                         {
-                            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                            executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                                 vk::ImageMemoryBarrier2()
                                     .setImage(*loadedTexture)
                                     .setSubresourceRange(vk::ImageSubresourceRange()
@@ -183,16 +198,20 @@ namespace Radiant
                                                              .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                     .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
                                     .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eCopy)
                                     .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
                                     .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
                                     .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader |
                                                      vk::PipelineStageFlagBits2::eComputeShader)));
                         }
 
-                        cmd->end();
-                        queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
-                        queue.waitIdle();
+                        executionContext.CommandBuffer.end();
+
+                        {
+                            std::scoped_lock lock(gfxContext->GetMutex());  // Synchronizing access to single queue
+                            executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
+                            executionContext.Queue.waitIdle();
+                        }
 
                         GfxTextureUtils::UnloadImage(imageData);
                     },
@@ -230,7 +249,6 @@ namespace Radiant
                 },
                 asset.images[*texture.imageIndex].data);
 
-            if (loadedTexture) textureMap[textureName] = loadedTexture;
             return textureName;
         }
 
@@ -290,15 +308,35 @@ namespace Radiant
                     .setMaxAnisotropy(gfxContext->GetDevice()->GetGPUProperties().limits.maxSamplerAnisotropy);
         }
 
-        // NOTE: textureIndex -> name, since multiple materials can reference the same textures but with different samplers, so there's no
-        // need same texture N times.
+        // NOTE: textureIndex -> name, since multiple materials can reference the same textures but with different samplers, so
+        // there's no need to load same texture N times.
         UnorderedMap<std::size_t, std::string> textureNameLUT{};
         textureNameLUT.reserve(asset->textures.size());
         TextureMap.reserve(asset->textures.size());
-        for (std::size_t textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
+        // Parallel texture loading.
         {
-            textureNameLUT[textureIndex] =
-                FastGltfUtils::LoadTexture(TextureMap, meshParentPath, gfxContext, asset.get(), asset->textures[textureIndex], samplerCIs);
+            std::vector<std::future<std::string>> textureFutures;
+            std::mutex loaderMutex          = {};
+            const auto textureLoadBeginTime = Timer::Now();
+            for (std::size_t textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
+            {
+                textureFutures.emplace_back(Application::Get().GetThreadPool().Submit(
+                    [&, textureIndex]() noexcept
+                    {
+                        return FastGltfUtils::LoadTexture(loaderMutex, TextureMap, meshParentPath, gfxContext, asset.get(),
+                                                          asset->textures[textureIndex], samplerCIs);
+                    }));
+            }
+
+            for (std::size_t textureIndex{}; textureIndex < textureFutures.size(); ++textureIndex)
+            {
+                auto textureName             = textureFutures[textureIndex].get();
+                textureNameLUT[textureIndex] = textureName;
+            }
+
+            const auto textureLoadEndTime = Timer::Now();
+            LOG_INFO("Loaded ({}) textures in [{:.8f}] ms", TextureMap.size(),
+                     std::chrono::duration<float, std::chrono::milliseconds::period>(textureLoadEndTime - textureLoadBeginTime).count());
         }
 
         MaterialMap.reserve(asset->materials.size());

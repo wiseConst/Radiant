@@ -100,11 +100,10 @@ namespace Radiant
                                              .setLevelCount(m_Description.bGenerateMips ? mipLevelCount : 1)));
 
             {
-                const auto [cmd, queue] =
-                    GfxContext::Get().AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
-                cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-                cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()
                         .setImage(m_Image)
                         .setSubresourceRange(vk::ImageSubresourceRange()
@@ -121,9 +120,13 @@ namespace Radiant
                         .setDstAccessMask(vk::AccessFlagBits2::eShaderRead)
                         .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader)));
 
-                cmd->end();
-                queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
-                queue.waitIdle();
+                executionContext.CommandBuffer.end();
+
+                {
+                    std::scoped_lock lock(GfxContext::Get().GetMutex());  // Synchronizing access to single queue
+                    executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
+                    executionContext.Queue.waitIdle();
+                }
 
                 GfxContext::Get().PushBindlessThing(vk::DescriptorImageInfo()
                                                         .setImageView(*m_MipChain[baseMipLevel].ImageView)
@@ -136,11 +139,10 @@ namespace Radiant
 
             if ((m_Description.UsageFlags & vk::ImageUsageFlagBits::eStorage) == vk::ImageUsageFlagBits::eStorage)
             {
-                const auto [cmd, queue] =
-                    GfxContext::Get().AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
-                cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-                cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()
                         .setImage(m_Image)
                         .setSubresourceRange(vk::ImageSubresourceRange()
@@ -157,9 +159,13 @@ namespace Radiant
                         .setDstAccessMask(vk::AccessFlagBits2::eShaderRead)
                         .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader)));
 
-                cmd->end();
-                queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
-                queue.waitIdle();
+                executionContext.CommandBuffer.end();
+
+                {
+                    std::scoped_lock lock(GfxContext::Get().GetMutex());  // Synchronizing access to single queue
+                    executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
+                    executionContext.Queue.waitIdle();
+                }
 
                 GfxContext::Get().PushBindlessThing(
                     vk::DescriptorImageInfo().setImageView(*m_MipChain[baseMipLevel].ImageView).setImageLayout(vk::ImageLayout::eGeneral),
@@ -168,7 +174,7 @@ namespace Radiant
         }
     }
 
-    void GfxTexture::GenerateMipMaps(const vk::UniqueCommandBuffer& cmd) const noexcept
+    void GfxTexture::GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept
     {
         RDNT_ASSERT(m_Description.bGenerateMips, "bGenerateMips is not specified!");
 
@@ -186,8 +192,7 @@ namespace Radiant
                                                                                 .setLevelCount(1)
                                                                                 .setLayerCount(m_Description.LayerCount)
                                                                                 .setAspectMask(aspectMask));
-        const auto mipLevelCount =
-            static_cast<std::uint32_t>(std::floor(std::log2(std::max(m_Description.Dimensions.x, m_Description.Dimensions.y)))) + 1;
+        const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
         uint32_t mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
         for (std::uint32_t baseMipLevel{1}; baseMipLevel < mipLevelCount; ++baseMipLevel)
@@ -198,7 +203,7 @@ namespace Radiant
             imageMemoryBarrier.newLayout                     = vk::ImageLayout::eTransferSrcOptimal;
             imageMemoryBarrier.dstAccessMask                 = vk::AccessFlagBits2::eTransferRead;
             imageMemoryBarrier.srcStageMask = imageMemoryBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllTransfer;
-            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
+            cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
 
             const auto previousMipSubresourceLayers = vk::ImageSubresourceLayers()
                                                           .setAspectMask(aspectMask)
@@ -211,15 +216,20 @@ namespace Radiant
                                                          .setBaseArrayLayer(0)
                                                          .setMipLevel(baseMipLevel);
 
-            cmd->blitImage(
-                m_Image, vk::ImageLayout::eTransferSrcOptimal, m_Image, vk::ImageLayout::eTransferDstOptimal,
-                vk::ImageBlit()
-                    .setSrcSubresource(previousMipSubresourceLayers)
-                    .setDstSubresource(currentMipSubresourceLayers)
-                    .setSrcOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(mipWidth), static_cast<int32_t>(mipHeight), 1)})
-                    .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(mipWidth > 1 ? mipWidth / 2 : 1),
-                                                                 static_cast<int32_t>(mipHeight > 1 ? mipHeight / 2 : 1), 1)}),
-                vk::Filter::eLinear);
+            cmd.blitImage2(vk::BlitImageInfo2()
+                               .setFilter(vk::Filter::eLinear)
+                               .setSrcImage(m_Image)
+                               .setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
+                               .setDstImage(m_Image)
+                               .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
+                               .setRegions(vk::ImageBlit2()
+                                               .setSrcSubresource(previousMipSubresourceLayers)
+                                               .setDstSubresource(currentMipSubresourceLayers)
+                                               .setSrcOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(mipWidth),
+                                                                                            static_cast<int32_t>(mipHeight), 1)})
+                                               .setDstOffsets({vk::Offset3D(),
+                                                               vk::Offset3D(static_cast<int32_t>(mipWidth > 1 ? mipWidth / 2 : 1),
+                                                                            static_cast<int32_t>(mipHeight > 1 ? mipHeight / 2 : 1), 1)})));
 
             imageMemoryBarrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
             imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferRead;
@@ -227,7 +237,7 @@ namespace Radiant
             imageMemoryBarrier.newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal;
             imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead;
             imageMemoryBarrier.dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
-            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
+            cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
 
             mipWidth  = mipWidth > 1 ? mipWidth / 2 : 1;
             mipHeight = mipHeight > 1 ? mipHeight / 2 : 1;
@@ -241,7 +251,7 @@ namespace Radiant
         imageMemoryBarrier.newLayout                     = vk::ImageLayout::eShaderReadOnlyOptimal;
         imageMemoryBarrier.dstAccessMask                 = vk::AccessFlagBits2::eShaderSampledRead;
         imageMemoryBarrier.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
-        cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
+        cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
     }
 
     void GfxTexture::Resize(const glm::uvec3& dimensions) noexcept

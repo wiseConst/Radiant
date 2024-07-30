@@ -14,7 +14,7 @@ namespace Radiant
         Camera() noexcept  = default;
         ~Camera() noexcept = default;
 
-        Camera(const float zoom /* expect FOV */, const float ar, const float zNear = 0.001f, const float zFar = 1000.0f) noexcept
+        Camera(const float zoom /* expect FOV */, const float ar, const float zNear = 0.0001f, const float zFar = 1000.0f) noexcept
             : m_Zoom(zoom), m_AR(ar), m_zNear(zNear), m_zFar(zFar)
         {
             RecalculateProjectionMatrix();

@@ -79,7 +79,7 @@ namespace Radiant
 
         // Next we create a compilation session to generate SPIRV code from Slang source.
         const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
-                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460"*/"spirv_1_6"),
+                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460"*/ "spirv_1_6"),
                                               .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
                                               .forceGLSLScalarBufferLayout = true};
 
@@ -169,7 +169,7 @@ namespace Radiant
             // TODO: Reflection and push constants size assertion on 128 bytes!
 #if 0
             auto composedProgramLayout = composedProgram->getLayout();
-            RDNT_ASSERT(composedProgramLayout, "SLANG: ComposedProgramLayout isn't valid!");
+            RDNT_ASSERT(composedProgramLayout, "SLANG: ComposedProgramLayout isn't valid!"); 
 
             for (std::uint32_t i{}; i < composedProgramLayout->getParameterCount(); ++i)
             {

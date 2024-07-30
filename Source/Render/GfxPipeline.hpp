@@ -74,6 +74,7 @@ namespace Radiant
         }
         ~GfxPipeline() noexcept { Destroy(); }
 
+        NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
         operator const vk::Pipeline&() const noexcept { return *m_Handle; }
 
         void HotReload() noexcept;

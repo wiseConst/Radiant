@@ -17,6 +17,8 @@ namespace Radiant
 
 #if _MSC_VER
 #define RDNT_DEBUGBREAK __debugbreak()
+#else
+#define RDNT_DEBUGBREAK
 #endif
 
 #if RDNT_DEBUG
@@ -43,14 +45,19 @@ namespace Radiant
         glm::uvec2 Dimensions;
     };
 
-    class ThreadPool final
+    class ThreadPool final : private Uncopyable, private Unmovable
     {
       public:
-        ThreadPool() noexcept { m_Workers.resize(std::thread::hardware_concurrency()); }
+        ThreadPool() noexcept
+        {
+            m_Workers.resize(std::thread::hardware_concurrency());
+            Init();
+        }
         ThreadPool(const std::uint16_t workerCount) noexcept
         {
             RDNT_ASSERT(workerCount > 0, "Worker count should be > 0!");
             m_Workers.resize(workerCount);
+            Init();
         }
         ~ThreadPool() noexcept
         {
@@ -61,16 +68,51 @@ namespace Radiant
             m_Cv.notify_all();
         }
 
-        template <typename Func, typename... Args> auto Submit(Func&& func, Args&&... args) noexcept -> std::future<decltype(func(args...))>
+        template <typename Func, typename... Args>
+        NODISCARD auto Submit(Func&& func, Args&&... args) noexcept -> std::future<decltype(func(args...))>
         {
+            auto task   = std::packaged_task<decltype(func(args...))()>(std::bind(std::forward<Func>(func), std::forward<Args>(args)...));
+            auto future = task.get_future();
+            {
+                std::scoped_lock lock(m_Mtx);
+                m_WorkQueue.emplace_back([movedTask = move(task)]() mutable noexcept { movedTask(); });
+            }
+            m_Cv.notify_one();
+            return future;
         }
 
       private:
-        std::deque<std::move_only_function<void() noexcept>> m_WorkQueue;
-        std::vector<std::jthread> m_Workers;
         std::condition_variable m_Cv{};
         std::mutex m_Mtx{};
+        std::deque<std::move_only_function<void() noexcept>> m_WorkQueue;
         bool m_bShutdownRequested{false};
+        std::vector<std::jthread> m_Workers;
+
+        void Init() noexcept
+        {
+            std::ranges::for_each(m_Workers,
+                                  [&](auto& worker)
+                                  {
+                                      worker = std::jthread(
+                                          [&]()
+                                          {
+                                              while (true)
+                                              {
+                                                  std::move_only_function<void() noexcept> func;
+                                                  {
+                                                      std::unique_lock lock(m_Mtx);
+                                                      m_Cv.wait(lock,
+                                                                [&]() noexcept { return m_bShutdownRequested || !m_WorkQueue.empty(); });
+                                                      if (m_bShutdownRequested && m_WorkQueue.empty()) return;
+
+                                                      func = std::move(m_WorkQueue.front());
+                                                      m_WorkQueue.pop_front();
+                                                  }
+                                                  func();
+                                              }
+                                          });
+                                  });
+        }
     };
 
     using PoolID = std::uint64_t;

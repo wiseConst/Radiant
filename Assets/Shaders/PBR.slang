@@ -7,6 +7,7 @@ struct FragmentStageInput
     float4 Color;
     float2 UV;
     float3 WorldPos;
+    float3 Normal;
     float3x3 TBN;
 };
 
@@ -32,7 +33,7 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 {
     VertexStageOutput output;
 
-    const float4 worldPos = mul(u_PC.ModelMatrix, float4(u_PC.VtxPositions[vertexID].Position, 1.0));
+    const float4 worldPos = mul(u_PC.ModelMatrix, float4(u_PC.VtxPositions[vertexID].Position, 1.0f));
     output.FSInput.Color = u_PC.VtxAttributes[vertexID].Color;
     output.FSInput.UV = u_PC.VtxAttributes[vertexID].UV;
     output.FSInput.WorldPos = worldPos.xyz;
@@ -43,6 +44,7 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
     float3 T = normalize(mul(normalMatrix, u_PC.VtxAttributes[vertexID].Tangent.xyz));
     T = normalize(T - dot(T, N) * N);
     const float3 B = u_PC.VtxAttributes[vertexID].Tangent.w * cross(N, T);
+    output.FSInput.Normal = N;
     output.FSInput.TBN = float3x3(T, B, N);
 
     return output;
@@ -88,7 +90,7 @@ float3 EvaluateFresnel(const float HdotV, const float3 F0)
 
 float3 EvaluateNormalMap(const float3x3 TBN, const float2 uv, const Shaders::GLTFMaterial* materialData)
 {
-    const float3 N = normalize((sRGBToLinear(Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv)).xyz * 2.0f - 1.0f) * materialData->NormalScale);
+    const float3 N = normalize((Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale);
     return mul(TBN, N);
 }
 
@@ -113,23 +115,35 @@ float4 sRGBToLinear(const float4 sRGB)
     return float4(lerp(higher, lower, cutoff), sRGB.a);
 }
 
+// Attenuation for different light types:
+// Point: attenuation = max( min( 1.0 - ( current_distance / range )^4, 1 ), 0 ) / current_distance^2
+// Spot: These two values can be calculated on the CPU and passed into the shader
+//      float lightAngleScale = 1.0f / max(0.001f, cos(innerConeAngle) - cos(outerConeAngle));
+//      float lightAngleOffset = -cos(outerConeAngle) * lightAngleScale;
+// Then, in the shader:
+//      float cd = dot(spotlightDir, normalizedLightVector);
+//      float angularAttenuation = saturate(cd * lightAngleScale + lightAngleOffset);
+//      angularAttenuation *= angularAttenuation;
+
 // NOTE: By default all textures in glTF are in sRGB color space, so we convert all textures firstly in linear RGB color space and then apply in the end gamma correction.
 [shader("fragment")]
 float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput) : SV_Target
 {
     float3 irradiance = float3(0.f);
     const float intensity = 1.1f;
-    const float3 radiance = float3(0.1f, 0.1f, 0.8f) * intensity;
+    const float3 radiance = float3(0.7f, 0.4f, 0.1f) * intensity;
     const float3 lightDir = float3(0.0f, 0.8f, 0.5f); // Vector from origin to sun
 
     const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
-    const float2 metallicRoughness = sRGBToLinear(Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV)).bg * float2(materialData->PbrData.MetallicFactor, materialData->PbrData.RoughnessFactor);
     const float4 albedo = /*fsInput.Color **/ materialData->PbrData.BaseColorFactor * sRGBToLinear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
+    if (albedo.a < materialData->AlphaCutoff) discard;
+
+    const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(materialData->PbrData.MetallicFactor, materialData->PbrData.RoughnessFactor);
     const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
     const float3 emissive = materialData->EmissiveFactor * sRGBToLinear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-    const float3 ambient = float3(0.03f) * albedo.rgb * sRGBToLinear(Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV)).r * materialData->OcclusionStrength;
+    const float3 ambient = float3(0.03f) * albedo.rgb * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * materialData->OcclusionStrength;
 
-    const float3 N = EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData);
+    const float3 N = materialData->NormalTextureID != 0 ? EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData) : fsInput.Normal;
     const float3 L = normalize(lightDir);
     const float3 V = normalize(u_PC.CameraData->Position - fsInput.WorldPos);
     const float3 H = normalize(V + L);

@@ -12,7 +12,7 @@ template <> struct ankerl::unordered_dense::hash<vk::SamplerCreateInfo>
 {
     using is_avalanching = void;
 
-    [[nodiscard]] auto operator()(const vk::SamplerCreateInfo& x) const noexcept -> uint64_t
+    [[nodiscard]] auto operator()(const vk::SamplerCreateInfo& x) const noexcept -> std::uint64_t
     {
         return detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter) +
                                     static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
@@ -52,12 +52,15 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto& GetPresentQueue() const noexcept { return m_PresentQueue; }
         NODISCARD FORCEINLINE const auto& GetGPUProperties() const noexcept { return m_GPUProperties; }
 
-        template <typename TObject> void SetDebugName(const std::string& name, const TObject& object) const noexcept
+        template <typename TObject> constexpr void SetDebugName(const std::string& name, const TObject& object) const noexcept
         {
+#if RDNT_DEBUG
+            std::scoped_lock lock(m_Mtx);
             m_Device->setDebugUtilsObjectNameEXT(vk::DebugUtilsObjectNameInfoEXT()
                                                      .setPObjectName(name.data())
                                                      .setObjectType(object.objectType)
                                                      .setObjectHandle(std::uint64_t(TObject::NativeType(object))));
+#endif
         }
 
         operator const vk::Device&() const noexcept
@@ -68,16 +71,19 @@ namespace Radiant
 
         FORCEINLINE void PushObjectToDelete(std::move_only_function<void() noexcept>&& func) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<std::move_only_function<void() noexcept>>(func));
         }
 
         FORCEINLINE void PushObjectToDelete(vk::UniquePipeline&& pipeline) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<vk::UniquePipeline>(pipeline));
         }
 
         FORCEINLINE void PushObjectToDelete(vk::Buffer&& buffer, VmaAllocation&& allocation) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             m_DeletionQueuesPerFrame[m_CurrentFrameNumber].EmplaceBack(std::forward<vk::Buffer>(buffer),
                                                                        std::forward<VmaAllocation>(allocation));
         }
@@ -94,6 +100,7 @@ namespace Radiant
 
         NODISCARD const vk::Sampler& GetSampler(const vk::SamplerCreateInfo& samplerCI) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             if (!m_SamplerMap.contains(samplerCI)) m_SamplerMap[samplerCI] = m_Device->createSamplerUnique(samplerCI);
             return *m_SamplerMap[samplerCI];
         }
@@ -120,6 +127,7 @@ namespace Radiant
         FORCEINLINE const auto GetMSAASamples() const noexcept { return m_MSAASamples; }
 
       private:
+        mutable std::mutex m_Mtx{};
         vk::UniqueDevice m_Device{};
         vk::PhysicalDevice m_PhysicalDevice{};
         vk::PhysicalDeviceProperties m_GPUProperties{};

@@ -48,13 +48,11 @@ namespace Radiant
                         [](const char* functionName, void* vulkanInstance)
                         {
                             return GfxContext::Get().GetInstance().getDispatch().vkGetInstanceProcAddr(
-                                *(reinterpret_cast<VkInstance*>(vulkanInstance)), functionName);
+                                *(reinterpret_cast<vk::Instance*>(vulkanInstance)), functionName);
                         },
                         (void*)&(*m_GfxContext->GetInstance())),
                     "Failed to load functions into ImGui!");
-
-        const auto& mainWindow = Application::Get().GetMainWindow();
-        ImGui_ImplGlfw_InitForVulkan(mainWindow->Get(), true);
+        ImGui_ImplGlfw_InitForVulkan(Application::Get().GetMainWindow()->Get(), true);
 
         const auto imageFormat             = m_GfxContext->GetSwapchainImageFormat();
         ImGui_ImplVulkan_InitInfo initInfo = {
@@ -76,7 +74,8 @@ namespace Radiant
         };
         ImGui_ImplVulkan_Init(&initInfo);
 
-        // Execute a GPU command to upload ImGui font textures.
+        const std::string defaultFontPath = "../Assets/Fonts/Signika_Negative/static/SignikaNegative-SemiBold.ttf";
+        io.FontDefault                    = io.Fonts->AddFontFromFileTTF(defaultFontPath.data(), 18.0f);
         RDNT_ASSERT(ImGui_ImplVulkan_CreateFontsTexture(), "Failed to create fonts texture for ImGui!");
     }
 
@@ -92,11 +91,6 @@ namespace Radiant
     void ImGuiRenderer::RenderFrame(const vk::Extent2D& viewportExtent, Unique<RenderGraph>& renderGraph, const std::string& backbufferName,
                                     std::function<void()>&& uiFunc) noexcept
     {
-        // Start the Dear ImGui frame
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-
         renderGraph->AddPass(
             "ImGuiPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
@@ -109,13 +103,15 @@ namespace Radiant
             [&, uiFunc](RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
                 auto& backBufferSrcTexture = scheduler.GetTexture(m_ImGuiPassData.BackbufferTexture);
+                RDNT_ASSERT(!GfxTexture::IsDepthFormat(backBufferSrcTexture->GetDescription().Format),
+                            "Backbuffer image for swapchain blit should have color format!");
 
-                const auto backbufferImageSubresourceRange = vk::ImageSubresourceRange()
-                                                                 .setBaseArrayLayer(0)
-                                                                 .setLayerCount(1)
-                                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                                 .setBaseMipLevel(0)
-                                                                 .setLevelCount(1);
+                constexpr auto backbufferImageSubresourceRange = vk::ImageSubresourceRange()
+                                                                     .setBaseArrayLayer(0)
+                                                                     .setLayerCount(1)
+                                                                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                                                     .setBaseMipLevel(0)
+                                                                     .setLevelCount(1);
                 cmd.pipelineBarrier2(
                     vk::DependencyInfo().setImageMemoryBarriers(vk::ImageMemoryBarrier2()
                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
@@ -125,33 +121,37 @@ namespace Radiant
                                                                     .setOldLayout(vk::ImageLayout::eUndefined)
                                                                     .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
                                                                     .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                                                    .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
+                                                                    .setDstStageMask(vk::PipelineStageFlagBits2::eBlit)));
 
-                const auto backbufferImageSubresourceLayers = vk::ImageSubresourceLayers()
-                                                                  .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                                  .setBaseArrayLayer(0)
-                                                                  .setLayerCount(1)
-                                                                  .setMipLevel(0)
-                                                                  .setLayerCount(1);
-                cmd.blitImage(
-                    *backBufferSrcTexture, vk::ImageLayout::eTransferSrcOptimal, m_GfxContext->GetCurrentSwapchainImage(),
-                    vk::ImageLayout::eTransferDstOptimal,
-                    vk::ImageBlit()
-                        .setSrcSubresource(backbufferImageSubresourceLayers)
-                        .setDstSubresource(backbufferImageSubresourceLayers)
-                        .setSrcOffsets(
-                            {vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.x),
-                                                          static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.y), 1)})
-                        .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(viewportExtent.width),
-                                                                     static_cast<int32_t>(viewportExtent.height), 1)}),
-                    vk::Filter::eLinear);
+                constexpr auto backbufferImageSubresourceLayers = vk::ImageSubresourceLayers()
+                                                                      .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                                                      .setBaseArrayLayer(0)
+                                                                      .setLayerCount(1)
+                                                                      .setMipLevel(0)
+                                                                      .setLayerCount(1);
+                cmd.blitImage2(
+                    vk::BlitImageInfo2()
+                        .setFilter(vk::Filter::eLinear)
+                        .setSrcImage(*backBufferSrcTexture)
+                        .setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
+                        .setDstImage(m_GfxContext->GetCurrentSwapchainImage())
+                        .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
+                        .setRegions(
+                            vk::ImageBlit2()
+                                .setSrcSubresource(backbufferImageSubresourceLayers)
+                                .setDstSubresource(backbufferImageSubresourceLayers)
+                                .setSrcOffsets({vk::Offset3D(),
+                                                vk::Offset3D(static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.x),
+                                                             static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.y), 1)})
+                                .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(viewportExtent.width),
+                                                                             static_cast<int32_t>(viewportExtent.height), 1)})));
 
                 cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()
                         .setImage(m_GfxContext->GetCurrentSwapchainImage())
                         .setSubresourceRange(backbufferImageSubresourceRange)
                         .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                        .setSrcStageMask(vk::PipelineStageFlagBits2::eBlit)
                         .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
                         .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
                         .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
@@ -167,24 +167,29 @@ namespace Radiant
                                        .setLayerCount(1)
                                        .setRenderArea(vk::Rect2D().setExtent(viewportExtent)));
 
+                // Start the Dear ImGui frame
+                ImGui_ImplVulkan_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
+
                 uiFunc();
 
-                // Rendering
-                ImGui::EndFrame();
                 ImGui::Render();
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
                 cmd.endRendering();
-                cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(m_GfxContext->GetCurrentSwapchainImage())
-                        .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
-                        .setSubresourceRange(backbufferImageSubresourceRange)
-                        .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                        .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
-                        .setDstAccessMask(vk::AccessFlagBits2::eNone)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)));
+                cmd.pipelineBarrier2(vk::DependencyInfo()
+                                         .setDependencyFlags(vk::DependencyFlagBits::eByRegion)
+                                         .setImageMemoryBarriers(vk::ImageMemoryBarrier2()
+                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
+                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
+                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite |
+                                                                                       vk::AccessFlagBits2::eColorAttachmentRead)
+                                                                     .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                                                                     .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                                                                     .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+                                                                     .setDstAccessMask(vk::AccessFlagBits2::eNone)
+                                                                     .setDstStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)));
             });
     }
 

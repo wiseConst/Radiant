@@ -17,7 +17,10 @@ namespace Radiant
 
       private:
         Unique<GfxPipeline> m_PBRPipeline{nullptr};
-        Unique<GfxBuffer> m_CameraSSBO{nullptr};
+        Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
+        Unique<GfxPipeline> m_SSSPipeline{nullptr};
+        Unique<GfxPipeline> m_SSAOPipeline{nullptr};
+        RenderGraphStatistics m_RenderGraphStats = {};
     };
 
 }  // namespace Radiant

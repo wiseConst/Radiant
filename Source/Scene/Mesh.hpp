@@ -16,7 +16,7 @@ namespace Radiant
         std::uint32_t IndexCount{0};
         std::uint32_t FirstIndex{0};
         Shared<GfxBuffer> MaterialBuffer{nullptr};
-        vk::PrimitiveTopology PrimitiveTopology{vk::PrimitiveTopology::eTriangleList};
+        vk::PrimitiveTopology PrimitiveTopology{vk::PrimitiveTopology::ePointList};
         vk::CullModeFlags CullMode{vk::CullModeFlagBits::eBack};
         EAlphaMode AlphaMode{EAlphaMode::ALPHA_MODE_OPAQUE};
     };
@@ -99,7 +99,8 @@ namespace Radiant
         std::vector<Shared<RenderNode>> RootNodes;
         UnorderedMap<std::string, Shared<RenderNode>> RenderNodes;
         UnorderedMap<std::string, Shared<GfxTexture>> TextureMap;
-        UnorderedMap<std::string, Shaders::GLTFMaterial> MaterialMap; // NOTE: Maybe remove since it's stored in material buffers and never changed.
+        UnorderedMap<std::string, Shaders::GLTFMaterial>
+            MaterialMap;  // NOTE: Maybe remove since it's stored in material buffers and never changed.
         UnorderedMap<std::string, Shared<MeshAsset>> MeshAssetMap;
         std::vector<Shared<GfxBuffer>> VertexPositionBuffers;
         std::vector<Shared<GfxBuffer>> VertexAttributeBuffers;

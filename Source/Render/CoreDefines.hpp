@@ -19,17 +19,16 @@ namespace Radiant
     using ExtraBufferFlags = std::uint32_t;
     enum EExtraBufferFlag : ExtraBufferFlags
     {
-        EXTRA_BUFFER_FLAG_ADDRESSABLE  = BIT(0),
-        EXTRA_BUFFER_FLAG_DEVICE_LOCAL = BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE,  // Default memory - host, but this
-                                                                                  // flag implies device memory
-                                                                                  // and buffer device address(GPU virtual address)
-        EXTRA_BUFFER_FLAG_MAPPED = BIT(2),
+        EXTRA_BUFFER_FLAG_ADDRESSABLE = BIT(0),
+        EXTRA_BUFFER_FLAG_DEVICE_LOCAL =
+            BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE,  // NOTE: Implies both device memory and buffer device address(GPU virtual address)
+        EXTRA_BUFFER_FLAG_MAPPED = BIT(2),           // Implies host memory
     };
 
     using ResourceStateFlags = std::uint32_t;
     enum EResourceState : ResourceStateFlags
     {
-        RESOURCE_STATE_UNDEFINED                          = 0,  // Init
+        RESOURCE_STATE_UNDEFINED                          = 0,  // Init state
         RESOURCE_STATE_VERTEX_BUFFER                      = BIT(0),
         RESOURCE_STATE_INDEX_BUFFER                       = BIT(1),
         RESOURCE_STATE_UNIFORM_BUFFER                     = BIT(2),
@@ -37,7 +36,7 @@ namespace Radiant
         RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE           = BIT(4),
         RESOURCE_STATE_COMPUTE_SHADER_RESOURCE            = BIT(5),
         RESOURCE_STATE_STORAGE_BUFFER                     = BIT(6),
-        RESOURCE_STATE_RENDER_TARGET                      = BIT(7),  // Color attachments
+        RESOURCE_STATE_RENDER_TARGET                      = BIT(7),
         RESOURCE_STATE_DEPTH_READ                         = BIT(8),
         RESOURCE_STATE_DEPTH_WRITE                        = BIT(9),
         RESOURCE_STATE_INDIRECT_ARGUMENT                  = BIT(11),
@@ -47,14 +46,15 @@ namespace Radiant
         RESOURCE_STATE_RESOLVE_DESTINATION                = BIT(15),
         RESOURCE_STATE_ACCELERATION_STRUCTURE             = BIT(16),
         RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT = BIT(17),
+        RESOURCE_STATE_READ                               = BIT(18),
+        RESOURCE_STATE_WRITE                              = BIT(19),
     };
 
     enum class EAlphaMode : std::uint8_t
     {
         ALPHA_MODE_OPAQUE,  // The alpha value is ignored, and the rendered output is fully opaque.
         ALPHA_MODE_MASK,   // The rendered output is either fully opaque or fully transparent depending on the alpha value and the specified
-                           // alphaCutoff value; the exact appearance of the edges MAY be subject to implementation-specific techniques such
-                           // as “Alpha-to-Coverage”.
+                           // alphaCutoff value;
         ALPHA_MODE_BLEND,  // The alpha value is used to composite the source and destination areas. The rendered output is combined with
                            // the background using the normal painting operation (i.e. the Porter and Duff over operator).
     };

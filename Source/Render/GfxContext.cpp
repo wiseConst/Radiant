@@ -3,12 +3,10 @@
 
 #include <Render/GfxTexture.hpp>
 #include <Render/GfxBuffer.hpp>
+#include <Render/GfxPipeline.hpp>
 
 #include <Core/Application.hpp>
 #include <Core/Window/GLFWWindow.hpp>
-
-#include <Render/GfxBuffer.hpp>
-#include <Render/GfxTexture.hpp>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -28,9 +26,81 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 namespace Radiant
 {
 
+    void GfxPipelineStateCache::Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept
+    {
+        RDNT_ASSERT(pipeline, "GfxPipelineStateCache: Pipeline is invalid!");
+        RDNT_ASSERT(!std::holds_alternative<std::monostate>(pipeline->GetDescription().PipelineOptions),
+                    "GfxPipelineStateCache: Pipeline holds invalid options!");
+        if (LastBoundPipeline == pipeline) return;
+
+        vk::PipelineBindPoint pipelineBindPoint = {};
+        if (std::holds_alternative<GfxGraphicsPipelineOptions>(pipeline->GetDescription().PipelineOptions))
+            pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+        else if (std::holds_alternative<GfxComputePipelineOptions>(pipeline->GetDescription().PipelineOptions))
+            pipelineBindPoint = vk::PipelineBindPoint::eCompute;
+        else if (std::holds_alternative<GfxRayTracingPipelineOptions>(pipeline->GetDescription().PipelineOptions))
+            pipelineBindPoint = vk::PipelineBindPoint::eRayTracingKHR;
+        else
+            RDNT_ASSERT(false, "This shouldn't happen!");
+
+        cmd.bindPipeline(pipelineBindPoint, *pipeline);
+        LastBoundPipeline = pipeline;
+    }
+
+    void GfxPipelineStateCache::Bind(const vk::CommandBuffer& cmd, GfxBuffer* indexBuffer, const vk::DeviceSize offset,
+                                     const vk::IndexType indexType) noexcept
+    {
+        RDNT_ASSERT(indexBuffer, "GfxPipelineStateCache: IndexBuffer is invalid!");
+        if (LastBoundIndexBuffer == indexBuffer) return;
+
+        cmd.bindIndexBuffer(*indexBuffer, offset, indexType);
+        LastBoundIndexBuffer = indexBuffer;
+    }
+
+    void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::CullModeFlags cullMode) noexcept
+    {
+        if (CullMode.has_value() && CullMode == cullMode) return;
+
+        cmd.setCullMode(cullMode);
+        CullMode = cullMode;
+    }
+
+    void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::PrimitiveTopology primitiveTopology) noexcept
+    {
+        if (PrimitiveTopology.has_value() && PrimitiveTopology == primitiveTopology) return;
+
+        cmd.setPrimitiveTopology(primitiveTopology);
+        PrimitiveTopology = primitiveTopology;
+    }
+
+    void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::FrontFace frontFace) noexcept
+    {
+        if (FrontFace.has_value() && FrontFace == frontFace) return;
+
+        cmd.setFrontFace(frontFace);
+        FrontFace = frontFace;
+    }
+
+    void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept
+    {
+        if (PolygonMode.has_value() && PolygonMode == polygonMode) return;
+
+        cmd.setPolygonModeEXT(polygonMode);
+        PolygonMode = polygonMode;
+    }
+
+    void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept
+    {
+        if (DepthCompareOp.has_value() && DepthCompareOp == compareOp) return;
+
+        cmd.setDepthCompareOp(compareOp);
+        DepthCompareOp = compareOp;
+    }
+
     bool GfxContext::BeginFrame() noexcept
     {
         m_Device->PollDeletionQueues();
+        m_PipelineStateCache = {};
 
         if (m_bSwapchainNeedsResize)
         {

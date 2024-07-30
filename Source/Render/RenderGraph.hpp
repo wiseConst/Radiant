@@ -14,15 +14,20 @@
 
 namespace Radiant
 {
+    // https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
+    // https://levelup.gitconnected.com/gpu-memory-aliasing-45933681a15e
+    // https://levelup.gitconnected.com/organizing-gpu-work-with-directed-acyclic-graphs-f3fd5f2c2af3
+    // https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/resource_aliasing.html
+
     class RenderGraph;
     class RenderGraphPass;
     class RenderGraphResourcePool;
     class RenderGraphResourceScheduler;
 
     // TODO:
-    struct MipSet final
-    {
-    };
+    //   struct MipSet final
+    //{
+    // };
 
     // RenderGraphPass
     enum class ERenderGraphPassType : std::uint8_t
@@ -50,12 +55,19 @@ namespace Radiant
     using RGBufferHandle  = RenderGraphBufferHandle;
 
     // RenderGraph
-    using RGResourceID = std::uint64_t;
+    using RGResourceID = std::uint64_t;  // Unique resource ID
+
+    struct RenderGraphStatistics
+    {
+        float BuildTime{0.0f};  // CPU build time(milliseconds).
+        std::uint32_t BarrierBatchCount{0};
+        std::uint32_t BarrierCount{0};
+    };
 
     class RenderGraph final : private Uncopyable, private Unmovable
     {
       public:
-        explicit RenderGraph(Unique<GfxContext>& gfxContext, const std::string_view& name,
+        explicit RenderGraph(const Unique<GfxContext>& gfxContext, const std::string_view& name,
                              Unique<RenderGraphResourcePool>& resourcePool) noexcept
             : m_GfxContext(gfxContext), m_Name(name), m_ResourcePool(resourcePool)
         {
@@ -63,8 +75,6 @@ namespace Radiant
         }
         ~RenderGraph() noexcept = default;
 
-        // TODO: Utilize dependency levels
-        // Passes inside a dependency level can be executed in parallel (hope so)
         class DependencyLevel final
         {
           public:
@@ -86,41 +96,46 @@ namespace Radiant
         void AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
                      RenderGraphExecuteFunc&& executeFunc) noexcept;
 
-        // Compiles the graph and executes it best way.
+        void Build() noexcept;
         void Execute() noexcept;
 
-        RGResourceID CreateResourceID(const std::string& name) noexcept
+        NODISCARD RGResourceID CreateResourceID(const std::string& name) noexcept
         {
             RDNT_ASSERT(!name.empty(), "Resource name is empty!");
             RDNT_ASSERT(!m_ResourceNameToID.contains(name), "Resource[{}] already exists!", name);
 
-            return m_ResourceNameToID[name] = m_ResourceIDs.Emplace(m_ResourceIDs.GetSize());
+            m_ResourceNameToID[name] = m_ResourceIDPool.Emplace(m_ResourceIDPool.GetSize());
+            return m_ResourceNameToID[name];
         }
 
-        NODISCARD RGResourceID GetResourceID(const std::string& name) noexcept
+        NODISCARD auto GetResourceID(const std::string& name) const noexcept
         {
             RDNT_ASSERT(!name.empty(), "Resource name is empty!");
             RDNT_ASSERT(m_ResourceNameToID.contains(name), "Resource[{}] doesn't exist!", name);
 
-            return m_ResourceNameToID[name];
+            return m_ResourceNameToID.at(name);
         }
 
         NODISCARD Unique<GfxTexture>& GetTexture(const RGResourceID& resourceID) noexcept;
+        NODISCARD Unique<GfxBuffer>& GetBuffer(const RGResourceID& resourceID) noexcept;
+
+        auto GetStatistics() const noexcept { return m_Stats; }
 
       private:
-        Unique<GfxContext>& m_GfxContext;
+        const Unique<GfxContext>& m_GfxContext;
         std::string m_Name{s_DEFAULT_STRING};
         Unique<RenderGraphResourcePool>& m_ResourcePool;
+        RenderGraphStatistics m_Stats = {};
 
         std::vector<Unique<RenderGraphPass>> m_Passes;
-        std::vector<std::uint32_t> m_SortedPassID;
+        std::vector<std::uint32_t> m_TopologicallySortedPassesID;
         std::vector<std::vector<std::uint32_t>> m_AdjacencyLists;
 
         std::vector<DependencyLevel> m_DependencyLevels;
 
-        Pool<RGResourceID> m_ResourceIDs;
+        Pool<RGResourceID> m_ResourceIDPool;
         UnorderedMap<std::string, RGResourceID> m_ResourceNameToID;
-        UnorderedMap<std::string, std::string> m_AliasMap;  // For RMW things.
+        // TODO:  UnorderedMap<std::string, std::string> m_AliasMap;  // For RMW things.
 
         UnorderedMap<RGResourceID, RGTextureHandle> m_ResourceIDToTextureHandle;
         UnorderedMap<RGResourceID, RGBufferHandle> m_ResourceIDToBufferHandle;
@@ -131,20 +146,12 @@ namespace Radiant
         friend DependencyLevel;
         friend RenderGraphResourceScheduler;
         constexpr RenderGraph() noexcept = delete;
-        void Compile() noexcept;
         void BuildAdjacencyLists() noexcept;
         void TopologicalSort() noexcept;
         void BuildDependencyLevels() noexcept;
 
         void GraphvizDump() const noexcept;
     };
-
-    // struct RenderGraphResourceTimeline
-    //{
-    //     std::uint32_t BeginPass;
-    //     std::uint32_t EndPass;
-    // };
-    // std::vector<std::pair<std::uint32_t, std::uint32_t>>;
 
     template <typename TResource> class RenderGraphResource final : private Uncopyable, private Unmovable
     {
@@ -160,26 +167,25 @@ namespace Radiant
         Unique<TResource> m_Handle{nullptr};
         ResourceStateFlags m_CurrentState{EResourceState::RESOURCE_STATE_UNDEFINED};
 
-        UnorderedSet<std::uint32_t> m_ReadPasses;
-        UnorderedSet<std::uint32_t> m_WritePasses;
+        constexpr RenderGraphResource() noexcept = delete;
     };
 
     using RenderGraphResourceTexture = RenderGraphResource<GfxTexture>;
     using RenderGraphResourceBuffer  = RenderGraphResource<GfxBuffer>;
 
     // NOTE:
-    // 1) All CPU-side buffers are buffered by default!
+    // 1) All CPU-side buffers are buffered by default, but GPU-side aren't!
     // 2) All textures aren't buffered!
     class RenderGraphResourcePool final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphResourcePool(const Unique<GfxDevice>& device) noexcept : m_Device(device){};
+        RenderGraphResourcePool(const Unique<GfxDevice>& device) noexcept : m_Device(device) {}
         ~RenderGraphResourcePool() noexcept = default;
 
         void Tick() noexcept
         {
-            m_CurrentFrameNumber = (m_CurrentFrameNumber + 1) % s_BufferedFrameCount;
             ++m_GlobalFrameNumber;
+            m_CurrentFrameNumber = m_GlobalFrameNumber % s_BufferedFrameCount;
 
             for (std::uint32_t i{}; i < m_Textures.size();)
             {
@@ -205,7 +211,10 @@ namespace Radiant
                     m_DeviceBuffers.pop_back();
                 }
                 else
+                {
+                    m_DeviceBuffers[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
                     ++i;
+                }
             }
 
             auto& currentHostBuffersVector = m_HostBuffers[m_CurrentFrameNumber];
@@ -219,7 +228,10 @@ namespace Radiant
                     currentHostBuffersVector.pop_back();
                 }
                 else
+                {
+                    currentHostBuffersVector[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
                     ++i;
+                }
             }
         }
 
@@ -232,12 +244,13 @@ namespace Radiant
             return m_Textures[handleID].Handle;
         }
 
-        NODISCARD FORCEINLINE Unique<RenderGraphResourceBuffer>& GetBuffer(const RGBufferHandle& handleID) noexcept
+        NODISCARD Unique<RenderGraphResourceBuffer>& GetBuffer(const RGBufferHandle& handleID) noexcept
         {
-            RDNT_ASSERT(
-                (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) !=
-                    (EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED),
-                "Invalid buffer flags!");
+            RDNT_ASSERT(handleID.BufferFlags == 0 ||
+                            (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL |
+                             EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) !=
+                                (EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED),
+                        "Invalid buffer flags!");
 
             if ((handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
                 EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
@@ -260,24 +273,23 @@ namespace Radiant
         std::uint64_t m_GlobalFrameNumber{0};
         std::uint8_t m_CurrentFrameNumber{0};
 
-        struct PooledTexture
-        {
-            Unique<RenderGraphResourceTexture> Handle;
-            std::uint64_t LastUsedFrameIndex{};
-        };
-
         struct PooledBuffer
         {
-            Unique<RenderGraphResourceBuffer> Handle;
+            Unique<RenderGraphResourceBuffer> Handle{nullptr};
             std::uint64_t LastUsedFrameIndex{};
         };
-
         using GfxBufferVector = std::vector<PooledBuffer>;
 
         std::array<GfxBufferVector, s_BufferedFrameCount> m_HostBuffers;
         GfxBufferVector m_DeviceBuffers;
 
+        struct PooledTexture
+        {
+            Unique<RenderGraphResourceTexture> Handle{nullptr};
+            std::uint64_t LastUsedFrameIndex{};
+        };
         std::vector<PooledTexture> m_Textures;
+
         constexpr RenderGraphResourcePool() noexcept = delete;
     };
 
@@ -289,16 +301,20 @@ namespace Radiant
         void CreateTexture(const std::string& name, const GfxTextureDescription& textureDesc) noexcept;
         NODISCARD Unique<GfxTexture>& GetTexture(const RGResourceID& resourceID) noexcept;
 
-        RGResourceID ReadTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
-        RGResourceID WriteTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
-        RGResourceID WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
-                                       const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
-                                       const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
-                                       const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare) noexcept;
-        RGResourceID WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp, const vk::AttachmentStoreOp storeOp,
-                                       const vk::ClearColorValue& clearValue) noexcept;
+        NODISCARD RGResourceID ReadTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
+        NODISCARD RGResourceID WriteTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
+        NODISCARD RGResourceID WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
+                                                 const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
+                                                 const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
+                                                 const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare) noexcept;
+        NODISCARD RGResourceID WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
+                                                 const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue) noexcept;
 
         void CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept;
+        NODISCARD Unique<GfxBuffer>& GetBuffer(const RGResourceID& resourceID) noexcept;
+
+        NODISCARD RGResourceID ReadBuffer(const std::string& name, const ResourceStateFlags resourceState) noexcept;
+        NODISCARD RGResourceID WriteBuffer(const std::string& name, const ResourceStateFlags resourceState) noexcept;
 
         void SetViewportScissors(const vk::Viewport& viewport, const vk::Rect2D& scissor) noexcept;
 
@@ -316,7 +332,9 @@ namespace Radiant
       public:
         RenderGraphPass(const std::uint32_t passID, const std::string_view& name, const ERenderGraphPassType passType,
                         RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
-            : m_ID(passID), m_Name(name), m_PassType(passType), m_SetupFunc(setupFunc), m_ExecuteFunc(executeFunc){};
+            : m_ID(passID), m_Name(name), m_PassType(passType), m_SetupFunc(setupFunc), m_ExecuteFunc(executeFunc)
+        {
+        }
         ~RenderGraphPass() noexcept = default;
 
         void Setup(RenderGraphResourceScheduler& resourceScheduler) const noexcept
@@ -325,7 +343,7 @@ namespace Radiant
             m_SetupFunc(resourceScheduler);
         }
 
-        void ExecuteFunc(RenderGraphResourceScheduler& resourceScheduler, const vk::CommandBuffer& commandBuffer) const noexcept
+        void Execute(RenderGraphResourceScheduler& resourceScheduler, const vk::CommandBuffer& commandBuffer) const noexcept
         {
             RDNT_ASSERT(m_ExecuteFunc, "ExecuteFunc is invalid!");
 
@@ -342,9 +360,9 @@ namespace Radiant
         }
 
       private:
-        std::uint32_t m_ID{};
+        std::uint32_t m_ID{0};
         ERenderGraphPassType m_PassType{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
-        std::uint32_t m_DependencyLevelIndex{};
+        std::uint32_t m_DependencyLevelIndex{0};
         std::string m_Name{s_DEFAULT_STRING};
 
         RenderGraphSetupFunc m_SetupFunc{};
@@ -358,11 +376,21 @@ namespace Radiant
         std::vector<RGResourceID> m_BufferReads;
         std::vector<RGResourceID> m_BufferWrites;
 
+        // TODO: MSAA
+        // struct TextureResolveInfo
+        // {
+        //    RGResourceID ResolveSrc{};
+        // vk::AttachmentLoadOp ResolveLoadOp{vk::AttachmentLoadOp::eDontCare};
+        // vk::AttachmentStoreOp ResolveStoreOp{vk::AttachmentStoreOp::eDontCare};
+        // vk::ResolveModeFlags ResolveMode{vk::ResolveModeFlagBits::eAverage};
+        // };
+
         struct RenderTargetInfo
         {
             std::optional<vk::ClearColorValue> ClearValue{std::nullopt};
             vk::AttachmentLoadOp LoadOp{vk::AttachmentLoadOp::eDontCare};
             vk::AttachmentStoreOp StoreOp{vk::AttachmentStoreOp::eDontCare};
+            // std::optional<TextureResolveInfo> ResolveInfo{std::nullopt};
         };
 
         struct DepthStencilInfo
@@ -372,6 +400,7 @@ namespace Radiant
             vk::AttachmentStoreOp DepthStoreOp{vk::AttachmentStoreOp::eDontCare};
             vk::AttachmentLoadOp StencilLoadOp{vk::AttachmentLoadOp::eDontCare};
             vk::AttachmentStoreOp StencilStoreOp{vk::AttachmentStoreOp::eDontCare};
+            // std::optional<TextureResolveInfo> ResolveInfo{std::nullopt};
         };
 
         std::vector<RenderTargetInfo> m_RenderTargetInfos;

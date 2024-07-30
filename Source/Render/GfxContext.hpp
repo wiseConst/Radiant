@@ -18,6 +18,41 @@
 
 namespace Radiant
 {
+    // NOTE: Small optimization for CPU usage to issue less VK-API calls.
+    struct GfxPipelineStateCache
+    {
+        class GfxPipeline* LastBoundPipeline{nullptr};
+        class GfxBuffer* LastBoundIndexBuffer{nullptr};
+
+        // NOTE: Other ops will be defined as the usages of them grows.
+        void Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept;
+        void Bind(const vk::CommandBuffer& cmd, GfxBuffer* indexBuffer, const vk::DeviceSize offset = 0,
+                  const vk::IndexType indexType = vk::IndexType::eUint32) noexcept;
+
+        std::optional<vk::CullModeFlags> CullMode{std::nullopt};
+        std::optional<vk::FrontFace> FrontFace{std::nullopt};
+        std::optional<vk::PrimitiveTopology> PrimitiveTopology{std::nullopt};
+        std::optional<vk::PolygonMode> PolygonMode{std::nullopt};
+
+        void Set(const vk::CommandBuffer& cmd, const vk::CullModeFlags cullMode) noexcept;
+        void Set(const vk::CommandBuffer& cmd, const vk::PrimitiveTopology primitiveTopology) noexcept;
+        void Set(const vk::CommandBuffer& cmd, const vk::FrontFace frontFace) noexcept;
+        void Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept;
+
+        std::optional<vk::StencilOp> Back{std::nullopt};
+        std::optional<vk::StencilOp> Front{std::nullopt};
+        bool bStencilTest{false};
+
+        bool bDepthClamp{false};
+        bool bDepthTest{false};
+        bool bDepthWrite{false};
+
+        std::optional<vk::CompareOp> DepthCompareOp{std::nullopt};
+        void Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept;
+
+        glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
+    };
+
     // TODO: Make use of it in multiple queues or subsequent submits.
     class SyncPoint final
     {
@@ -53,6 +88,14 @@ namespace Radiant
         constexpr SyncPoint() noexcept = delete;
     };
 
+    // NOTE: Currently used only for parallel texture loading.
+    struct ImmediateExecuteContext
+    {
+        vk::UniqueCommandPool CommandPool{};
+        vk::CommandBuffer CommandBuffer{};
+        vk::Queue Queue{};
+    };
+
     class GfxTexture;
     class GfxContext final : private Uncopyable, private Unmovable
     {
@@ -79,11 +122,62 @@ namespace Radiant
         }
         NODISCARD FORCEINLINE const auto GetSwapchainImageCount() const noexcept { return m_SwapchainImages.size(); }
 
+        NODISCARD ImmediateExecuteContext
+        CreateImmediateExecuteContext(const ECommandBufferType commandBufferType,
+                                      const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
+        {
+            const auto& logicalDevice = m_Device->GetLogicalDevice();
+            std::scoped_lock lock(m_Mtx);
+
+            ImmediateExecuteContext context = {};
+            switch (commandBufferType)
+            {
+                case ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL:
+                {
+                    context.Queue = m_Device->GetGeneralQueue().Handle;
+                    context.CommandPool =
+                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
+                                                                   .setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex)
+                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+                    break;
+                }
+                case ECommandBufferType::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE:
+                {
+                    context.Queue = m_Device->GetComputeQueue().Handle;
+                    context.CommandPool =
+                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
+                                                                   .setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex)
+                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+
+                    break;
+                }
+                case ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER:
+                {
+                    context.Queue = m_Device->GetTransferQueue().Handle;
+                    context.CommandPool =
+                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
+                                                                   .setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex)
+                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+
+                    break;
+                }
+                default: RDNT_ASSERT(false, "Unknown command buffer type!");
+            }
+
+            context.CommandBuffer = logicalDevice
+                                        ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
+                                                                     .setCommandPool(*context.CommandPool)
+                                                                     .setLevel(commandBufferLevel)
+                                                                     .setCommandBufferCount(1))
+                                        .back();
+            return context;
+        }
+
         NODISCARD std::tuple<vk::UniqueCommandBuffer, vk::Queue> AllocateSingleUseCommandBufferWithQueue(
             const ECommandBufferType commandBufferType,
             const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
-
+            std::scoped_lock lock(m_Mtx);
             switch (commandBufferType)
             {
                 case ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL:
@@ -123,6 +217,8 @@ namespace Radiant
             }
         }
 
+        NODISCARD FORCEINLINE auto& GetPipelineStateCache() noexcept { return m_PipelineStateCache; }
+
         NODISCARD FORCEINLINE static auto& Get() noexcept
         {
             RDNT_ASSERT(s_Instance, "GfxContext instance is invalid!");
@@ -132,6 +228,7 @@ namespace Radiant
         void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<std::uint32_t>& bindlessID,
                                const std::uint32_t binding) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
                             binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
                         "Unknown binding!");
@@ -164,6 +261,7 @@ namespace Radiant
 
         void PopBindlessThing(std::optional<std::uint32_t>& bindlessID, const std::uint32_t binding) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
                             binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
                         "Unknown binding!");
@@ -172,7 +270,10 @@ namespace Radiant
             bindlessID = std::nullopt;
         }
 
+        NODISCARD FORCEINLINE auto& GetMutex() noexcept { return m_Mtx; }
+
       private:
+        mutable std::mutex m_Mtx{};
         static inline GfxContext* s_Instance{nullptr};  // NOTE: Used only for safely pushing objects through device into deletion queue.
         vk::UniqueInstance m_Instance{};
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
@@ -206,6 +307,7 @@ namespace Radiant
         vk::UniqueDescriptorSetLayout m_DescriptorSetLayout{};
         vk::UniquePipelineLayout m_PipelineLayout{};
 
+        // Swapchain things
         std::uint64_t m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
         vk::Extent2D m_SwapchainExtent{};
         vk::Format m_SwapchainImageFormat{};
@@ -216,6 +318,8 @@ namespace Radiant
         std::vector<vk::UniqueImageView> m_SwapchainImageViews;
         std::vector<vk::Image> m_SwapchainImages;
         bool m_bSwapchainNeedsResize{false};
+
+        GfxPipelineStateCache m_PipelineStateCache = {};
 
         void Init() noexcept;
         void CreateInstanceAndDebugUtilsMessenger() noexcept;

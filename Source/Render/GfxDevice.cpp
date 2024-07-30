@@ -13,7 +13,6 @@ namespace Radiant
     {
         std::vector<const char*> requiredDeviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // For rendering into OS-window
-            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,        // Neglect render passes, required by ImGui, core in vk 1.3
             VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME  // To neglect viewport state definition on pipeline creation
         };
 
@@ -321,7 +320,8 @@ namespace Radiant
 
     void GfxDevice::AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept
     {
-        const VmaAllocationCreateInfo allocationCI = {.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
+        const VmaAllocationCreateInfo allocationCI = {/*.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,*/ .usage =
+                                                          VMA_MEMORY_USAGE_GPU_ONLY};
 
         const VkImageCreateInfo& oldVkImageCI = imageCI;
         RDNT_ASSERT(vmaCreateImage(m_Allocator, &oldVkImageCI, &allocationCI, &image, &allocation, nullptr) == VK_SUCCESS,

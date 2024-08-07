@@ -39,13 +39,13 @@ namespace Radiant
     {
         RDNT_ASSERT(GLFWUtils::s_bIsGLFWInit, "GLFW is not init!");
 
-        std::uint32_t glfwRequiredExtensionCount{0};
+        u32 glfwRequiredExtensionCount{0};
         const char** glfwRequiredExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionCount);
 
         RDNT_ASSERT(glfwRequiredExtensionCount > 0 && glfwRequiredExtensions, "GLFW_VK: Failed to retrieve required extensions!");
 
         std::vector<const char*> requiredExtensions;
-        for (std::uint32_t i{}; i < glfwRequiredExtensionCount; ++i)
+        for (u32 i{}; i < glfwRequiredExtensionCount; ++i)
             requiredExtensions.emplace_back(glfwRequiredExtensions[i]);
 
         return requiredExtensions;
@@ -81,9 +81,15 @@ namespace Radiant
         return glfwGetKey(m_Handle, glfwKey) == GLFW_PRESS;
     }
 
+    bool GLFWWindow::IsKeyReleased(const int32_t glfwKey) const noexcept
+    {
+        RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
+        return glfwGetKey(m_Handle, glfwKey) == GLFW_RELEASE;
+    }
+
     glm::vec2 GLFWWindow::GetCursorPos() const noexcept
     {
-        double xPos{0.}, yPos{0.};
+        f64 xPos{0.}, yPos{0.};
         glfwGetCursorPos(m_Handle, &xPos, &yPos);
         return glm::vec2(xPos, yPos);
     }
@@ -104,7 +110,7 @@ namespace Radiant
 
         glfwSetWindowUserPointer(m_Handle, this);
         glfwSetFramebufferSizeCallback(m_Handle,
-                                       [](GLFWwindow* window, std::int32_t width, std::int32_t height)
+                                       [](GLFWwindow* window, i32 width, i32 height)
                                        {
                                            void* data = glfwGetWindowUserPointer(window);
                                            RDNT_ASSERT(data, "glfwGetWindowUserPointer() returned invalid data!");

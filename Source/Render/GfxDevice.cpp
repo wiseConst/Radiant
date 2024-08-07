@@ -70,8 +70,8 @@ namespace Radiant
             {
                 const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
 
-                constexpr std::uint32_t NVidiaVendorID{0x10DE};
-                constexpr std::uint32_t AMDVendorID{0x1002};
+                constexpr u32 NVidiaVendorID{0x10DE};
+                constexpr u32 AMDVendorID{0x1002};
 
                 // [NVIDIA] called without pageable device local memory.
                 // Use pageableDeviceLocalMemory from VK_EXT_pageable_device_local_memory when it is available.
@@ -182,7 +182,7 @@ namespace Radiant
         std::vector<vk::QueueFamilyProperties> qfProperties = m_PhysicalDevice.getQueueFamilyProperties();
         RDNT_ASSERT(!qfProperties.empty(), "Queue Families are empty!");
 
-        for (std::uint32_t i{}; i < qfProperties.size(); ++i)
+        for (u32 i{}; i < qfProperties.size(); ++i)
         {
             const auto queueCount = qfProperties[i].queueCount;
             RDNT_ASSERT(queueCount > 0, "Queue Family[{}] has no queues?!", i);
@@ -233,9 +233,9 @@ namespace Radiant
         RDNT_ASSERT(m_TransferQueue.QueueFamilyIndex.has_value(), "Failed to find Dedicated-Transfer Queue Family Index!");
         RDNT_ASSERT(m_ComputeQueue.QueueFamilyIndex.has_value(), "Failed to find Async-Compute Queue Family Index!");
 
-        constexpr float queuePriority = 1.0f;
+        constexpr f32 queuePriority = 1.0f;
         std::vector<vk::DeviceQueueCreateInfo> queuesCI;
-        for (const std::set<std::uint32_t> uniqueQFIndices{*m_GeneralQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex,
+        for (const std::set<u32> uniqueQFIndices{*m_GeneralQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex,
                                                            *m_TransferQueue.QueueFamilyIndex, *m_ComputeQueue.QueueFamilyIndex};
              const auto qfIndex : uniqueQFIndices)
         {
@@ -288,10 +288,10 @@ namespace Radiant
     void GfxDevice::LoadPipelineCache() noexcept
     {
         auto pipelineCacheCI = vk::PipelineCacheCreateInfo();
-        std::vector<std::uint8_t> pipelineCacheBlob;
+        std::vector<u8> pipelineCacheBlob;
         if (std::filesystem::exists("pso_cache.bin"))
         {
-            pipelineCacheBlob = CoreUtils::LoadData<std::uint8_t>("pso_cache.bin");
+            pipelineCacheBlob = CoreUtils::LoadData<u8>("pso_cache.bin");
 
             // Validate retrieved pipeline cache.
             vk::PipelineCacheHeaderVersionOne pipelineCacheHeader{};
@@ -304,7 +304,7 @@ namespace Radiant
                 bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.deviceID == pipelineCacheHeader.deviceID);
                 bPipelineCacheValid =
                     bPipelineCacheValid && (std::memcmp(m_GPUProperties.pipelineCacheUUID, pipelineCacheHeader.pipelineCacheUUID,
-                                                        VK_UUID_SIZE * sizeof(std::uint8_t)) == 0);
+                                                        VK_UUID_SIZE * sizeof(u8)) == 0);
             }
 
             LOG_INFO("Found pipeline cache {}!", bPipelineCacheValid ? "valid" : "invalid");

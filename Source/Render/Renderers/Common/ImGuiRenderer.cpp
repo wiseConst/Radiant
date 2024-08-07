@@ -35,6 +35,7 @@ namespace Radiant
                                                                     .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
                                                                     .setPoolSizes(poolSizes));
 
+        IMGUI_CHECKVERSION();
         ImGui::CreateContext();
 
         auto& io = ImGui::GetIO();
@@ -44,6 +45,7 @@ namespace Radiant
         io.WantCaptureKeyboard = false;
         io.WantTextInput       = false;
 
+        ImGui::StyleColorsDark();
         RDNT_ASSERT(ImGui_ImplVulkan_LoadFunctions(
                         [](const char* functionName, void* vulkanInstance)
                         {
@@ -62,8 +64,8 @@ namespace Radiant
             .QueueFamily                 = gfxDevice->GetGeneralQueue().QueueFamilyIndex.value(),
             .Queue                       = gfxDevice->GetGeneralQueue().Handle,
             .DescriptorPool              = *m_ImGuiPool,
-            .MinImageCount               = static_cast<std::uint32_t>(m_GfxContext->GetSwapchainImageCount()),
-            .ImageCount                  = static_cast<std::uint32_t>(m_GfxContext->GetSwapchainImageCount()),
+            .MinImageCount               = static_cast<u32>(m_GfxContext->GetSwapchainImageCount()),
+            .ImageCount                  = static_cast<u32>(m_GfxContext->GetSwapchainImageCount()),
             .MSAASamples                 = VK_SAMPLE_COUNT_1_BIT,
             .PipelineCache               = gfxDevice->GetPipelineCache(),
             .UseDynamicRendering         = true,
@@ -91,6 +93,7 @@ namespace Radiant
     void ImGuiRenderer::RenderFrame(const vk::Extent2D& viewportExtent, Unique<RenderGraph>& renderGraph, const std::string& backbufferName,
                                     std::function<void()>&& uiFunc) noexcept
     {
+        // Blit into swapchain + render UI into swapchain.
         renderGraph->AddPass(
             "ImGuiPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
@@ -100,7 +103,7 @@ namespace Radiant
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(viewportExtent.width).setHeight(viewportExtent.height),
                     vk::Rect2D().setExtent(viewportExtent));
             },
-            [&, uiFunc](RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            [&, uiFunc](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
                 auto& backBufferSrcTexture = scheduler.GetTexture(m_ImGuiPassData.BackbufferTexture);
                 RDNT_ASSERT(!GfxTexture::IsDepthFormat(backBufferSrcTexture->GetDescription().Format),

@@ -26,11 +26,11 @@ namespace Radiant
         explicit Renderer() noexcept;
         virtual ~Renderer() noexcept;
 
-        virtual bool BeginFrame() noexcept  = 0;
+        bool BeginFrame() noexcept;
         virtual void RenderFrame() noexcept = 0;
-        virtual void EndFrame() noexcept    = 0;
+        void EndFrame() noexcept;
 
-        void UpdateMainCamera(const float deltaTime) noexcept;
+        void UpdateMainCamera(const f32 deltaTime) noexcept;
 
       protected:
         Unique<GfxContext> m_GfxContext{nullptr};

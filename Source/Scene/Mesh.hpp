@@ -13,8 +13,8 @@ namespace Radiant
         Shared<GfxBuffer> VertexPositionBuffer{nullptr};
         Shared<GfxBuffer> VertexAttributeBuffer{nullptr};
         Shared<GfxBuffer> IndexBuffer{nullptr};
-        std::uint32_t IndexCount{0};
-        std::uint32_t FirstIndex{0};
+        u32 IndexCount{0};
+        u32 FirstIndex{0};
         Shared<GfxBuffer> MaterialBuffer{nullptr};
         vk::PrimitiveTopology PrimitiveTopology{vk::PrimitiveTopology::ePointList};
         vk::CullModeFlags CullMode{vk::CullModeFlagBits::eBack};
@@ -28,10 +28,10 @@ namespace Radiant
 
     struct GeometryData final
     {
-        std::uint32_t StartIndex{};
-        std::uint32_t Count{};
+        u32 StartIndex{};
+        u32 Count{};
         Sphere Bounds{};
-        std::uint32_t MaterialID{};
+        u32 MaterialID{};
         vk::PrimitiveTopology PrimitiveTopology{vk::PrimitiveTopology::eTriangleList};
         vk::CullModeFlags CullMode{vk::CullModeFlagBits::eBack};
         EAlphaMode AlphaMode{EAlphaMode::ALPHA_MODE_OPAQUE};
@@ -41,9 +41,9 @@ namespace Radiant
     {
         std::string Name{s_DEFAULT_STRING};
         std::vector<GeometryData> Surfaces;
-        std::uint32_t IndexBufferID{};
-        std::uint32_t VertexPositionBufferID{};
-        std::uint32_t VertexAttributeBufferID{};
+        u32 IndexBufferID{};
+        u32 VertexPositionBufferID{};
+        u32 VertexAttributeBufferID{};
     };
 
     struct RenderNode final
@@ -95,12 +95,11 @@ namespace Radiant
     struct Mesh final
     {
         Mesh(const Unique<GfxContext>& gfxContext, const std::filesystem::path& meshFilePath) noexcept;
+        ~Mesh() noexcept = default;
 
         std::vector<Shared<RenderNode>> RootNodes;
         UnorderedMap<std::string, Shared<RenderNode>> RenderNodes;
         UnorderedMap<std::string, Shared<GfxTexture>> TextureMap;
-        UnorderedMap<std::string, Shaders::GLTFMaterial>
-            MaterialMap;  // NOTE: Maybe remove since it's stored in material buffers and never changed.
         UnorderedMap<std::string, Shared<MeshAsset>> MeshAssetMap;
         std::vector<Shared<GfxBuffer>> VertexPositionBuffers;
         std::vector<Shared<GfxBuffer>> VertexAttributeBuffers;

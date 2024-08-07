@@ -5,7 +5,7 @@
 struct PushConstantBlock
 {
     float4x4 ModelMatrix;
-    const CameraData *CameraData;
+    const Shaders::CameraData *CameraData;
     const VertexPosition *VtxPositions;
 };
 

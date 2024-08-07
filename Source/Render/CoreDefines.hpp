@@ -7,16 +7,16 @@ namespace Radiant
 {
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr bool s_bForceIGPU                 = true;
-    static constexpr std::uint8_t s_BufferedFrameCount = 2;
+    static constexpr u8 s_BufferedFrameCount = 2;
 
-    enum class ECommandBufferType : std::uint8_t
+    enum class ECommandBufferType : u8
     {
         COMMAND_BUFFER_TYPE_GENERAL            = BIT(0),
         COMMAND_BUFFER_TYPE_ASYNC_COMPUTE      = BIT(1),
         COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER = BIT(2),
     };
 
-    using ExtraBufferFlags = std::uint32_t;
+    using ExtraBufferFlags = u32;
     enum EExtraBufferFlag : ExtraBufferFlags
     {
         EXTRA_BUFFER_FLAG_ADDRESSABLE = BIT(0),
@@ -25,7 +25,7 @@ namespace Radiant
         EXTRA_BUFFER_FLAG_MAPPED = BIT(2),           // Implies host memory
     };
 
-    using ResourceStateFlags = std::uint32_t;
+    using ResourceStateFlags = u32;
     enum EResourceState : ResourceStateFlags
     {
         RESOURCE_STATE_UNDEFINED                          = 0,  // Init state
@@ -50,7 +50,7 @@ namespace Radiant
         RESOURCE_STATE_WRITE                              = BIT(19),
     };
 
-    enum class EAlphaMode : std::uint8_t
+    enum class EAlphaMode : u8
     {
         ALPHA_MODE_OPAQUE,  // The alpha value is ignored, and the rendered output is fully opaque.
         ALPHA_MODE_MASK,   // The rendered output is either fully opaque or fully transparent depending on the alpha value and the specified

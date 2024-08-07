@@ -37,7 +37,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Binaries/Release)
 
 set(CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Source)
 
-file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp")
+file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.cppm" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp")
 set(ALL_FILES ${SRC_FILES})
 
 # Automatically group all sources into folders for MVS.
@@ -52,6 +52,7 @@ endforeach()
 add_executable(${PROJECT_NAME} ${ALL_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CORE_DIR})
 target_precompile_headers(${PROJECT_NAME} PRIVATE ${CORE_DIR}/pch.h)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_SOURCE_DIR}/Assets/Shaders/)
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
     $<$<CONFIG:Debug>:RDNT_DEBUG=1 RDNT_RELEASE=0>

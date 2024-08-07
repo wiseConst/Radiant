@@ -20,12 +20,14 @@ struct VertexStageOutput
 struct PushConstantBlock
 {
     float4x4 ModelMatrix;
-    const CameraData *CameraData;
+    const Shaders::CameraData *CameraData;
     const VertexPosition *VtxPositions;
     const VertexAttribute *VtxAttributes;
     const Shaders::GLTFMaterial *MaterialData;
+    uint32_t SSAOTextureID;
+    uint32_t SSSTextureID;
+    float3 SunDirection;
 };
-
 [vk::push_constant] PushConstantBlock u_PC;
 
 [shader("vertex")]
@@ -40,10 +42,10 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
     output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, worldPos);
 
     const float3x3 normalMatrix = transpose(float3x3(u_PC.ModelMatrix));
-    const float3 N = normalize(mul(normalMatrix, u_PC.VtxAttributes[vertexID].Normal));
-    float3 T = normalize(mul(normalMatrix, u_PC.VtxAttributes[vertexID].Tangent.xyz));
+    const float3 N = normalize( mul(normalMatrix,  Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
+    float3 T = normalize( mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
     T = normalize(T - dot(T, N) * N);
-    const float3 B = u_PC.VtxAttributes[vertexID].Tangent.w * cross(N, T);
+    const float3 B = float(u_PC.VtxAttributes[vertexID].TSign) * cross(N, T);
     output.FSInput.Normal = N;
     output.FSInput.TBN = float3x3(T, B, N);
 
@@ -51,14 +53,6 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 }
 
 #define PI 3.14159265
-
-//struct PBRComputeData
-//{
-//    float NdotL;
-//    float NdotH;
-//    float NdotV;
-//    float HdotV;
-//};
 
 // Microfacet distribution aligned to halfway vector
 float EvaluateDistributionGGX(const float NdotH, const float roughness)
@@ -96,7 +90,7 @@ float3 EvaluateNormalMap(const float3x3 TBN, const float2 uv, const Shaders::GLT
 
 // https://gamedev.stackexchange.com/questions/92015/optimized-linear-to-srgb-glsl
 // Converts a color from linear light gamma to sRGB gamma
-float4 LinearTosRGB(const float4 linearRGB)
+float4 Linear2sRGB(const float4 linearRGB)
 {
     bool3 cutoff = linearRGB.rgb < float3(0.0031308);
     float3 higher = float3(1.055) * pow(linearRGB.rgb, float3(1.0 / 2.4)) - float3(0.055);
@@ -106,7 +100,7 @@ float4 LinearTosRGB(const float4 linearRGB)
 }
 
 // Converts a color from sRGB gamma to linear light gamma
-float4 sRGBToLinear(const float4 sRGB)
+float4 sRGB2Linear(const float4 sRGB)
 {
     const bool3 cutoff = sRGB.rgb < float3(0.04045);
     const float3 higher = pow((sRGB.rgb + float3(0.055)) / float3(1.055), float3(2.4));
@@ -125,23 +119,35 @@ float4 sRGBToLinear(const float4 sRGB)
 //      float angularAttenuation = saturate(cd * lightAngleScale + lightAngleOffset);
 //      angularAttenuation *= angularAttenuation;
 
-// NOTE: By default all textures in glTF are in sRGB color space, so we convert all textures firstly in linear RGB color space and then apply in the end gamma correction.
+
 [shader("fragment")]
-float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput) : SV_Target
+float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragCoord : SV_Position) : SV_Target
 {
-    float3 irradiance = float3(0.f);
+    const float2 globalUV = fragCoord.xy * u_PC.CameraData->InvFullResolution;
+    // return float4(globalUV.x, globalUV.y, 0.0, 1.0f);        // Vulkan coordinate system(Y down)
+    // return float4(globalUV.x, 1.0f - globalUV.y, 0.0, 1.0f); // OGL coordinate system(Y up)
+
+    //const float3 worldPosVS = mul(u_PC.CameraData->ViewMatrix, float4(fsInput.WorldPos, 1.0f)).xyz;
+    //const uint32_t slice = uint32_t(max(log2(-worldPosVS.z) * u_PC.CameraData->ScaleBias.x + u_PC.CameraData->ScaleBias.y, 0.0f));
+    //return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLORS_COUNT];
+    
+   //return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
+   // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
+    float3 irradiance = 0.0f;
     const float intensity = 1.1f;
-    const float3 radiance = float3(0.7f, 0.4f, 0.1f) * intensity;
-    const float3 lightDir = float3(0.0f, 0.8f, 0.5f); // Vector from origin to sun
+    const float3 radiance = float3(0.7f, 0.4f, 0.1f) /** intensity * Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r*/;
+    const float3 lightDir = u_PC.SunDirection; // Vector from origin to sun
 
     const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
-    const float4 albedo = /*fsInput.Color **/ materialData->PbrData.BaseColorFactor * sRGBToLinear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
+    const float4 albedo = /*fsInput.Color **/ Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
     if (albedo.a < materialData->AlphaCutoff) discard;
 
-    const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(materialData->PbrData.MetallicFactor, materialData->PbrData.RoughnessFactor);
+    const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
     const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
-    const float3 emissive = materialData->EmissiveFactor * sRGBToLinear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-    const float3 ambient = float3(0.03f) * albedo.rgb * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * materialData->OcclusionStrength;
+    const float3 emissive = materialData->EmissiveFactor * sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
+
+    const float3 ao = Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+    const float3 ambient = float3(0.03f) * albedo.rgb * ao;
 
     const float3 N = materialData->NormalTextureID != 0 ? EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData) : fsInput.Normal;
     const float3 L = normalize(lightDir);
@@ -164,6 +170,6 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput) : SV_Target
 
     // Reinhard tone map(HDR->LDR) + gamma correction
     irradiance.rgb = irradiance.rgb / (irradiance.rgb + float3(1.0f));
-    irradiance.rgb = pow(irradiance.rgb, float3(1.0f / 2.2f));
+    irradiance.rgb = Linear2sRGB(float4(irradiance.rgb, 1.0f)).xyz;// pow(irradiance.rgb, float3(1.0f / 2.2f));
     return float4(irradiance, albedo.a);
 }

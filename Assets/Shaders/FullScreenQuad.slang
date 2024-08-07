@@ -1,22 +1,16 @@
-// FullScreenQuad.slang
+// FullScreenQuadUtilShader.slang
 
-#include "../../Assets/Shaders/FullScreenQuadUtilShader.slang"
-#include "../../Source/ShaderDefines.h"
-
-struct FSInput
+struct VSOutput
 {
     float2 uv;
+    float4 sv_position : SV_Position;
 };
 
-struct TestPushConstantBlock
+[shader("vertex")]
+VSOutput vertexMain(const uint32_t vertexID : SV_VertexID)
 {
-    uint32_t ImageIndex;
-};
-
-[vk::push_constant] TestPushConstantBlock u_PC;
-
-[shader("fragment")]
-float4 fragmentMain(FSInput fsInput: FSInput) : SV_Target
-{
-    return Shaders::Texture_Heap[u_PC.ImageIndex].SampleLevel(fsInput.uv, 0).rgba;
+    VSOutput output;
+    output.uv = float2((vertexID << 1) & 2, vertexID & 2);
+    output.sv_position = float4(output.uv * 2.0f - 1.0f, 0.0f, 1.0f);
+    return output;
 }

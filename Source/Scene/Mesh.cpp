@@ -1,15 +1,56 @@
 #include <pch.h>
 #include "Mesh.hpp"
 
+#include <Render/GfxTexture.hpp>
+#include <Core/Application.hpp>
+
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/types.hpp>
 #include <fastgltf/core.hpp>
 
-#include <Render/GfxTexture.hpp>
-#include <Core/Application.hpp>
+#include <meshoptimizer.h>
 
 namespace Radiant
 {
+
+    namespace MeshoptimizerUtils
+    {
+
+        template <typename T>
+        static constexpr void RemapVertexStream(const u64 uniqueVertexCount, std::vector<T>& vertexStream,
+                                                std::vector<u32>& indices) noexcept
+        {
+            std::vector<T> newVertexStream(uniqueVertexCount);
+            meshopt_remapVertexBuffer(newVertexStream.data(), vertexStream.data(), vertexStream.size(), sizeof(T), indices.data());
+            vertexStream = std::move(newVertexStream);
+        }
+
+        static void OptimizeMesh(std::vector<u32>& indices, std::vector<VertexPosition>& vertexPositions,
+                                 std::vector<VertexAttribute>& vertexAttributes) noexcept
+        {
+            RDNT_ASSERT(vertexPositions.size() == vertexAttributes.size(),
+                        "VertexPositions size should be equal to VertexAttributes size!");
+            RDNT_ASSERT(!indices.empty() || !vertexPositions.empty() || !vertexAttributes.empty(), "Input params are empty!");
+
+            const std::vector<meshopt_Stream> streams = {
+                {vertexPositions.data(), sizeof(vertexPositions[0]), sizeof(vertexPositions[0])},
+                {vertexAttributes.data(), sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0])},
+            };
+
+            // #1 REINDEXING BUFFERS TO GET RID OF REDUNDANT VERTICES.
+            std::vector<u32> remap(indices.size());
+            const u64 uniqueVertexCount = meshopt_generateVertexRemapMulti(remap.data(), indices.data(), indices.size(),
+                                                                           vertexPositions.size(), streams.data(), streams.size());
+            meshopt_remapIndexBuffer(indices.data(), indices.data(), remap.size(), remap.data());
+
+            RemapVertexStream(uniqueVertexCount, vertexPositions, remap);
+            RemapVertexStream(uniqueVertexCount, vertexAttributes, remap);
+
+            // #2 VERTEX CACHE OPTIMIZATION (REORDER TRIANGLES TO MAXIMIZE THE LOCALITY OF REUSED VERTEX REFERENCES IN VERTEX SHADERS)
+            meshopt_optimizeVertexCache(indices.data(), indices.data(), indices.size(), vertexPositions.size());
+        }
+
+    }  // namespace MeshoptimizerUtils
 
     namespace FastGltfUtils
     {
@@ -144,6 +185,7 @@ namespace Radiant
                                                                                            vk::ImageUsageFlagBits::eTransferDst},
                                                                                .SamplerCreateInfo{samplerCI}});
                             textureMap[textureName] = loadedTexture;
+                            gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
                         const auto imageSize = static_cast<std::size_t>(width * height * channels);
@@ -171,7 +213,7 @@ namespace Radiant
                                 .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
                                 .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
                                 .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                                .setDstStageMask(vk::PipelineStageFlagBits2::eCopy)));
+                                .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
 
                         executionContext.CommandBuffer.copyBufferToImage(
                             *stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
@@ -263,8 +305,8 @@ namespace Radiant
             if (n.z < -0.99998796F)  // Handle the singularity
                 return glm::vec4(0.0F, -1.0F, 0.0F, 1.0F);
 
-            const float a = 1.0F / (1.0F + n.z);
-            const float b = -n.x * n.y * a;
+            const f32 a = 1.0F / (1.0F + n.z);
+            const f32 b = -n.x * n.y * a;
             return glm::vec4(1.0F - n.x * n.x * a, b, -n.x, 1.0F);
         }
 
@@ -288,7 +330,7 @@ namespace Radiant
                     fastgltf::getErrorMessage(asset.error()));
 
         std::vector<vk::SamplerCreateInfo> samplerCIs(asset->samplers.size());
-        for (std::uint32_t i{}; i < samplerCIs.size(); ++i)
+        for (u32 i{}; i < samplerCIs.size(); ++i)
         {
             const auto& currentSamplerInfo = asset->samplers[i];
             samplerCIs[i] =
@@ -320,7 +362,7 @@ namespace Radiant
             const auto textureLoadBeginTime = Timer::Now();
             for (std::size_t textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
             {
-                textureFutures.emplace_back(Application::Get().GetThreadPool().Submit(
+                textureFutures.emplace_back(Application::Get().GetThreadPool()->Submit(
                     [&, textureIndex]() noexcept
                     {
                         return FastGltfUtils::LoadTexture(loaderMutex, TextureMap, meshParentPath, gfxContext, asset.get(),
@@ -336,67 +378,69 @@ namespace Radiant
 
             const auto textureLoadEndTime = Timer::Now();
             LOG_INFO("Loaded ({}) textures in [{:.8f}] ms", TextureMap.size(),
-                     std::chrono::duration<float, std::chrono::milliseconds::period>(textureLoadEndTime - textureLoadBeginTime).count());
+                     std::chrono::duration<f32, std::chrono::milliseconds::period>(textureLoadEndTime - textureLoadBeginTime).count());
         }
 
-        MaterialMap.reserve(asset->materials.size());
+        UnorderedMap<std::string, Shaders::GLTFMaterial> materialMap;
+        materialMap.reserve(asset->materials.size());
         for (const auto& fastgltfMaterial : asset->materials)
         {
             RDNT_ASSERT(!fastgltfMaterial.name.empty(), "fastgltf: Material has no name!");
 
-            std::uint32_t albedoTextureID{0};
+            u32 albedoTextureID{0};
             if (fastgltfMaterial.pbrData.baseColorTexture.has_value())
             {
                 albedoTextureID =
                     TextureMap[textureNameLUT[fastgltfMaterial.pbrData.baseColorTexture->textureIndex]]->GetBindlessTextureID();
             }
 
-            std::uint32_t metallicRoughnessTextureID{0};
+            u32 metallicRoughnessTextureID{0};
             if (fastgltfMaterial.pbrData.metallicRoughnessTexture.has_value())
             {
                 metallicRoughnessTextureID =
                     TextureMap[textureNameLUT[fastgltfMaterial.pbrData.metallicRoughnessTexture->textureIndex]]->GetBindlessTextureID();
             }
 
-            std::uint32_t normalTextureID{0};
-            float normalScale{1.0f};
+            u32 normalTextureID{0};
+            f32 normalScale{1.0f};
             if (fastgltfMaterial.normalTexture.has_value())
             {
                 normalTextureID = TextureMap[textureNameLUT[fastgltfMaterial.normalTexture->textureIndex]]->GetBindlessTextureID();
                 normalScale     = fastgltfMaterial.normalTexture->scale;
             }
 
-            std::uint32_t occlusionTextureID{0};
-            float occlusionStrength{1.0f};
+            u32 occlusionTextureID{0};
+            f32 occlusionStrength{1.0f};
             if (fastgltfMaterial.occlusionTexture.has_value())
             {
                 occlusionTextureID = TextureMap[textureNameLUT[fastgltfMaterial.occlusionTexture->textureIndex]]->GetBindlessTextureID();
                 occlusionStrength  = fastgltfMaterial.occlusionTexture->strength;
             }
 
-            std::uint32_t emissiveTextureID{0};
+            u32 emissiveTextureID{0};
             if (fastgltfMaterial.emissiveTexture.has_value())
             {
                 emissiveTextureID = TextureMap[textureNameLUT[fastgltfMaterial.emissiveTexture->textureIndex]]->GetBindlessTextureID();
             }
 
             const std::string materialName{fastgltfMaterial.name};
-            MaterialMap[materialName] = {.PbrData{.BaseColorFactor{(glm::vec4&)fastgltfMaterial.pbrData.baseColorFactor},
-                                                  .MetallicFactor{fastgltfMaterial.pbrData.metallicFactor},
-                                                  .RoughnessFactor{fastgltfMaterial.pbrData.roughnessFactor},
-                                                  .AlbedoTextureID{albedoTextureID},
-                                                  .MetallicRoughnessTextureID{metallicRoughnessTextureID}},
-                                         .NormalTextureID{normalTextureID},
-                                         .NormalScale{normalScale},
-                                         .OcclusionTextureID{occlusionTextureID},
-                                         .OcclusionStrength{occlusionStrength},
-                                         .EmissiveTextureID{emissiveTextureID},
-                                         .EmissiveFactor{(glm::vec3&)fastgltfMaterial.emissiveFactor * fastgltfMaterial.emissiveStrength},
-                                         .AlphaCutoff{fastgltfMaterial.alphaCutoff}};
+            materialMap[materialName] = {
+                .PbrData{.BaseColorFactor{Shaders::PackUnorm4x8((glm::vec4&)fastgltfMaterial.pbrData.baseColorFactor)},
+                         .MetallicFactor{Shaders::PackUnorm2x8(fastgltfMaterial.pbrData.metallicFactor)},
+                         .RoughnessFactor{Shaders::PackUnorm2x8(fastgltfMaterial.pbrData.roughnessFactor)},
+                         .AlbedoTextureID{albedoTextureID},
+                         .MetallicRoughnessTextureID{metallicRoughnessTextureID}},
+                .NormalTextureID{normalTextureID},
+                .NormalScale{normalScale},
+                .OcclusionTextureID{occlusionTextureID},
+                .OcclusionStrength{Shaders::PackUnorm2x8(occlusionStrength)},
+                .EmissiveTextureID{emissiveTextureID},
+                .EmissiveFactor{(glm::vec3&)fastgltfMaterial.emissiveFactor * fastgltfMaterial.emissiveStrength},
+                .AlphaCutoff{fastgltfMaterial.alphaCutoff}};
         }
 
-        // Use the same vectors for all meshes so that the memory doesnt reallocate as often.
-        std::vector<std::uint32_t> indices;
+        // Use the same vectors for all meshes so that the memory doesn't reallocate as often.
+        std::vector<u32> indices;
         std::vector<VertexPosition> vertexPositions;
         std::vector<VertexAttribute> vertexAttributes;
         LOG_INFO("Loading scene: {}", meshFilePath.string());
@@ -427,8 +471,8 @@ namespace Radiant
                             "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
 
                 MeshAssetMap[meshName]->Surfaces.emplace_back(
-                    GeometryData{.StartIndex{static_cast<std::uint32_t>(indices.size())},
-                                 .Count{static_cast<std::uint32_t>(asset->accessors[*primitve.indicesAccessor].count)},
+                    GeometryData{.StartIndex{static_cast<u32>(indices.size())},
+                                 .Count{static_cast<u32>(asset->accessors[*primitve.indicesAccessor].count)},
                                  .MaterialID{0},
                                  .PrimitiveTopology{FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitve.type)}});
 
@@ -446,8 +490,8 @@ namespace Radiant
                     const auto& indicesAccessor = asset->accessors[*primitve.indicesAccessor];
                     indices.reserve(indices.size() + indicesAccessor.count);
 
-                    fastgltf::iterateAccessor<std::uint32_t>(asset.get(), indicesAccessor,
-                                                             [&](std::uint32_t idx) { indices.emplace_back(initialVertexIndex + idx); });
+                    fastgltf::iterateAccessor<u32>(asset.get(), indicesAccessor,
+                                                   [&](u32 idx) { indices.emplace_back(initialVertexIndex + idx); });
                 }
 
                 // Load vertex positions.
@@ -470,17 +514,19 @@ namespace Radiant
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
                                                                       [&](const glm::vec4& vertexColor, const std::size_t index) {
-                                                                          vertexAttributes[initialVertexIndex + index].Color = vertexColor;
+                                                                          vertexAttributes[initialVertexIndex + index].Color =
+                                                                              Shaders::PackUnorm4x8(vertexColor);
                                                                       });
                     }
 
                     // 2. Normals
                     if (const auto* normalsAttribute = primitve.findAttribute("NORMAL"); normalsAttribute != primitve.attributes.end())
                     {
-
                         fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), asset->accessors[normalsAttribute->accessorIndex],
-                                                                      [&](const glm::vec3& n, const std::size_t index)
-                                                                      { vertexAttributes[initialVertexIndex + index].Normal = n; });
+                                                                      [&](const glm::vec3& n, const std::size_t index) {
+                                                                          vertexAttributes[initialVertexIndex + index].Normal =
+                                                                              glm::packHalf(Shaders::EncodeOct(n));
+                                                                      });
                     }
 
                     // 3. Tangents
@@ -488,18 +534,26 @@ namespace Radiant
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[tangentAttribute->accessorIndex],
                                                                       [&](const glm::vec4& t, const std::size_t index)
-                                                                      { vertexAttributes[initialVertexIndex + index].Tangent = t; });
+                                                                      {
+                                                                          vertexAttributes[initialVertexIndex + index].TSign = t.w;
+                                                                          vertexAttributes[initialVertexIndex + index].Tangent =
+                                                                              glm::packHalf(Shaders::EncodeOct(t));
+                                                                      });
                     }
 
                     // 4. UV
                     if (const auto* uvAttribute = primitve.findAttribute("TEXCOORD_0"); uvAttribute != primitve.attributes.end())
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec2>(asset.get(), asset->accessors[uvAttribute->accessorIndex],
-                                                                      [&](const glm::vec2& uv, const std::size_t index)
-                                                                      { vertexAttributes[initialVertexIndex + index].UV = uv; });
+                                                                      [&](const glm::vec2& uv, const std::size_t index) {
+                                                                          vertexAttributes[initialVertexIndex + index].UV =
+                                                                              glm::packHalf(uv);
+                                                                      });
                     }
                 }
             }
+
+            MeshoptimizerUtils::OptimizeMesh(indices, vertexPositions, vertexAttributes);
 
             MeshAssetMap[meshName]->IndexBufferID           = IndexBuffers.size();
             MeshAssetMap[meshName]->VertexPositionBufferID  = VertexPositionBuffers.size();
@@ -602,7 +656,7 @@ namespace Radiant
         }
 
         // Setup transform hierarchy.
-        for (std::uint32_t i{}; i < asset->nodes.size(); ++i)
+        for (u32 i{}; i < asset->nodes.size(); ++i)
         {
             const auto& node = asset->nodes[i];
             auto& renderNode = nodesToConfigureLater[i];
@@ -625,7 +679,7 @@ namespace Radiant
 
         // TODO: Store materials in VRAM?
         // Load material buffers.
-        for (const auto& [_, gltfMaterial] : MaterialMap)
+        for (const auto& [_, gltfMaterial] : materialMap)
         {
             MaterialBuffers.emplace_back(MakeShared<GfxBuffer>(
                 gfxContext->GetDevice(), GfxBufferDescription{.Capacity    = sizeof(Shaders::GLTFMaterial),

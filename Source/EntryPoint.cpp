@@ -1,12 +1,9 @@
 #include <Core/Application.hpp>
 
-int32_t main(uint32_t argc, char** argv) noexcept
+Radiant::i32 main(Radiant::u32 argc, char** argv) noexcept
 {
-    using namespace Radiant;
-
-    const ApplicationDescription appDesc = {.Name = "Radiant", .CmdArgs{.Argc = argc, .Argv = argv}, .FPSLimit = 0};
-
-    auto app = Application::Create(appDesc);
+    auto app = Radiant::Application::Create(
+        Radiant::ApplicationDescription{.Name = "Radiant", .CmdArgs{.Argc = argc, .Argv = argv}, .FPSLimit = 0});
     app->Run();
 
     return 0;

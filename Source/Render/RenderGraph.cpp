@@ -17,9 +17,9 @@ namespace Radiant
     namespace RenderGraphUtils
     {
 
-        static void DepthFirstSearch(std::uint32_t passID, std::vector<std::uint32_t>& sortedPassID,
-                                     const std::vector<std::vector<std::uint32_t>>& adjacencyLists,
-                                     std::vector<std::uint8_t>& visitedPasses) noexcept
+        static void DepthFirstSearch(u32 passID, std::vector<u32>& sortedPassID,
+                                     const std::vector<std::vector<u32>>& adjacencyLists,
+                                     std::vector<u8>& visitedPasses) noexcept
         {
             RDNT_ASSERT(passID < adjacencyLists.size() && passID < visitedPasses.size(), "Invalid passID!");
 
@@ -389,6 +389,13 @@ namespace Radiant
                     dstAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
                 }
 
+                // NOTE: In case we failed to determine next layout, fallback to eShaderReadOnlyOptimal, cuz first if-statement is weak.
+                if (outNextLayout == vk::ImageLayout::eUndefined)
+                {
+                    outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                    dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
+                }
+
                 dstStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
@@ -476,7 +483,7 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if (oldLayout == outNextLayout && oldLayout == vk::ImageLayout::eUndefined)
+            if (oldLayout == outNextLayout && oldLayout == vk::ImageLayout::eUndefined || outNextLayout == vk::ImageLayout::eUndefined)
                 RDNT_ASSERT(false, "Failed to determine image barrier!");
 
             // NOTE: Read-To-Read don't need any sync.
@@ -543,7 +550,7 @@ namespace Radiant
     void RenderGraph::AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
                               RenderGraphExecuteFunc&& executeFunc) noexcept
     {
-        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<std::uint32_t>(m_Passes.size()), name, passType,
+        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<u32>(m_Passes.size()), name, passType,
                                                                        std::forward<RenderGraphSetupFunc>(setupFunc),
                                                                        std::forward<RenderGraphExecuteFunc>(executeFunc)));
         RenderGraphResourceScheduler scheduler(*this, *pass);
@@ -563,7 +570,7 @@ namespace Radiant
 
         GraphvizDump();
 
-        m_Stats.BuildTime = std::chrono::duration<float, std::chrono::milliseconds::period>(Timer::Now() - buildBeginTime).count();
+        m_Stats.BuildTime = std::chrono::duration<f32, std::chrono::milliseconds::period>(Timer::Now() - buildBeginTime).count();
     }
 
     void RenderGraph::BuildAdjacencyLists() noexcept
@@ -606,7 +613,7 @@ namespace Radiant
 
     void RenderGraph::TopologicalSort() noexcept
     {
-        std::vector<std::uint8_t> visitedPasses(m_Passes.size(), 0);
+        std::vector<u8> visitedPasses(m_Passes.size(), 0);
 
         m_TopologicallySortedPassesID.reserve(m_Passes.size());
         for (const auto& pass : m_Passes)
@@ -620,8 +627,8 @@ namespace Radiant
 
     void RenderGraph::BuildDependencyLevels() noexcept
     {
-        std::vector<std::uint32_t> longestPassDistances(m_TopologicallySortedPassesID.size(), 0);
-        std::uint32_t dependencyLevelCount{1};
+        std::vector<u32> longestPassDistances(m_TopologicallySortedPassesID.size(), 0);
+        u32 dependencyLevelCount{1};
 
         // 1. Perform longest distance(from root node) search for each node.
         for (const auto passID : m_TopologicallySortedPassesID)
@@ -642,7 +649,7 @@ namespace Radiant
         // Iterate through unordered nodes because adjacency lists contain indices to
         // initial unordered list of nodes and longest distances also correspond to them.
         m_DependencyLevels.resize(dependencyLevelCount, *this);
-        for (std::uint32_t passIndex{0}; passIndex < m_Passes.size(); ++passIndex)
+        for (u32 passIndex{0}; passIndex < m_Passes.size(); ++passIndex)
         {
             const auto levelIndex        = longestPassDistances[passIndex];
             auto& dependencyLevel        = m_DependencyLevels[levelIndex];
@@ -657,12 +664,25 @@ namespace Radiant
     {
         RDNT_ASSERT(!m_TopologicallySortedPassesID.empty(), "RenderGraph isn't built!");
 
+#if RESOURCE_ALIASING_TODO
+        RenderGraphResourceAliaser resourceAliaser{};
+        resourceAliaser.CalculateEffectiveLifetimes(m_TopologicallySortedPassesID, m_ResourcesUsedByPassesID);
+
+        std::vector<std::pair<RGResourceID, vk::MemoryRequirements>> resourceSizes;
+        vk::DeviceSize memoryUsage{0};
+#endif
+
         for (const auto& [textureName, textureDesc] : m_TextureCreates)
         {
             const auto resourceID                   = GetResourceID(textureName);
             m_ResourceIDToTextureHandle[resourceID] = m_ResourcePool->CreateTexture(textureDesc);
             const vk::Image& image                  = *m_ResourcePool->GetTexture(m_ResourceIDToTextureHandle[resourceID])->Get();
             m_GfxContext->GetDevice()->SetDebugName(textureName, image);
+
+#if RESOURCE_ALIASING_TODO
+            resourceSizes.emplace_back(resourceID, m_GfxContext->GetDevice()->GetLogicalDevice()->getImageMemoryRequirements(image));
+            memoryUsage += resourceSizes.back().second.size;
+#endif
         }
         m_TextureCreates.clear();
 
@@ -672,11 +692,21 @@ namespace Radiant
             m_ResourceIDToBufferHandle[resourceID] = m_ResourcePool->CreateBuffer(bufferDesc);
             const vk::Buffer& buffer               = *m_ResourcePool->GetBuffer(m_ResourceIDToBufferHandle[resourceID])->Get();
             m_GfxContext->GetDevice()->SetDebugName(bufferName, buffer);
+
+#if RESOURCE_ALIASING_TODO
+            resourceSizes.emplace_back(resourceID, m_GfxContext->GetDevice()->GetLogicalDevice()->getBufferMemoryRequirements(buffer));
+            memoryUsage += resourceSizes.back().second.size;
+#endif
         }
         m_BufferCreates.clear();
+#if RESOURCE_ALIASING_TODO
+        resourceSizes.shrink_to_fit();
+        LOG_INFO("Overall render graph memory usage: {:.4f} MB.", memoryUsage / 1024.0f / 1024.0f);
+        std::ranges::sort(resourceSizes.begin(), resourceSizes.end(),
+                          [](const auto& lhs, const auto& rhs) { return lhs.second.size > rhs.second.size; });
+#endif
 
         const auto& frameData = m_GfxContext->GetCurrentFrameData();
-
         frameData.GeneralCommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
         frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_GfxContext->GetBindlessPipelineLayout(), 0,
@@ -690,6 +720,20 @@ namespace Radiant
         }
 
         frameData.GeneralCommandBuffer.end();
+
+        // NOTE: In future I might upscale(compute) or load into swapchain image or render into so here's optimal flags.
+        const vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                                                        vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader |
+                                                        vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                                                        vk::PipelineStageFlagBits::eLateFragmentTests;
+
+        const auto& presentQueue = m_GfxContext->GetDevice()->GetPresentQueue().Handle;
+        presentQueue.submit(vk::SubmitInfo()
+                                .setCommandBuffers(frameData.GeneralCommandBuffer)
+                                .setSignalSemaphores(*frameData.RenderFinishedSemaphore)
+                                .setWaitSemaphores(*frameData.ImageAvailableSemaphore)
+                                .setWaitDstStageMask(waitDstStageMask),
+                            *frameData.RenderFinishedFence);
     }
 
     void RenderGraph::DependencyLevel::Execute(const vk::CommandBuffer& cmd) noexcept
@@ -713,7 +757,7 @@ namespace Radiant
             auto stencilAttachmentInfo = vk::RenderingAttachmentInfo();
             auto depthAttachmentInfo   = vk::RenderingAttachmentInfo();
             std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
-            std::uint32_t layerCount{1};
+            u32 layerCount{1};
 
             if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
                 RDNT_ASSERT(currentPass->m_Viewport.has_value(), "Viewport is invalid!");
@@ -890,17 +934,13 @@ namespace Radiant
         m_Pass.m_ResourceIDToResourceState[resourceID] = EResourceState::RESOURCE_STATE_UNDEFINED;
     }
 
-    NODISCARD Unique<GfxBuffer>& RenderGraphResourceScheduler::GetBuffer(const RGResourceID& resourceID) noexcept
-    {
-        return m_RenderGraph.GetBuffer(resourceID);
-    }
-
     NODISCARD RGResourceID RenderGraphResourceScheduler::ReadBuffer(const std::string& name,
                                                                     const ResourceStateFlags resourceState) noexcept
     {
         const auto resourceID = m_RenderGraph.GetResourceID(name);
         m_Pass.m_BufferReads.emplace_back(resourceID);
         m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_READ;
+        m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
@@ -910,6 +950,7 @@ namespace Radiant
         const auto resourceID = m_RenderGraph.GetResourceID(name);
         m_Pass.m_BufferWrites.emplace_back(resourceID);
         m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_WRITE;
+        m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
@@ -946,6 +987,7 @@ namespace Radiant
         const auto resourceID = m_RenderGraph.GetResourceID(name);
         m_Pass.m_TextureReads.emplace_back(resourceID);
         m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_READ;
+        m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
@@ -956,7 +998,7 @@ namespace Radiant
         m_Pass.m_TextureWrites.emplace_back(resourceID);
         m_Pass.m_ResourceIDToResourceState[resourceID] |=
             resourceState | EResourceState::RESOURCE_STATE_WRITE | EResourceState::RESOURCE_STATE_READ;
-
+        m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
@@ -965,11 +1007,6 @@ namespace Radiant
         const auto resourceID                          = m_RenderGraph.CreateResourceID(name);
         m_RenderGraph.m_TextureCreates[name]           = textureDesc;
         m_Pass.m_ResourceIDToResourceState[resourceID] = EResourceState::RESOURCE_STATE_UNDEFINED;
-    }
-
-    NODISCARD Unique<GfxTexture>& RenderGraphResourceScheduler::GetTexture(const RGResourceID& resourceID) noexcept
-    {
-        return m_RenderGraph.GetTexture(resourceID);
     }
 
     void RenderGraphResourceScheduler::SetViewportScissors(const vk::Viewport& viewport, const vk::Rect2D& scissor) noexcept

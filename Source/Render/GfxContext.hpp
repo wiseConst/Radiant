@@ -57,7 +57,7 @@ namespace Radiant
     class SyncPoint final
     {
       public:
-        SyncPoint(const Unique<GfxDevice>& gfxDevice, const vk::Semaphore& timelineSemaphore, const std::uint64_t& timelineValue,
+        SyncPoint(const Unique<GfxDevice>& gfxDevice, const vk::Semaphore& timelineSemaphore, const u64& timelineValue,
                   const vk::PipelineStageFlags2& pipelineStages) noexcept
             : m_GfxDevice(gfxDevice), m_TimelimeSemaphore(timelineSemaphore), m_TimelineValue(timelineValue),
               m_PipelineStages(pipelineStages)
@@ -71,7 +71,7 @@ namespace Radiant
                                                                             .setSemaphores(m_TimelimeSemaphore)
                                                                             .setValues(m_TimelineValue)
                                                                             .setFlags(vk::SemaphoreWaitFlagBits::eAny),
-                                                                        std::numeric_limits<std::uint64_t>::max()) == vk::Result::eSuccess,
+                                                                        std::numeric_limits<u64>::max()) == vk::Result::eSuccess,
                         "Failed to wait on timeline semaphore!");
         }
 
@@ -82,7 +82,7 @@ namespace Radiant
       private:
         const Unique<GfxDevice>& m_GfxDevice;
         vk::Semaphore m_TimelimeSemaphore{};
-        std::uint64_t m_TimelineValue{0};
+        u64 m_TimelineValue{0};
         vk::PipelineStageFlags2 m_PipelineStages{vk::PipelineStageFlagBits2::eNone};
 
         constexpr SyncPoint() noexcept = delete;
@@ -225,8 +225,8 @@ namespace Radiant
             return *s_Instance;
         }
 
-        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<std::uint32_t>& bindlessID,
-                               const std::uint32_t binding) noexcept
+        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID,
+                               const u32 binding) noexcept
         {
             std::scoped_lock lock(m_Mtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
@@ -237,7 +237,7 @@ namespace Radiant
             if (binding != Shaders::s_BINDLESS_SAMPLER_BINDING) RDNT_ASSERT(imageInfo.imageView, "ImageView is invalid!");
             if (binding != Shaders::s_BINDLESS_IMAGE_BINDING) RDNT_ASSERT(imageInfo.sampler, "Sampler is invalid!");
 
-            bindlessID = static_cast<std::uint32_t>(m_BindlessThingsIDs[binding].Emplace(m_BindlessThingsIDs[binding].GetSize()));
+            bindlessID = static_cast<u32>(m_BindlessThingsIDs[binding].Emplace(m_BindlessThingsIDs[binding].GetSize()));
 
             const auto descriptorType = (binding == Shaders::s_BINDLESS_IMAGE_BINDING) ? vk::DescriptorType::eStorageImage
                                                                                        : ((binding == Shaders::s_BINDLESS_SAMPLER_BINDING)
@@ -245,7 +245,7 @@ namespace Radiant
                                                                                               : vk::DescriptorType::eCombinedImageSampler);
 
             std::array<vk::WriteDescriptorSet, s_BufferedFrameCount> writes{};
-            for (std::uint8_t frame{}; frame < s_BufferedFrameCount; ++frame)
+            for (u8 frame{}; frame < s_BufferedFrameCount; ++frame)
             {
                 writes[frame] = vk::WriteDescriptorSet()
                                     .setDescriptorCount(1)
@@ -259,7 +259,7 @@ namespace Radiant
             m_Device->GetLogicalDevice()->updateDescriptorSets(writes, {});
         }
 
-        void PopBindlessThing(std::optional<std::uint32_t>& bindlessID, const std::uint32_t binding) noexcept
+        void PopBindlessThing(std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
             std::scoped_lock lock(m_Mtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
@@ -280,7 +280,7 @@ namespace Radiant
 
         // NOTE: Destroy pools only after deferred deletion queues are finished!
         // Bindless resources pt. 3
-        std::array<Pool<std::uint32_t>, 3> m_BindlessThingsIDs{};
+        std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
         Unique<GfxDevice> m_Device{};
         Shared<GfxTexture> m_DefaultWhiteTexture{nullptr};
@@ -308,13 +308,13 @@ namespace Radiant
         vk::UniquePipelineLayout m_PipelineLayout{};
 
         // Swapchain things
-        std::uint64_t m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
+        u64 m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
         vk::Extent2D m_SwapchainExtent{};
         vk::Format m_SwapchainImageFormat{};
         vk::UniqueSurfaceKHR m_Surface{};
         vk::UniqueSwapchainKHR m_Swapchain{};
-        std::uint32_t m_CurrentFrameIndex{0};
-        std::uint32_t m_CurrentImageIndex{0};
+        u32 m_CurrentFrameIndex{0};
+        u32 m_CurrentImageIndex{0};
         std::vector<vk::UniqueImageView> m_SwapchainImageViews;
         std::vector<vk::Image> m_SwapchainImages;
         bool m_bSwapchainNeedsResize{false};

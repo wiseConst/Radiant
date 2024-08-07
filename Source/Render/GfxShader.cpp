@@ -79,15 +79,42 @@ namespace Radiant
 
         // Next we create a compilation session to generate SPIRV code from Slang source.
         const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
-                                              .profile                     = slangGlobalSession->findProfile(/*"glsl_460"*/ "spirv_1_6"),
+                                              .profile                     = slangGlobalSession->findProfile("glsl_460"),
                                               .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
+                                              .floatingPointMode           = SLANG_FLOATING_POINT_MODE_FAST,
                                               .forceGLSLScalarBufferLayout = true};
 
-        const slang::SessionDesc sessionDesc = {
-            .targets                 = &targetDesc,
-            .targetCount             = 1,
-            .defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
-        };
+        std::vector<slang::CompilerOptionEntry> compileOptions = {};
+
+        {
+            auto& compileOption           = compileOptions.emplace_back(slang::CompilerOptionName::GLSLForceScalarLayout);
+            compileOption.value.intValue0 = 1;
+        }
+
+        {
+            auto& compileOption              = compileOptions.emplace_back(slang::CompilerOptionName::DisableWarning);
+            compileOption.value.kind         = slang::CompilerOptionValueKind::String;
+            compileOption.value.stringValue0 = "39001";  // NOTE: vulkan bindings aliasing
+        }
+
+        if constexpr (RDNT_DEBUG)
+        {
+            auto& compileOption           = compileOptions.emplace_back(slang::CompilerOptionName::Optimization);
+            compileOption.value.kind      = slang::CompilerOptionValueKind::Int;
+            compileOption.value.intValue0 = SlangOptimizationLevel::SLANG_OPTIMIZATION_LEVEL_DEFAULT;
+        }
+        else
+        {
+            auto& compileOption           = compileOptions.emplace_back(slang::CompilerOptionName::Optimization);
+            compileOption.value.kind      = slang::CompilerOptionValueKind::Int;
+            compileOption.value.intValue0 = SlangOptimizationLevel::SLANG_OPTIMIZATION_LEVEL_MAXIMAL;
+        }
+
+        const slang::SessionDesc sessionDesc = {.targets                  = &targetDesc,
+                                                .targetCount              = 1,
+                                                .defaultMatrixLayoutMode  = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
+                                                .compilerOptionEntries    = compileOptions.data(),
+                                                .compilerOptionEntryCount = static_cast<u32>(compileOptions.size())};
 
         ComPtr<slang::ISession> localSession;
         slangResult = slangGlobalSession->createSession(sessionDesc, localSession.writeRef());
@@ -122,7 +149,7 @@ namespace Radiant
             RDNT_ASSERT(slangModule, "SLANG: Failed to load slang shader!");
         }
 
-        for (std::uint32_t i{}; i < slangModule->getDefinedEntryPointCount(); ++i)
+        for (u32 i{}; i < slangModule->getDefinedEntryPointCount(); ++i)
         {
             // At this point we have a few different Slang API objects that represent
             // pieces of our code: `module`, `vertexEntryPoint`, and `fragmentEntryPoint`.
@@ -171,7 +198,7 @@ namespace Radiant
             auto composedProgramLayout = composedProgram->getLayout();
             RDNT_ASSERT(composedProgramLayout, "SLANG: ComposedProgramLayout isn't valid!"); 
 
-            for (std::uint32_t i{}; i < composedProgramLayout->getParameterCount(); ++i)
+            for (u32 i{}; i < composedProgramLayout->getParameterCount(); ++i)
             {
                 slang::VariableLayoutReflection* shaderParam = composedProgramLayout->getParameterByIndex(i);
                 RDNT_ASSERT(shaderParam, "SLANG: ShaderParam isn't valid!");
@@ -186,7 +213,7 @@ namespace Radiant
 
                     if (typeLayout->getKind() == slang::TypeReflection::Kind::ConstantBuffer)
                     {
-                        for (std::uint32_t ff{}; ff < typeLayout->getFieldCount(); ff++)
+                        for (u32 ff{}; ff < typeLayout->getFieldCount(); ff++)
                         {
                             slang::VariableLayoutReflection* field = typeLayout->getFieldByIndex(ff);
                             RDNT_ASSERT(field, "SLANG: field isn't valid!");

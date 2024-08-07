@@ -142,25 +142,13 @@ namespace Radiant
         }
 
         m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].GeneralCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].AsyncComputeCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].DedicatedTransferCommandPool);
         return true;
     }
 
     void GfxContext::EndFrame() noexcept
     {
-        // NOTE: In future I might upscale(compute) or load into swapchain image or render into so here's optimal flags.
-        const vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                                                        vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader |
-                                                        vk::PipelineStageFlagBits::eEarlyFragmentTests |
-                                                        vk::PipelineStageFlagBits::eLateFragmentTests;
-
-        const auto& presentQueue = m_Device->GetPresentQueue().Handle;
-        presentQueue.submit(vk::SubmitInfo()
-                                .setCommandBuffers(m_FrameData[m_CurrentFrameIndex].GeneralCommandBuffer)
-                                .setSignalSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore)
-                                .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].ImageAvailableSemaphore)
-                                .setWaitDstStageMask(waitDstStageMask),
-                            *m_FrameData[m_CurrentFrameIndex].RenderFinishedFence);
-
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
         {
@@ -250,7 +238,7 @@ namespace Radiant
             RDNT_ASSERT(bLayerSupported, "Unsupported layer: {} ", eil);
         }
 
-        const std::uint32_t apiVersion = vk::enumerateInstanceVersion();
+        const u32 apiVersion = vk::enumerateInstanceVersion();
         RDNT_ASSERT(apiVersion >= VK_API_VERSION_1_3, "Old vulkan API version! Required at least 1.3!");
         const auto appInfo = vk::ApplicationInfo()
                                  .setPApplicationName(s_ENGINE_NAME)
@@ -359,7 +347,7 @@ namespace Radiant
                 .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
                 .setType(vk::DescriptorType::eCombinedImageSampler),
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
-        for (std::uint8_t i{}; i < s_BufferedFrameCount; ++i)
+        for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
             m_FrameData[i].GeneralCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex));
@@ -452,7 +440,7 @@ namespace Radiant
     void GfxContext::InvalidateSwapchain() noexcept
     {
         // Render finished fences also need to be recreated cuz they're stalling the CPU.
-        for (std::uint8_t i{}; i < s_BufferedFrameCount; ++i)
+        for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
             m_FrameData[i].RenderFinishedFence =
                 m_Device->GetLogicalDevice()->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
@@ -474,8 +462,8 @@ namespace Radiant
 
         // If the surface size is defined, the swap chain size must match
         m_SwapchainExtent = availableSurfaceCapabilities.currentExtent;
-        if (m_SwapchainExtent.width == std::numeric_limits<std::uint32_t>::max() ||
-            m_SwapchainExtent.height == std::numeric_limits<std::uint32_t>::max())
+        if (m_SwapchainExtent.width == std::numeric_limits<u32>::max() ||
+            m_SwapchainExtent.height == std::numeric_limits<u32>::max())
         {
             // If the surface size is undefined, the size is set to the size of the images requested.
             m_SwapchainExtent.width =
@@ -516,7 +504,7 @@ namespace Radiant
                 .setMinImageCount(std::clamp(3u, availableSurfaceCapabilities.minImageCount, availableSurfaceCapabilities.maxImageCount))
                 .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
                 .setImageUsage(requestedImageUsageFlags);
-        const std::array<std::uint32_t, 2> queueFamilyIndices{*m_Device->GetGeneralQueue().QueueFamilyIndex,
+        const std::array<u32, 2> queueFamilyIndices{*m_Device->GetGeneralQueue().QueueFamilyIndex,
                                                               *m_Device->GetPresentQueue().QueueFamilyIndex};
         if (m_Device->GetGeneralQueue().QueueFamilyIndex != m_Device->GetPresentQueue().QueueFamilyIndex)
         {
@@ -542,7 +530,7 @@ namespace Radiant
         m_SwapchainImageViews.reserve(m_SwapchainImages.size());
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, imageFormat, {},
                                                     {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-        for (std::uint32_t i{}; i < m_SwapchainImages.size(); ++i)
+        for (u32 i{}; i < m_SwapchainImages.size(); ++i)
         {
             imageViewCreateInfo.image = m_SwapchainImages[i];
             m_SwapchainImageViews.emplace_back(m_Device->GetLogicalDevice()->createImageViewUnique(imageViewCreateInfo));

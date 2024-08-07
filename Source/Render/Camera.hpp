@@ -5,20 +5,21 @@
 namespace Radiant
 {
 
-    static constexpr float s_MouseSensitivity      = 15.f;
-    static constexpr float s_CameraSpeed           = 0.1f;
-    
+    static constexpr f32 s_MouseSensitivity = 15.f;
+    static constexpr f32 s_CameraSpeed      = 0.1f;
+
     class Camera final : private Uncopyable, private Unmovable
     {
       public:
         Camera() noexcept  = default;
         ~Camera() noexcept = default;
 
-        Camera(const float zoom /* expect FOV */, const float ar, const float zNear = 0.0001f, const float zFar = 1000.0f) noexcept
+        Camera(const f32 zoom /* expect FOV */, const f32 ar, const f32 zNear = 0.0001f, const f32 zFar = 1000.0f) noexcept
             : m_Zoom(zoom), m_AR(ar), m_zNear(zNear), m_zFar(zFar)
         {
             RecalculateProjectionMatrix();
             RecalculateViewMatrix();
+            UpdateShaderData();
         }
 
         NODISCARD FORCEINLINE const auto& GetProjectionMatrix() const noexcept { return m_ProjectionMatrix; }
@@ -26,13 +27,17 @@ namespace Radiant
 
         void OnResized(const glm::uvec2& dimensions) noexcept
         {
-            if (dimensions.y > 0) m_AR = static_cast<float>(dimensions.x) / static_cast<float>(dimensions.y);
+            if (dimensions == glm::uvec2{static_cast<u32>(m_FullResolution.x), static_cast<u32>(m_FullResolution.y)})
+                return;
 
+            if (dimensions.y > 0) m_AR = static_cast<f32>(dimensions.x) / static_cast<f32>(dimensions.y);
+
+            m_FullResolution = dimensions;
             RecalculateProjectionMatrix();
         }
 
         void SetVelocity(const glm::vec3& velocity) noexcept { m_Velocity = velocity; }
-        void Move(const float deltaTime) noexcept
+        void Move(const f32 deltaTime) noexcept
         {
             if (m_Velocity == glm::vec3{0.f}) return;
 
@@ -41,7 +46,7 @@ namespace Radiant
         }
 
         void UpdateMousePos(const glm::vec2& mousePos) noexcept { m_LastMousePos = mousePos; }
-        void Rotate(const float deltaTime, const glm::vec2& mousePos) noexcept
+        void Rotate(const f32 deltaTime, const glm::vec2& mousePos) noexcept
         {
             const auto deltaMousePos = m_LastMousePos - mousePos;
 
@@ -71,41 +76,52 @@ namespace Radiant
 
         NODISCARD FORCEINLINE const auto& GetShaderData() noexcept
         {
-            m_InternalData = {.ProjectionMatrix     = m_ProjectionMatrix,
-                              .ViewMatrix           = m_ViewMatrix,
-                              .ViewProjectionMatrix = GetViewProjectionMatrix(),
-                              .Position             = m_Position,
-                              .zNear                = m_zNear,
-                              .zFar                 = m_zFar};
+            UpdateShaderData();
             return m_InternalData;
         }
 
         NODISCARD FORCEINLINE glm::mat4 GetViewProjectionMatrix() const noexcept { return m_ProjectionMatrix * m_ViewMatrix; }
 
       private:
-        CameraData m_InternalData{};
+        Shaders::CameraData m_InternalData{};
         glm::vec3 m_Velocity{1.0f};
         glm::vec3 m_Position{0.f};
-        float m_Zoom{90.f};
-        float m_AR{1.f};
-        float m_Yaw{0.f};
-        float m_Pitch{0.f};
-        float m_zNear{0.001f};
-        float m_zFar{1000.0f};
+        f32 m_Zoom{90.f};
+        f32 m_AR{1.f};
+        f32 m_Yaw{0.f};
+        f32 m_Pitch{0.f};
+        f32 m_zNear{0.001f};
+        f32 m_zFar{1000.0f};
         glm::vec2 m_LastMousePos{0.0f};
 
+        glm::vec2 m_FullResolution{1.0f, 1.0f};
         glm::mat4 m_ProjectionMatrix{1.f};
         glm::mat4 m_ViewMatrix{1.f};
 
         NODISCARD glm::mat4 GetRotationMatrix() const noexcept
         {
-            // fairly typical FPS style camera. we join the pitch and yaw rotations into
-            // the final rotation matrix
-
             glm::quat pitchRotation = glm::angleAxis(glm::radians(m_Pitch), glm::vec3(1.f, 0.f, 0.f));  // Rotating around X axis
             glm::quat yawRotation   = glm::angleAxis(glm::radians(m_Yaw), glm::vec3(0.f, 1.f, 0.f));    // Rotation around -Y axis
 
             return glm::toMat4(yawRotation) * glm::toMat4(pitchRotation);
+        }
+
+        void UpdateShaderData() noexcept
+        {
+            const auto viewProjMatrix = GetViewProjectionMatrix();
+            m_InternalData            = {.ProjectionMatrix        = m_ProjectionMatrix,
+                                         .ViewMatrix              = m_ViewMatrix,
+                                         .ViewProjectionMatrix    = viewProjMatrix,
+                                         .InvProjectionMatrix     = glm::inverse(m_ProjectionMatrix),
+                                         .InvViewProjectionMatrix = glm::inverse(viewProjMatrix),
+                                         .FullResolution          = m_FullResolution,
+                                         .InvFullResolution       = 1.0f / m_FullResolution,
+                                         .Position                = m_Position,
+                                         .zNearFar                = {m_zNear, m_zFar},
+                                         .DepthUnpackConsts       = {(m_zFar * m_zNear) / (m_zFar - m_zNear), m_zFar / (m_zFar - m_zNear)},
+                                         .ScaleBias = {static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISONS.z) / glm::log2(m_zFar / m_zNear),
+                                                       -static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISONS.z) * glm::log2(m_zNear) /
+                                                           glm::log2(m_zFar / m_zNear)}};
         }
     };
 

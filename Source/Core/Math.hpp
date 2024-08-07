@@ -11,6 +11,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/compatibility.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/packing.hpp>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -20,6 +21,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include <Core/CoreTypes.hpp>
 
 namespace Radiant
 {
@@ -27,11 +29,11 @@ namespace Radiant
     namespace Math
     {
 
-        static constexpr float s_KINDA_SMALL_FLOAT_NUMBER = 10.e-4f;
-        static constexpr float s_SMALL_FLOAT_NUMBER       = 10.e-9f;
+        static constexpr f32 s_KINDA_SMALL_f32_NUMBER = 10.e-4f;
+        static constexpr f32 s_SMALL_f32_NUMBER       = 10.e-9f;
 
-        static constexpr double s_KINDA_SMALL_DOUBLE_NUMBER = 10.e-4;
-        static constexpr double s_SMALL_DOUBLE_NUMBER       = 10.e-9;
+        static constexpr f64 s_KINDA_SMALL_f64_NUMBER = 10.e-4;
+        static constexpr f64 s_SMALL_f64_NUMBER       = 10.e-9;
 
     }  // namespace Math
 

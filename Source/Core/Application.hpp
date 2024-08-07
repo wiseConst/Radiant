@@ -50,11 +50,11 @@ namespace Radiant
         static inline Application* s_Instance{nullptr};
         Unique<GLFWWindow> m_MainWindow{nullptr};
         Unique<Renderer> m_Renderer{nullptr};
-        ThreadPool m_ThreadPool = {};
+        Unique<ThreadPool> m_ThreadPool{nullptr};
 
         ApplicationDescription m_Description{};
         bool m_bIsRunning{false};
-        float m_DeltaTime{0.f};
+        f32 m_DeltaTime{0.f};
 
         constexpr Application() noexcept = delete;
         void Init() noexcept;

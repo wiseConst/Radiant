@@ -59,7 +59,7 @@ namespace Radiant
             m_Device->setDebugUtilsObjectNameEXT(vk::DebugUtilsObjectNameInfoEXT()
                                                      .setPObjectName(name.data())
                                                      .setObjectType(object.objectType)
-                                                     .setObjectHandle(std::uint64_t(TObject::NativeType(object))));
+                                                     .setObjectHandle(u64(TObject::NativeType(object))));
 #endif
         }
 
@@ -112,9 +112,9 @@ namespace Radiant
                                               .setAddressModeU(vk::SamplerAddressMode::eRepeat)
                                               .setAddressModeV(vk::SamplerAddressMode::eRepeat)
                                               .setAddressModeW(vk::SamplerAddressMode::eRepeat)
-                                              .setMagFilter(vk::Filter::eNearest)
-                                              .setMinFilter(vk::Filter::eNearest)
-                                              .setMipmapMode(vk::SamplerMipmapMode::eNearest)
+                                              .setMagFilter(vk::Filter::eLinear)
+                                              .setMinFilter(vk::Filter::eLinear)
+                                              .setMipmapMode(vk::SamplerMipmapMode::eLinear)
                                               .setMinLod(0.0f)
                                               .setMaxLod(1.0f)
                                               .setMaxLod(vk::LodClampNone)
@@ -139,7 +139,7 @@ namespace Radiant
         struct Queue
         {
             vk::Queue Handle{};
-            std::optional<std::uint32_t> QueueFamilyIndex{std::nullopt};
+            std::optional<u32> QueueFamilyIndex{std::nullopt};
         } m_GeneralQueue{}, m_PresentQueue{}, m_TransferQueue{}, m_ComputeQueue{};
 
         VmaAllocator m_Allocator{};
@@ -151,17 +151,17 @@ namespace Radiant
             DeferredDeletionQueue() noexcept  = default;
             ~DeferredDeletionQueue() noexcept = default;
 
-            void EmplaceBack(std::move_only_function<void() noexcept>&& func) noexcept
+            FORCEINLINE void EmplaceBack(std::move_only_function<void() noexcept>&& func) noexcept
             {
                 Deque.emplace_back(std::forward<std::move_only_function<void() noexcept>>(func));
             }
 
-            void EmplaceBack(vk::UniquePipeline&& pipeline) noexcept
+            FORCEINLINE void EmplaceBack(vk::UniquePipeline&& pipeline) noexcept
             {
                 PipelineHandlesDeque.emplace_back(std::forward<vk::UniquePipeline>(pipeline));
             }
 
-            void EmplaceBack(vk::Buffer&& buffer, VmaAllocation&& allocation) noexcept
+            FORCEINLINE void EmplaceBack(vk::Buffer&& buffer, VmaAllocation&& allocation) noexcept
             {
                 BufferHandlesDeque.emplace_back(std::forward<vk::Buffer>(buffer), std::forward<VmaAllocation>(allocation));
             }
@@ -188,28 +188,28 @@ namespace Radiant
             friend class GfxDevice;
         };
 
-        // NOTE: std::uint64_t - global frame number
+        // NOTE: u64 - global frame number
         // TODO: Fix compilation issues using UnorderedMap!
-        std::unordered_map<std::uint64_t, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
-        std::uint64_t m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
+        std::unordered_map<u64, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
+        u64 m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
 
         // NOTE: Only GfxContext can call it!
         friend class GfxContext;
         void PollDeletionQueues(const bool bImmediate = false /* means somewhere before waitIdle was called, so GPU is free! */) noexcept
         {
-            UnorderedSet<std::uint64_t> queuesToRemove;
+            UnorderedSet<u64> queuesToRemove;
 
             for (auto& [frameNumber, deletionQueue] : m_DeletionQueuesPerFrame)
             {
                 // We have to make sure that all buffered frames stopped using our resource!
-                const std::uint64_t framesPast = frameNumber + static_cast<std::uint64_t>(s_BufferedFrameCount);
+                const u64 framesPast = frameNumber + static_cast<u64>(s_BufferedFrameCount);
                 if (!bImmediate && framesPast >= m_CurrentFrameNumber) continue;
 
                 deletionQueue.Flush();
 
                 for (auto it = deletionQueue.BufferHandlesDeque.rbegin(); it != deletionQueue.BufferHandlesDeque.rend(); ++it)
                 {
-                    DeallocateBuffer(*(VkBuffer*)&it->first, *(VmaAllocation*)&it->second);
+                    DeallocateBuffer((VkBuffer&)it->first, (VmaAllocation&)it->second);
                 }
                 deletionQueue.BufferHandlesDeque.clear();
 

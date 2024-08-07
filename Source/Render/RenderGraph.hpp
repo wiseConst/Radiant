@@ -27,10 +27,10 @@ namespace Radiant
     // TODO:
     //   struct MipSet final
     //{
-    // };
+    //};
 
     // RenderGraphPass
-    enum class ERenderGraphPassType : std::uint8_t
+    enum class ERenderGraphPassType : u8
     {
         RENDER_GRAPH_PASS_TYPE_COMPUTE,
         RENDER_GRAPH_PASS_TYPE_TRANSFER,
@@ -42,26 +42,26 @@ namespace Radiant
     };
 
     using RenderGraphSetupFunc   = std::function<void(RenderGraphResourceScheduler&)>;
-    using RenderGraphExecuteFunc = std::function<void(RenderGraphResourceScheduler&, const vk::CommandBuffer&)>;
+    using RenderGraphExecuteFunc = std::function<void(const RenderGraphResourceScheduler&, const vk::CommandBuffer&)>;
 
     // RenderGraphResourcePool
     struct RenderGraphBufferHandle
     {
-        std::uint64_t ID{0};
+        u64 ID{0};
         ExtraBufferFlags BufferFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED};
     };
 
-    using RGTextureHandle = std::uint64_t;
+    using RGTextureHandle = u64;
     using RGBufferHandle  = RenderGraphBufferHandle;
 
     // RenderGraph
-    using RGResourceID = std::uint64_t;  // Unique resource ID
+    using RGResourceID = u64;  // Unique resource ID
 
     struct RenderGraphStatistics
     {
-        float BuildTime{0.0f};  // CPU build time(milliseconds).
-        std::uint32_t BarrierBatchCount{0};
-        std::uint32_t BarrierCount{0};
+        f32 BuildTime{0.0f};  // CPU build time(milliseconds).
+        u32 BarrierBatchCount{0};
+        u32 BarrierCount{0};
     };
 
     class RenderGraph final : private Uncopyable, private Unmovable
@@ -87,7 +87,7 @@ namespace Radiant
 
           private:
             RenderGraph& m_RenderGraph;
-            std::uint32_t m_LevelIndex{0};
+            u32 m_LevelIndex{0};
             std::vector<RenderGraphPass*> m_Passes;
 
             friend RenderGraph;
@@ -128,8 +128,8 @@ namespace Radiant
         RenderGraphStatistics m_Stats = {};
 
         std::vector<Unique<RenderGraphPass>> m_Passes;
-        std::vector<std::uint32_t> m_TopologicallySortedPassesID;
-        std::vector<std::vector<std::uint32_t>> m_AdjacencyLists;
+        std::vector<u32> m_TopologicallySortedPassesID;
+        std::vector<std::vector<u32>> m_AdjacencyLists;
 
         std::vector<DependencyLevel> m_DependencyLevels;
 
@@ -142,6 +142,9 @@ namespace Radiant
 
         UnorderedMap<std::string, GfxTextureDescription> m_TextureCreates;
         UnorderedMap<std::string, GfxBufferDescription> m_BufferCreates;
+
+        UnorderedMap<RGResourceID, UnorderedSet<u32>>
+            m_ResourcesUsedByPassesID{};  // Stores real pass ID, not the one that we get after topsort!
 
         friend DependencyLevel;
         friend RenderGraphResourceScheduler;
@@ -173,6 +176,47 @@ namespace Radiant
     using RenderGraphResourceTexture = RenderGraphResource<GfxTexture>;
     using RenderGraphResourceBuffer  = RenderGraphResource<GfxBuffer>;
 
+#if RESOURCE_ALIASING_TODO
+    class RenderGraphResourceAliaser final : private Uncopyable, private Unmovable
+    {
+      public:
+        RenderGraphResourceAliaser() noexcept  = default;
+        ~RenderGraphResourceAliaser() noexcept = default;
+
+        void CalculateEffectiveLifetimes(const std::vector<u32>& topologicallySortedPassesID,
+                                         const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept
+        {
+            for (const auto& [resourceID, passesIDSet] : resourcesUsedByPassesID)
+            {
+                u32 begin{std::numeric_limits<u32>::max()};
+                u32 end{std::numeric_limits<u32>::min()};
+
+                for (const auto passID : passesIDSet)
+                {
+                    const auto it = std::find(topologicallySortedPassesID.cbegin(), topologicallySortedPassesID.cend(), passID);
+                    RDNT_ASSERT(it != topologicallySortedPassesID.cend(), "Unknown passID!");
+                    const auto topsortPassIndex = static_cast<u32>(std::distance(topologicallySortedPassesID.cbegin(), it));
+                    begin                       = std::min(begin, topsortPassIndex);
+                    end                         = std::max(end, topsortPassIndex);
+                }
+                m_ResourceLifetimeMap[resourceID] = EffectiveLifetime{.Begin = begin, .End = end};
+            }
+        }
+
+      private:
+        // NOTE: Each of this in future will represent pass or dependency level(if multiple queues)
+        struct EffectiveLifetime
+        {
+            u32 Begin{0};
+            u32 End{0};
+        };
+
+        UnorderedMap<RGResourceID, EffectiveLifetime> m_ResourceLifetimeMap{};
+
+        //        constexpr RenderGraphResourceAliaser() noexcept = delete;
+    };
+#endif
+
     // NOTE:
     // 1) All CPU-side buffers are buffered by default, but GPU-side aren't!
     // 2) All textures aren't buffered!
@@ -187,9 +231,9 @@ namespace Radiant
             ++m_GlobalFrameNumber;
             m_CurrentFrameNumber = m_GlobalFrameNumber % s_BufferedFrameCount;
 
-            for (std::uint32_t i{}; i < m_Textures.size();)
+            for (u32 i{}; i < m_Textures.size();)
             {
-                const std::uint64_t framesPast = m_Textures[i].LastUsedFrameIndex + static_cast<std::uint64_t>(s_BufferedFrameCount);
+                const u64 framesPast = m_Textures[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                 if (framesPast < m_GlobalFrameNumber)
                 {
                     std::swap(m_Textures[i], m_Textures.back());
@@ -202,9 +246,9 @@ namespace Radiant
                 }
             }
 
-            for (std::uint32_t i{}; i < m_DeviceBuffers.size();)
+            for (u32 i{}; i < m_DeviceBuffers.size();)
             {
-                const std::uint64_t framesPast = m_DeviceBuffers[i].LastUsedFrameIndex + static_cast<std::uint64_t>(s_BufferedFrameCount);
+                const u64 framesPast = m_DeviceBuffers[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                 if (framesPast < m_GlobalFrameNumber)
                 {
                     std::swap(m_DeviceBuffers[i], m_DeviceBuffers.back());
@@ -218,10 +262,10 @@ namespace Radiant
             }
 
             auto& currentHostBuffersVector = m_HostBuffers[m_CurrentFrameNumber];
-            for (std::uint32_t i{}; i < currentHostBuffersVector.size();)
+            for (u32 i{}; i < currentHostBuffersVector.size();)
             {
-                const std::uint64_t framesPast =
-                    currentHostBuffersVector[i].LastUsedFrameIndex + static_cast<std::uint64_t>(s_BufferedFrameCount);
+                const u64 framesPast =
+                    currentHostBuffersVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                 if (framesPast < m_GlobalFrameNumber)
                 {
                     std::swap(currentHostBuffersVector[i], currentHostBuffersVector.back());
@@ -270,13 +314,13 @@ namespace Radiant
 
       private:
         const Unique<GfxDevice>& m_Device;
-        std::uint64_t m_GlobalFrameNumber{0};
-        std::uint8_t m_CurrentFrameNumber{0};
+        u64 m_GlobalFrameNumber{0};
+        u8 m_CurrentFrameNumber{0};
 
         struct PooledBuffer
         {
             Unique<RenderGraphResourceBuffer> Handle{nullptr};
-            std::uint64_t LastUsedFrameIndex{};
+            u64 LastUsedFrameIndex{};
         };
         using GfxBufferVector = std::vector<PooledBuffer>;
 
@@ -286,7 +330,7 @@ namespace Radiant
         struct PooledTexture
         {
             Unique<RenderGraphResourceTexture> Handle{nullptr};
-            std::uint64_t LastUsedFrameIndex{};
+            u64 LastUsedFrameIndex{};
         };
         std::vector<PooledTexture> m_Textures;
 
@@ -299,7 +343,10 @@ namespace Radiant
         ~RenderGraphResourceScheduler() noexcept = default;
 
         void CreateTexture(const std::string& name, const GfxTextureDescription& textureDesc) noexcept;
-        NODISCARD Unique<GfxTexture>& GetTexture(const RGResourceID& resourceID) noexcept;
+        NODISCARD FORCEINLINE Unique<GfxTexture>& GetTexture(const RGResourceID& resourceID) const noexcept
+        {
+            return m_RenderGraph.GetTexture(resourceID);
+        }
 
         NODISCARD RGResourceID ReadTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
         NODISCARD RGResourceID WriteTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
@@ -311,7 +358,10 @@ namespace Radiant
                                                  const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue) noexcept;
 
         void CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept;
-        NODISCARD Unique<GfxBuffer>& GetBuffer(const RGResourceID& resourceID) noexcept;
+        NODISCARD FORCEINLINE Unique<GfxBuffer>& GetBuffer(const RGResourceID& resourceID) const noexcept
+        {
+            return m_RenderGraph.GetBuffer(resourceID);
+        }
 
         NODISCARD RGResourceID ReadBuffer(const std::string& name, const ResourceStateFlags resourceState) noexcept;
         NODISCARD RGResourceID WriteBuffer(const std::string& name, const ResourceStateFlags resourceState) noexcept;
@@ -330,7 +380,7 @@ namespace Radiant
     class RenderGraphPass final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphPass(const std::uint32_t passID, const std::string_view& name, const ERenderGraphPassType passType,
+        RenderGraphPass(const u32 passID, const std::string_view& name, const ERenderGraphPassType passType,
                         RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
             : m_ID(passID), m_Name(name), m_PassType(passType), m_SetupFunc(setupFunc), m_ExecuteFunc(executeFunc)
         {
@@ -360,9 +410,9 @@ namespace Radiant
         }
 
       private:
-        std::uint32_t m_ID{0};
+        u32 m_ID{0};
         ERenderGraphPassType m_PassType{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
-        std::uint32_t m_DependencyLevelIndex{0};
+        u32 m_DependencyLevelIndex{0};
         std::string m_Name{s_DEFAULT_STRING};
 
         RenderGraphSetupFunc m_SetupFunc{};

@@ -32,7 +32,7 @@ namespace Radiant
         bool bStencilTest{false};
         bool bMultisample{false};
 
-        enum class EBlendMode : std::uint8_t
+        enum class EBlendMode : u8
         {
             BLEND_MODE_NONE,
             BLEND_MODE_ADDITIVE,
@@ -46,7 +46,7 @@ namespace Radiant
 
     struct GfxRayTracingPipelineOptions
     {
-        std::uint32_t MaxRayRecursionDepth{1};
+        u32 MaxRayRecursionDepth{1};
     };
 
     class GfxShader;
@@ -75,7 +75,19 @@ namespace Radiant
         ~GfxPipeline() noexcept { Destroy(); }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
-        operator const vk::Pipeline&() const noexcept { return *m_Handle; }
+        operator const vk::Pipeline&() const noexcept
+        {
+            if (m_bCanSwitchHotReloadedDummy)
+            {
+                if (m_Handle) m_Device->PushObjectToDelete(std::move(m_Handle));
+                m_Handle = std::move(m_Dummy);
+                m_Dummy  = {};
+                m_bCanSwitchHotReloadedDummy.store(false);
+            }
+
+            RDNT_ASSERT(m_Handle, "Pipeline handle is invalid!");
+            return *m_Handle;
+        }
 
         void HotReload() noexcept;
 
@@ -84,7 +96,10 @@ namespace Radiant
         const vk::UniquePipelineLayout& m_BindlessPipelineLayout;
 
         GfxPipelineDescription m_Description{};
-        vk::UniquePipeline m_Handle{};
+        mutable vk::UniquePipeline m_Handle{};
+        mutable vk::UniquePipeline m_Dummy{};
+        mutable std::atomic<bool> m_bCanSwitchHotReloadedDummy{true};
+        mutable std::atomic<bool> m_bIsHotReloadGoing{false};
 
         constexpr GfxPipeline() noexcept = delete;
         void Invalidate() noexcept;

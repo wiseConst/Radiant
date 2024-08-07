@@ -15,11 +15,13 @@ namespace Radiant
         std::size_t ElementSize{};
         vk::BufferUsageFlags UsageFlags;
         ExtraBufferFlags ExtraFlags{};
+        bool bControlledByRenderGraph{false};
 
         // NOTE: We don't care about capacity cuz we can resize wherever we want.
         bool operator!=(const GfxBufferDescription& other) const noexcept
         {
-            return std::tie(UsageFlags, ExtraFlags) != std::tie(other.UsageFlags, other.ExtraFlags);
+            return std::tie(UsageFlags, ExtraFlags, bControlledByRenderGraph) !=
+                   std::tie(other.UsageFlags, other.ExtraFlags, other.bControlledByRenderGraph);
         }
     };
 
@@ -46,7 +48,8 @@ namespace Radiant
         }
         ~GfxBuffer() noexcept { Destroy(); }
 
-        NODISCARD FORCEINLINE const auto& GetDescription() noexcept { return m_Description; }
+        NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
+        NODISCARD FORCEINLINE const auto& GetMemorySize() const noexcept { return m_MemorySize; }
 
         NODISCARD FORCEINLINE const vk::DeviceAddress& GetBDA() const noexcept
         {
@@ -84,6 +87,7 @@ namespace Radiant
         GfxBufferDescription m_Description{};
         vk::Buffer m_Handle{nullptr};
         VmaAllocation m_Allocation{};
+        vk::DeviceSize m_MemorySize{0};
         std::optional<vk::DeviceAddress> m_BDA{std::nullopt};
         void* m_Mapped{nullptr};
 

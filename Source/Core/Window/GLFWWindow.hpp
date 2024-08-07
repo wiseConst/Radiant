@@ -37,6 +37,7 @@ namespace Radiant
 
         bool IsMouseButtonPressed(const int32_t glfwKey) const noexcept;
         bool IsKeyPressed(const int32_t glfwKey) const noexcept;
+        bool IsKeyReleased(const int32_t glfwKey) const noexcept;
         glm::vec2 GetCursorPos() const noexcept;
 
         FORCEINLINE void SubscribeToResizeEvents(std::function<void(const WindowResizeData&)>&& func) noexcept

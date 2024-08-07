@@ -33,7 +33,7 @@ namespace Radiant
         const Unique<GfxDevice>& m_Device;
         GfxShaderDescription m_Description{};
         UnorderedMap<vk::ShaderStageFlagBits, vk::UniqueShaderModule> m_ModuleMap;
-
+     
         constexpr GfxShader() noexcept = delete;
         void Invalidate() noexcept;
     };

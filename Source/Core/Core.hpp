@@ -53,7 +53,7 @@ namespace Radiant
             m_Workers.resize(std::thread::hardware_concurrency());
             Init();
         }
-        ThreadPool(const std::uint16_t workerCount) noexcept
+        ThreadPool(const u16 workerCount) noexcept
         {
             RDNT_ASSERT(workerCount > 0, "Worker count should be > 0!");
             m_Workers.resize(workerCount);
@@ -90,6 +90,7 @@ namespace Radiant
 
         void Init() noexcept
         {
+            LOG_TRACE("Created threadpool with {} workers.", m_Workers.size());
             std::ranges::for_each(m_Workers,
                                   [&](auto& worker)
                                   {
@@ -115,7 +116,7 @@ namespace Radiant
         }
     };
 
-    using PoolID = std::uint64_t;
+    using PoolID = u64;
     template <typename T> class Pool
     {
       public:

@@ -11,8 +11,8 @@ namespace Radiant
 
     namespace GfxTextureUtils
     {
-        void* LoadImage(const std::string_view& imagePath, std::int32_t& width, std::int32_t& height, std::int32_t& channels,
-                        const std::int32_t requestedChannels) noexcept
+        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels,
+                        const i32 requestedChannels) noexcept
         {
             RDNT_ASSERT(!imagePath.empty(), "Invalid image path!");
 
@@ -21,15 +21,15 @@ namespace Radiant
 
             if (channels != 4)
             {
-                LOG_INFO("Overwriting loaded image's channels to 4! Previous: {}", channels);
+                //   LOG_INFO("Overwriting loaded image's channels to 4! Previous: {}", channels);
                 channels = 4;
             }
 
             return imageData;
         }
 
-        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, std::int32_t& width, std::int32_t& height,
-                        std::int32_t& channels, const std::int32_t requestedChannels) noexcept
+        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height,
+                        i32& channels, const i32 requestedChannels) noexcept
         {
             RDNT_ASSERT(rawImageData && rawImageDataSize > 0, "Invalid raw image data or size!");
 
@@ -51,9 +51,9 @@ namespace Radiant
             stbi_image_free(imageData);
         }
 
-        std::uint32_t GetMipLevelCount(const std::uint32_t width, const std::uint32_t height) noexcept
+        u32 GetMipLevelCount(const u32 width, const u32 height) noexcept
         {
-            return static_cast<std::uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;  // NOTE: +1 for base mip level
+            return static_cast<u32>(std::floor(std::log2(std::max(width, height)))) + 1;  // NOTE: +1 for base mip level
         }
 
     }  // namespace GfxTextureUtils
@@ -79,7 +79,7 @@ namespace Radiant
                                   (VkImage&)m_Image, m_Allocation);
 
         m_MipChain.resize(m_Description.bExposeMips ? mipLevelCount : 1);
-        for (std::uint32_t baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
+        for (u32 baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
         {
             m_MipChain[baseMipLevel].ImageView = m_Device->GetLogicalDevice()->createImageViewUnique(
                 vk::ImageViewCreateInfo()
@@ -195,14 +195,15 @@ namespace Radiant
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
         uint32_t mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
-        for (std::uint32_t baseMipLevel{1}; baseMipLevel < mipLevelCount; ++baseMipLevel)
+        for (u32 baseMipLevel{1}; baseMipLevel < mipLevelCount; ++baseMipLevel)
         {
             imageMemoryBarrier.subresourceRange.baseMipLevel = baseMipLevel - 1;
             imageMemoryBarrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
             imageMemoryBarrier.srcAccessMask                 = vk::AccessFlagBits2::eTransferWrite;
             imageMemoryBarrier.newLayout                     = vk::ImageLayout::eTransferSrcOptimal;
             imageMemoryBarrier.dstAccessMask                 = vk::AccessFlagBits2::eTransferRead;
-            imageMemoryBarrier.srcStageMask = imageMemoryBarrier.dstStageMask = vk::PipelineStageFlagBits2::eAllTransfer;
+            imageMemoryBarrier.srcStageMask                  = vk::PipelineStageFlagBits2::eAllTransfer;
+            imageMemoryBarrier.dstStageMask                  = vk::PipelineStageFlagBits2::eBlit;
             cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
 
             const auto previousMipSubresourceLayers = vk::ImageSubresourceLayers()
@@ -224,16 +225,16 @@ namespace Radiant
                                .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
                                .setRegions(vk::ImageBlit2()
                                                .setSrcSubresource(previousMipSubresourceLayers)
-                                               .setDstSubresource(currentMipSubresourceLayers)
                                                .setSrcOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(mipWidth),
                                                                                             static_cast<int32_t>(mipHeight), 1)})
+                                               .setDstSubresource(currentMipSubresourceLayers)
                                                .setDstOffsets({vk::Offset3D(),
                                                                vk::Offset3D(static_cast<int32_t>(mipWidth > 1 ? mipWidth / 2 : 1),
                                                                             static_cast<int32_t>(mipHeight > 1 ? mipHeight / 2 : 1), 1)})));
 
             imageMemoryBarrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
             imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferRead;
-            imageMemoryBarrier.srcStageMask  = vk::PipelineStageFlagBits2::eAllTransfer;
+            imageMemoryBarrier.srcStageMask  = vk::PipelineStageFlagBits2::eBlit;
             imageMemoryBarrier.newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal;
             imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead;
             imageMemoryBarrier.dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;

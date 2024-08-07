@@ -3,16 +3,39 @@
 
 #include <Render/GfxShader.hpp>
 #include <Render/GfxTexture.hpp>
+#include <Core/Application.hpp>
 
 namespace Radiant
 {
     void GfxPipeline::HotReload() noexcept
     {
-        RDNT_ASSERT(m_Description.Shader, "Pipeline hasn't shader attached to it!");
+        if (m_bIsHotReloadGoing)
+        {
+            LOG_INFO("Pipeline [{}] already hot-reloading, wait until it's done before you can hot-reload again!", m_Description.DebugName);
+            return;
+        }
 
-        m_Device->PushObjectToDelete(std::move(m_Handle));
-        m_Description.Shader->HotReload();
-        Invalidate();
+        RDNT_ASSERT(m_Description.Shader, "Pipeline hasn't shader attached to it!");
+        m_bIsHotReloadGoing.store(true);
+        m_bCanSwitchHotReloadedDummy.store(false);
+
+        auto brightFuture = Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const auto hotReloadBeginTime = Timer::Now();
+                m_Description.Shader->HotReload();
+                Invalidate();
+
+                m_bCanSwitchHotReloadedDummy.store(true);
+                m_bIsHotReloadGoing.store(false);
+
+                const auto hotReloadTimeDiff =
+                    std::chrono::duration<f32, std::chrono::milliseconds::period>(Timer::Now() - hotReloadBeginTime).count();
+                std::stringstream ss;
+                ss << "Worker[" << std::this_thread::get_id() << "] hot-reloaded pipeline ";
+                LOG_INFO("{} [{}] in {:.4f} ms.", ss.str(), m_Description.DebugName, hotReloadTimeDiff);
+            });
+        (void)brightFuture;
     }
 
     void GfxPipeline::Invalidate() noexcept
@@ -125,7 +148,7 @@ namespace Radiant
                                                   .setPDynamicState(&dynamicStateCI));
             RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to create GRAPHICS pipeline!");
 
-            m_Handle = std::move(pipeline);
+            m_Dummy = std::move(pipeline);
         }
         else if (const auto* cpo = std::get_if<GfxComputePipelineOptions>(&m_Description.PipelineOptions); cpo)
         {
@@ -135,7 +158,7 @@ namespace Radiant
                                                   .setStage(m_Description.Shader->GetShaderStages().back()));
             RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to create COMPUTE pipeline!");
 
-            m_Handle = std::move(pipeline);
+            m_Dummy = std::move(pipeline);
         }
         else if (const auto* rtpo = std::get_if<GfxRayTracingPipelineOptions>(&m_Description.PipelineOptions); rtpo)
         {

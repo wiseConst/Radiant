@@ -17,8 +17,7 @@ namespace Radiant
     namespace RenderGraphUtils
     {
 
-        static void DepthFirstSearch(u32 passID, std::vector<u32>& sortedPassID,
-                                     const std::vector<std::vector<u32>>& adjacencyLists,
+        static void DepthFirstSearch(u32 passID, std::vector<u32>& sortedPassID, const std::vector<std::vector<u32>>& adjacencyLists,
                                      std::vector<u8>& visitedPasses) noexcept
         {
             RDNT_ASSERT(passID < adjacencyLists.size() && passID < visitedPasses.size(), "Invalid passID!");
@@ -100,7 +99,7 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
+            if ((currentState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
                 EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE)
             {
                 srcStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
@@ -221,14 +220,14 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             }
 
-            if ((nextState & (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ)) ==
-                (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ))
+            constexpr auto ssboReadState = EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ;
+            if ((nextState & ssboReadState) == ssboReadState)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eShaderRead;
             }
 
-            if ((nextState & (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE)) ==
-                (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE))
+            constexpr auto ssboWriteState = EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE;
+            if ((nextState & ssboWriteState) == ssboWriteState)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
@@ -774,6 +773,18 @@ namespace Radiant
                 RGbuffer->SetState(nextState);
             }
 
+            for (const auto& resourceID : currentPass->m_BufferWrites)
+            {
+                auto& RGbuffer = m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[resourceID]);
+                auto& buffer   = RGbuffer->Get();
+
+                const auto currentState = RGbuffer->GetState();
+                const auto nextState    = currentPass->m_ResourceIDToResourceState[resourceID];
+
+                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
+                RGbuffer->SetState(nextState);
+            }
+
             for (const auto& resourceID : currentPass->m_TextureReads)
             {
                 auto& RGtexture = m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[resourceID]);
@@ -954,31 +965,30 @@ namespace Radiant
         return resourceID;
     }
 
-    NODISCARD RGResourceID RenderGraphResourceScheduler::WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
-                                                                           const vk::AttachmentStoreOp depthStoreOp,
-                                                                           const vk::ClearDepthStencilValue& clearValue,
-                                                                           const vk::AttachmentLoadOp stencilLoadOp,
-                                                                           const vk::AttachmentStoreOp stencilStoreOp) noexcept
+    NODISCARD void RenderGraphResourceScheduler::WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
+                                                                   const vk::AttachmentStoreOp depthStoreOp,
+                                                                   const vk::ClearDepthStencilValue& clearValue,
+                                                                   const vk::AttachmentLoadOp stencilLoadOp,
+                                                                   const vk::AttachmentStoreOp stencilStoreOp) noexcept
     {
-        const auto resourceID =
-            WriteTexture(name, /*EResourceState::RESOURCE_STATE_DEPTH_READ |*/ EResourceState::RESOURCE_STATE_DEPTH_WRITE);
+        const auto resourceID = WriteTexture(name, EResourceState::RESOURCE_STATE_DEPTH_READ | EResourceState::RESOURCE_STATE_DEPTH_WRITE);
         m_Pass.m_DepthStencilInfo = {.ClearValue     = clearValue,
                                      .DepthLoadOp    = depthLoadOp,
                                      .DepthStoreOp   = depthStoreOp,
                                      .StencilLoadOp  = stencilLoadOp,
                                      .StencilStoreOp = stencilStoreOp};
 
-        return resourceID;
+        (void)resourceID;
     }
 
-    NODISCARD RGResourceID RenderGraphResourceScheduler::WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
-                                                                           const vk::AttachmentStoreOp storeOp,
-                                                                           const vk::ClearColorValue& clearValue) noexcept
+    NODISCARD void RenderGraphResourceScheduler::WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
+                                                                   const vk::AttachmentStoreOp storeOp,
+                                                                   const vk::ClearColorValue& clearValue) noexcept
     {
         const auto resourceID = WriteTexture(name, EResourceState::RESOURCE_STATE_RENDER_TARGET);
         m_Pass.m_RenderTargetInfos.emplace_back(clearValue, loadOp, storeOp);
 
-        return resourceID;
+        (void)resourceID;
     }
 
     NODISCARD RGResourceID RenderGraphResourceScheduler::ReadTexture(const std::string& name,

@@ -1,16 +1,22 @@
 #include <pch.h>
 #include "ImGuiRenderer.hpp"
 
+#include <Render/GfxContext.hpp>
 #include <Render/GfxDevice.hpp>
+#include <Render/GfxPipeline.hpp>
 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 
 #include <Core/Application.hpp>
-#include <Core/Window/GLFWWindow.hpp>
 
 namespace Radiant
 {
+
+    struct ImGuiPassData
+    {
+        RGResourceID BackbufferTexture;
+    } static s_ImGuiPassData = {};
 
     void ImGuiRenderer::Init() noexcept
     {
@@ -98,14 +104,14 @@ namespace Radiant
             "ImGuiPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                m_ImGuiPassData.BackbufferTexture = scheduler.ReadTexture(backbufferName, EResourceState::RESOURCE_STATE_COPY_SOURCE);
+                s_ImGuiPassData.BackbufferTexture = scheduler.ReadTexture(backbufferName, EResourceState::RESOURCE_STATE_COPY_SOURCE);
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(viewportExtent.width).setHeight(viewportExtent.height),
                     vk::Rect2D().setExtent(viewportExtent));
             },
             [&, uiFunc](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
-                auto& backBufferSrcTexture = scheduler.GetTexture(m_ImGuiPassData.BackbufferTexture);
+                auto& backBufferSrcTexture = scheduler.GetTexture(s_ImGuiPassData.BackbufferTexture);
                 RDNT_ASSERT(!GfxTexture::IsDepthFormat(backBufferSrcTexture->GetDescription().Format),
                             "Backbuffer image for swapchain blit should have color format!");
 

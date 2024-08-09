@@ -6,7 +6,7 @@ struct FragmentStageInput
 { 
     float4 Color;
     float2 UV;
-    float3 WorldPos;
+    float3 FragPosWS;
     float3 Normal;
     float3x3 TBN;
 };
@@ -19,14 +19,18 @@ struct VertexStageOutput
 
 struct PushConstantBlock
 {
-    float4x4 ModelMatrix;
+    float3 scale;
+    float3 translation;
+    half4 orientation; // NOTE: quaternions are in range[-1, 1], so on CPU we firstly convert them in range[0, 1] and then quantize into fp16.
     const Shaders::CameraData *CameraData;
     const VertexPosition *VtxPositions;
     const VertexAttribute *VtxAttributes;
     const Shaders::GLTFMaterial *MaterialData;
+    const Shaders::LightData *LightData;
+    const Shaders::LightClusterList *LightClusterList;
     uint32_t SSAOTextureID;
     uint32_t SSSTextureID;
-    float3 SunDirection;
+    float2 ScaleBias; // For clustered shading, x - scale, y - bias
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
@@ -35,13 +39,13 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 {
     VertexStageOutput output;
 
-    const float4 worldPos = mul(u_PC.ModelMatrix, float4(u_PC.VtxPositions[vertexID].Position, 1.0f));
-    output.FSInput.Color = u_PC.VtxAttributes[vertexID].Color;
+    const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation * 2.0f - 1.0f) + u_PC.translation; // mul(u_PC.ModelMatrix, float4(, 1.0f));
+    output.FSInput.Color = max(Shaders::UnpackUnorm4x8(u_PC.VtxAttributes[vertexID].Color), float4(1.0f));
     output.FSInput.UV = u_PC.VtxAttributes[vertexID].UV;
-    output.FSInput.WorldPos = worldPos.xyz;
-    output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, worldPos);
+    output.FSInput.FragPosWS = worldPos;
+    output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, float4(worldPos, 1.0f));
 
-    const float3x3 normalMatrix = transpose(float3x3(u_PC.ModelMatrix));
+    const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation * 2.0f - 1.0f);
     const float3 N = normalize( mul(normalMatrix,  Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
     float3 T = normalize( mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
     T = normalize(T - dot(T, N) * N);
@@ -52,8 +56,6 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
     return output;
 }
 
-#define PI 3.14159265
-
 // Microfacet distribution aligned to halfway vector
 float EvaluateDistributionGGX(const float NdotH, const float roughness)
 {
@@ -61,7 +63,7 @@ float EvaluateDistributionGGX(const float NdotH, const float roughness)
     const float a2 = a * a;
     const float denom = (NdotH * NdotH * (a2 - 1.0f) + 1.0f);
     
-    return a2 / (PI * denom * denom);
+    return a2 / (Shaders::s_PI * denom * denom);
 }
 
 float GeometrySchlickGGX(float NdotV, const float roughness)
@@ -79,79 +81,20 @@ float EvaluateGeometrySmith(const float NdotV, const float NdotL, const float ro
 // FresnelSchlick, evaluating ratio of base reflectivity looking perpendicularly towards surface
 float3 EvaluateFresnel(const float HdotV, const float3 F0)
 {
-    return F0 + (1.0f - F0) * pow(1.0f - HdotV, 5);
+    static constexpr float F90 = 1.0f;
+    return F0 + (F90 - F0) * pow(1.0f - HdotV, 5.0f);
 }
 
 float3 EvaluateNormalMap(const float3x3 TBN, const float2 uv, const Shaders::GLTFMaterial* materialData)
 {
-    const float3 N = normalize((Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale);
-    return mul(TBN, N);
+    const float3 N = (Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale;
+    return normalize(mul(TBN, N));
 }
 
-// https://gamedev.stackexchange.com/questions/92015/optimized-linear-to-srgb-glsl
-// Converts a color from linear light gamma to sRGB gamma
-float4 Linear2sRGB(const float4 linearRGB)
+
+// NOTE: Input: normalized vectors V, L, N.
+float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 L, const float3 N)
 {
-    bool3 cutoff = linearRGB.rgb < float3(0.0031308);
-    float3 higher = float3(1.055) * pow(linearRGB.rgb, float3(1.0 / 2.4)) - float3(0.055);
-    float3 lower = linearRGB.rgb * float3(12.92);
-
-    return float4(lerp(higher, lower, cutoff), linearRGB.a);
-}
-
-// Converts a color from sRGB gamma to linear light gamma
-float4 sRGB2Linear(const float4 sRGB)
-{
-    const bool3 cutoff = sRGB.rgb < float3(0.04045);
-    const float3 higher = pow((sRGB.rgb + float3(0.055)) / float3(1.055), float3(2.4));
-    const float3 lower = sRGB.rgb / float3(12.92);
-
-    return float4(lerp(higher, lower, cutoff), sRGB.a);
-}
-
-// Attenuation for different light types:
-// Point: attenuation = max( min( 1.0 - ( current_distance / range )^4, 1 ), 0 ) / current_distance^2
-// Spot: These two values can be calculated on the CPU and passed into the shader
-//      float lightAngleScale = 1.0f / max(0.001f, cos(innerConeAngle) - cos(outerConeAngle));
-//      float lightAngleOffset = -cos(outerConeAngle) * lightAngleScale;
-// Then, in the shader:
-//      float cd = dot(spotlightDir, normalizedLightVector);
-//      float angularAttenuation = saturate(cd * lightAngleScale + lightAngleOffset);
-//      angularAttenuation *= angularAttenuation;
-
-
-[shader("fragment")]
-float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragCoord : SV_Position) : SV_Target
-{
-    const float2 globalUV = fragCoord.xy * u_PC.CameraData->InvFullResolution;
-    // return float4(globalUV.x, globalUV.y, 0.0, 1.0f);        // Vulkan coordinate system(Y down)
-    // return float4(globalUV.x, 1.0f - globalUV.y, 0.0, 1.0f); // OGL coordinate system(Y up)
-
-    //const float3 worldPosVS = mul(u_PC.CameraData->ViewMatrix, float4(fsInput.WorldPos, 1.0f)).xyz;
-    //const uint32_t slice = uint32_t(max(log2(-worldPosVS.z) * u_PC.CameraData->ScaleBias.x + u_PC.CameraData->ScaleBias.y, 0.0f));
-    //return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLORS_COUNT];
-    
-   //return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
-   // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
-    float3 irradiance = 0.0f;
-    const float intensity = 1.1f;
-    const float3 radiance = float3(0.7f, 0.4f, 0.1f) /** intensity * Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r*/;
-    const float3 lightDir = u_PC.SunDirection; // Vector from origin to sun
-
-    const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
-    const float4 albedo = /*fsInput.Color **/ Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
-    if (albedo.a < materialData->AlphaCutoff) discard;
-
-    const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
-    const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
-    const float3 emissive = materialData->EmissiveFactor * sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-
-    const float3 ao = Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-    const float3 ambient = float3(0.03f) * albedo.rgb * ao;
-
-    const float3 N = materialData->NormalTextureID != 0 ? EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData) : fsInput.Normal;
-    const float3 L = normalize(lightDir);
-    const float3 V = normalize(u_PC.CameraData->Position - fsInput.WorldPos);
     const float3 H = normalize(V + L);
 
     const float NdotH = max(dot(N, H), 0.0f);
@@ -160,16 +103,93 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const float HdotV = max(dot(H, V), 0.0f);
 
     const float3 F = EvaluateFresnel(HdotV, F0); // kS
-
     const float3 DFG = EvaluateDistributionGGX(NdotH, metallicRoughness.y) * F * EvaluateGeometrySmith(NdotV, NdotL, metallicRoughness.y);
     const float denom = max(4 * NdotV * NdotL, Shaders::s_KINDA_SMALL_NUMBER);
-    const float3 kD = (float3(1.0f) - F) * (1.0f - metallicRoughness.x);
-    const float3 BRDF = (kD * albedo.rgb / PI + DFG / denom);
+    const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
 
-    irradiance += emissive + ambient + BRDF * radiance * NdotL;
+    return (kD * albedo / Shaders::s_PI + DFG / denom) * lightColor * NdotL;
+}
+
+#define VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION 0
+#define VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP 0
+
+#ifdef VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
+float4 Heatmap(uint lightCount)
+{
+    const float3 mapTex[] = {
+        float3(0, 0, 0),
+		float3(0, 0, 1),
+		float3(0, 1, 1),
+		float3(0, 1, 0),
+		float3(1, 1, 0),
+		float3(1, 0, 0),
+    };
+    const uint mapTexLen = 5;
+    const uint maxHeat = 50;
+    const float l = clamp(float(lightCount) / maxHeat, 0.0f, 1.0f) * mapTexLen;
+    const float3 a = mapTex[int(floor(l))];
+    const float3 b = mapTex[int(ceil(l))];
+    return float4(lerp(a, b, l - floor(l)), 1.f);
+}
+#endif
+
+[shader("fragment")]
+float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragCoord : SV_Position) : SV_Target
+{
+    const float2 globalUV = fragCoord.xy * u_PC.CameraData->InvFullResolution;
+    // return float4(globalUV.x, globalUV.y, 0.0, 1.0f);        // Vulkan coordinate system(Y down)
+    // return float4(globalUV.x, 1.0f - globalUV.y, 0.0, 1.0f); // OGL coordinate system(Y up)
+
+    const float3 fragPosVS = mul(u_PC.CameraData->ViewMatrix, float4(fsInput.FragPosWS, 1.0f)).xyz;
+    const uint32_t slice = uint32_t(max(log2(-fragPosVS.z) * u_PC.ScaleBias.x + u_PC.ScaleBias.y, 0.0f));
+#if VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION
+    return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLOR_COUNT] * float4(float3(0.8f), 1.0f);
+#endif
+
+    //return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
+   // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
+
+    const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
+    const float4 albedo = fsInput.Color * Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
+
+    const float3 emissive = materialData->EmissiveFactor * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
+    const float3 ao = Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+    const float3 ambient = float3(0.03f) * albedo.rgb * ao;
+    float3 irradiance = ambient + emissive;
+
+    const float3 V = normalize(u_PC.CameraData->Position - fsInput.FragPosWS);
+    const float3 N = materialData->NormalTextureID != 0 ? EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData) : normalize(fsInput.Normal);
+    const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
+    const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
+
+    irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, normalize(u_PC.LightData.Sun.Direction), N);
+
+    // Locating which cluster this fragment is part of.
+    const float2 froxelSize = u_PC.CameraData.FullResolution / (float2)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.xy;
+    const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
+    const uint froxelIndex = froxelID.x + (froxelID.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x) + (froxelID.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y);
+
+    //for (uint k = 0; k < u_PC.LightClusterList[froxelIndex].PointLightCount; ++k)
+    //{
+    //    PointLight pl = u_PC.LightData->PointLights[u_PC.LightClusterList[froxelIndex].PointLightIndices[k]];
+
+    for (uint k = 0; k < u_PC.LightData->PointLightCount; ++k)
+    {
+        PointLight pl = u_PC.LightData->PointLights[k];
+        const float lightToFragDistance = length(pl.sphere.Origin - fsInput.FragPosWS);
+        const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
+        const float3 L = normalize(pl.sphere.Origin - fsInput.FragPosWS);
+        irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedo.rgb, metallicRoughness, V, L, N);
+    }
 
     // Reinhard tone map(HDR->LDR) + gamma correction
     irradiance.rgb = irradiance.rgb / (irradiance.rgb + float3(1.0f));
-    irradiance.rgb = Linear2sRGB(float4(irradiance.rgb, 1.0f)).xyz;// pow(irradiance.rgb, float3(1.0f / 2.2f));
+    irradiance.rgb = Shaders::Linear2sRGB(float4(irradiance.rgb, 1.0f)).xyz;
+
+#if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
+    return lerp(Heatmap(u_PC.LightClusterList[froxelIndex].PointLightCount), float4(irradiance, albedo.a), 0.3f);
+#endif
+
+    if (albedo.a < materialData->AlphaCutoff) discard;
     return float4(irradiance, albedo.a);
 }

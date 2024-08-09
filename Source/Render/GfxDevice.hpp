@@ -195,32 +195,7 @@ namespace Radiant
 
         // NOTE: Only GfxContext can call it!
         friend class GfxContext;
-        void PollDeletionQueues(const bool bImmediate = false /* means somewhere before waitIdle was called, so GPU is free! */) noexcept
-        {
-            UnorderedSet<u64> queuesToRemove;
-
-            for (auto& [frameNumber, deletionQueue] : m_DeletionQueuesPerFrame)
-            {
-                // We have to make sure that all buffered frames stopped using our resource!
-                const u64 framesPast = frameNumber + static_cast<u64>(s_BufferedFrameCount);
-                if (!bImmediate && framesPast >= m_CurrentFrameNumber) continue;
-
-                deletionQueue.Flush();
-
-                for (auto it = deletionQueue.BufferHandlesDeque.rbegin(); it != deletionQueue.BufferHandlesDeque.rend(); ++it)
-                {
-                    DeallocateBuffer((VkBuffer&)it->first, (VmaAllocation&)it->second);
-                }
-                deletionQueue.BufferHandlesDeque.clear();
-
-                queuesToRemove.emplace(frameNumber);
-            }
-
-            for (const auto queueFrameNumber : queuesToRemove)
-                m_DeletionQueuesPerFrame.erase(queueFrameNumber);
-
-            //       if (!queuesToRemove.empty()) LOG_TRACE("{}: freed {} deletion queues.", __FUNCTION__, queuesToRemove.size());
-        }
+        void PollDeletionQueues(const bool bImmediate = false /* means somewhere before waitIdle was called, so GPU is free! */) noexcept;
 
         constexpr GfxDevice() noexcept = delete;
         void Init(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface) noexcept;

@@ -12,6 +12,7 @@
 #include <glm/gtx/compatibility.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/packing.hpp>
+#include <glm/gtc/random.hpp>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>

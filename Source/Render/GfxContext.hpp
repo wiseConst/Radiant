@@ -59,19 +59,18 @@ namespace Radiant
       public:
         SyncPoint(const Unique<GfxDevice>& gfxDevice, const vk::Semaphore& timelineSemaphore, const u64& timelineValue,
                   const vk::PipelineStageFlags2& pipelineStages) noexcept
-            : m_GfxDevice(gfxDevice), m_TimelimeSemaphore(timelineSemaphore), m_TimelineValue(timelineValue),
-              m_PipelineStages(pipelineStages)
+            : m_Device(gfxDevice), m_TimelimeSemaphore(timelineSemaphore), m_TimelineValue(timelineValue), m_PipelineStages(pipelineStages)
         {
         }
         ~SyncPoint() noexcept = default;
 
         FORCEINLINE void Wait() const noexcept
         {
-            RDNT_ASSERT(m_GfxDevice->GetLogicalDevice()->waitSemaphores(vk::SemaphoreWaitInfo()
-                                                                            .setSemaphores(m_TimelimeSemaphore)
-                                                                            .setValues(m_TimelineValue)
-                                                                            .setFlags(vk::SemaphoreWaitFlagBits::eAny),
-                                                                        std::numeric_limits<u64>::max()) == vk::Result::eSuccess,
+            RDNT_ASSERT(m_Device->GetLogicalDevice()->waitSemaphores(vk::SemaphoreWaitInfo()
+                                                                         .setSemaphores(m_TimelimeSemaphore)
+                                                                         .setValues(m_TimelineValue)
+                                                                         .setFlags(vk::SemaphoreWaitFlagBits::eAny),
+                                                                     std::numeric_limits<u64>::max()) == vk::Result::eSuccess,
                         "Failed to wait on timeline semaphore!");
         }
 
@@ -80,7 +79,7 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto& GetPipelineStages() const noexcept { return m_PipelineStages; }
 
       private:
-        const Unique<GfxDevice>& m_GfxDevice;
+        const Unique<GfxDevice>& m_Device;
         vk::Semaphore m_TimelimeSemaphore{};
         u64 m_TimelineValue{0};
         vk::PipelineStageFlags2 m_PipelineStages{vk::PipelineStageFlagBits2::eNone};
@@ -225,8 +224,7 @@ namespace Radiant
             return *s_Instance;
         }
 
-        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID,
-                               const u32 binding) noexcept
+        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
             std::scoped_lock lock(m_Mtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
@@ -287,6 +285,9 @@ namespace Radiant
 
         struct FrameData
         {
+            // vk::UniqueQueryPool PipelineStatisticsQueryPool{};
+            // vk::UniqueQueryPool TimestampsQueryPool{};
+            // std::vector<u64> TimestampResults;
             vk::UniqueCommandPool GeneralCommandPool{};
             vk::CommandBuffer GeneralCommandBuffer{};
 
@@ -326,7 +327,7 @@ namespace Radiant
         void CreateSurface() noexcept;
         void InvalidateSwapchain() noexcept;
         void CreateFrameResources() noexcept;
-        void Shutdown() noexcept;
+        void Shutdown() noexcept { LOG_INFO("{}", __FUNCTION__); }
     };
 
 }  // namespace Radiant

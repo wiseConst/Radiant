@@ -7,10 +7,15 @@
 #include <Render/GfxTexture.hpp>
 #include <Render/GfxBuffer.hpp>
 
-#include <variant>
 #include <vector>
 #include <array>
 #include <functional>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <Core/Core.hpp>
+#include <Core/CoreTypes.hpp>
 
 namespace Radiant
 {
@@ -264,8 +269,7 @@ namespace Radiant
             auto& currentHostBuffersVector = m_HostBuffers[m_CurrentFrameNumber];
             for (u32 i{}; i < currentHostBuffersVector.size();)
             {
-                const u64 framesPast =
-                    currentHostBuffersVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
+                const u64 framesPast = currentHostBuffersVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                 if (framesPast < m_GlobalFrameNumber)
                 {
                     std::swap(currentHostBuffersVector[i], currentHostBuffersVector.back());
@@ -290,10 +294,9 @@ namespace Radiant
 
         NODISCARD Unique<RenderGraphResourceBuffer>& GetBuffer(const RGBufferHandle& handleID) noexcept
         {
-            RDNT_ASSERT(handleID.BufferFlags == 0 ||
-                            (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL |
-                             EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) !=
-                                (EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED),
+            RDNT_ASSERT(handleID.BufferFlags != 0 || handleID.BufferFlags == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL ||
+                            handleID.BufferFlags ==
+                                (EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE),
                         "Invalid buffer flags!");
 
             if ((handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
@@ -350,11 +353,11 @@ namespace Radiant
 
         NODISCARD RGResourceID ReadTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
         NODISCARD RGResourceID WriteTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
-        NODISCARD RGResourceID WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
+        NODISCARD void WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
                                                  const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
                                                  const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
                                                  const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare) noexcept;
-        NODISCARD RGResourceID WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
+        NODISCARD void WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
                                                  const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue) noexcept;
 
         void CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept;

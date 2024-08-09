@@ -198,7 +198,6 @@ namespace Radiant
 
         std::vector<const char*> enabledInstanceLayers;
         std::vector<const char*> enabledInstanceExtensions;
-
         if constexpr (RDNT_DEBUG || s_bForceGfxValidation)
         {
             enabledInstanceExtensions.emplace_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -541,11 +540,6 @@ namespace Radiant
             const std::string swapchainImageViewName = "SwapchainImageView[" + std::to_string(i) + "]";
             m_Device->SetDebugName(swapchainImageViewName, *m_SwapchainImageViews[i]);
         }
-    }
-
-    void GfxContext::Shutdown() noexcept
-    {
-        LOG_INFO("{}", __FUNCTION__);
     }
 
 }  // namespace Radiant

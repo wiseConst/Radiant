@@ -5,9 +5,9 @@
 
 namespace Radiant
 {
-    static constexpr bool s_bForceGfxValidation        = true;
-    static constexpr bool s_bForceIGPU                 = true;
-    static constexpr u8 s_BufferedFrameCount = 2;
+    static constexpr bool s_bForceGfxValidation = true;
+    static constexpr bool s_bForceIGPU          = false;
+    static constexpr u8 s_BufferedFrameCount    = 2;
 
     enum class ECommandBufferType : u8
     {
@@ -39,15 +39,15 @@ namespace Radiant
         RESOURCE_STATE_RENDER_TARGET                      = BIT(7),
         RESOURCE_STATE_DEPTH_READ                         = BIT(8),
         RESOURCE_STATE_DEPTH_WRITE                        = BIT(9),
-        RESOURCE_STATE_INDIRECT_ARGUMENT                  = BIT(11),
-        RESOURCE_STATE_COPY_SOURCE                        = BIT(12),
-        RESOURCE_STATE_COPY_DESTINATION                   = BIT(13),
-        RESOURCE_STATE_RESOLVE_SOURCE                     = BIT(14),
-        RESOURCE_STATE_RESOLVE_DESTINATION                = BIT(15),
-        RESOURCE_STATE_ACCELERATION_STRUCTURE             = BIT(16),
-        RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT = BIT(17),
-        RESOURCE_STATE_READ                               = BIT(18),
-        RESOURCE_STATE_WRITE                              = BIT(19),
+        RESOURCE_STATE_INDIRECT_ARGUMENT                  = BIT(10),
+        RESOURCE_STATE_COPY_SOURCE                        = BIT(11),
+        RESOURCE_STATE_COPY_DESTINATION                   = BIT(12),
+        RESOURCE_STATE_RESOLVE_SOURCE                     = BIT(13),
+        RESOURCE_STATE_RESOLVE_DESTINATION                = BIT(14),
+        RESOURCE_STATE_ACCELERATION_STRUCTURE             = BIT(15),
+        RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT = BIT(16),
+        RESOURCE_STATE_READ                               = BIT(17),
+        RESOURCE_STATE_WRITE                              = BIT(18),
     };
 
     enum class EAlphaMode : u8

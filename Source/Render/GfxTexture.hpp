@@ -1,10 +1,11 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxDevice.hpp>
+#include <Core/Core.hpp>
 
 #define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
+
+#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
@@ -14,8 +15,8 @@ namespace Radiant
         void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels,
                         const i32 requestedChannels = 4) noexcept;
 
-        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height,
-                        i32& channels, const i32 requestedChannels = 4) noexcept;
+        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height, i32& channels,
+                        const i32 requestedChannels = 4) noexcept;
 
         void UnloadImage(void* imageData) noexcept;
 
@@ -46,6 +47,7 @@ namespace Radiant
         }
     };
 
+    class GfxDevice;
     class GfxTexture final : private Uncopyable, private Unmovable
     {
       public:

@@ -2,6 +2,7 @@
 #include "GfxTexture.hpp"
 
 #include <Render/GfxContext.hpp>
+#include <Render/GfxDevice.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -11,8 +12,7 @@ namespace Radiant
 
     namespace GfxTextureUtils
     {
-        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels,
-                        const i32 requestedChannels) noexcept
+        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels, const i32 requestedChannels) noexcept
         {
             RDNT_ASSERT(!imagePath.empty(), "Invalid image path!");
 
@@ -28,8 +28,8 @@ namespace Radiant
             return imageData;
         }
 
-        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height,
-                        i32& channels, const i32 requestedChannels) noexcept
+        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height, i32& channels,
+                        const i32 requestedChannels) noexcept
         {
             RDNT_ASSERT(rawImageData && rawImageDataSize > 0, "Invalid raw image data or size!");
 

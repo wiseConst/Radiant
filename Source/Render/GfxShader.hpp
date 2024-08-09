@@ -1,7 +1,6 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxDevice.hpp>
+#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
@@ -12,6 +11,7 @@ namespace Radiant
         std::string Path{s_DEFAULT_STRING};
     };
 
+    class GfxDevice;
     class GfxShader final : private Uncopyable, private Unmovable
     {
       public:
@@ -33,7 +33,7 @@ namespace Radiant
         const Unique<GfxDevice>& m_Device;
         GfxShaderDescription m_Description{};
         UnorderedMap<vk::ShaderStageFlagBits, vk::UniqueShaderModule> m_ModuleMap;
-     
+
         constexpr GfxShader() noexcept = delete;
         void Invalidate() noexcept;
     };

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxDevice.hpp>
-
+#include <Core/Core.hpp>
 #include <variant>
+
+#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
@@ -58,6 +58,7 @@ namespace Radiant
         Shared<GfxShader> Shader{nullptr};
     };
 
+    class GfxDevice;
     class GfxPipeline final : private Uncopyable, private Unmovable
     {
       public:
@@ -75,19 +76,7 @@ namespace Radiant
         ~GfxPipeline() noexcept { Destroy(); }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
-        operator const vk::Pipeline&() const noexcept
-        {
-            if (m_bCanSwitchHotReloadedDummy)
-            {
-                if (m_Handle) m_Device->PushObjectToDelete(std::move(m_Handle));
-                m_Handle = std::move(m_Dummy);
-                m_Dummy  = {};
-                m_bCanSwitchHotReloadedDummy.store(false);
-            }
-
-            RDNT_ASSERT(m_Handle, "Pipeline handle is invalid!");
-            return *m_Handle;
-        }
+        operator const vk::Pipeline&() const noexcept;
 
         void HotReload() noexcept;
 

@@ -5,6 +5,9 @@
 namespace Radiant
 {
 
+    static constexpr glm::vec3 s_MinPointLightPos{-15, -4, -5};
+    static constexpr glm::vec3 s_MaxPointLightPos{15, 14, 5};
+
     class CombinedRenderer final : public Renderer
     {
       public:
@@ -22,7 +25,8 @@ namespace Radiant
         Unique<GfxPipeline> m_SSAOPipeline{nullptr};
         Unique<GfxPipeline> m_SSAOBoxBlurPipeline{nullptr};
         RenderGraphStatistics m_RenderGraphStats = {};
-        glm::vec3 m_SunDirection{0.0f, 0.8f, 0.5f};
+
+        Shaders::LightData m_LightData = {};
     };
 
 }  // namespace Radiant

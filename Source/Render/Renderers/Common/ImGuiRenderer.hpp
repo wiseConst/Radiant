@@ -1,15 +1,13 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxContext.hpp>
-#include <Render/GfxPipeline.hpp>
-#include <Render/RenderGraph.hpp>
-
 #include <imgui.h>
+#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
 
+    class GfxContext;
+    class RenderGraph;
     class ImGuiRenderer final : private Uncopyable, private Unmovable
     {
       public:
@@ -22,11 +20,6 @@ namespace Radiant
       private:
         const Unique<GfxContext>& m_GfxContext;
         vk::UniqueDescriptorPool m_ImGuiPool{};
-
-        struct ImGuiPassData
-        {
-            RGResourceID BackbufferTexture;
-        } m_ImGuiPassData = {};
 
         void Init() noexcept;
     };

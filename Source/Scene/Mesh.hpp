@@ -1,11 +1,14 @@
 #pragma once
 
-#include <Core/Core.hpp>
-#include <Render/GfxContext.hpp>
-#include <Render/GfxBuffer.hpp>
+#include <Render/CoreDefines.hpp>
+#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
+
+    class GfxBuffer;
+    class GfxContext;
+    class GfxTexture;
 
     struct RenderObject final
     {
@@ -91,7 +94,6 @@ namespace Radiant
         }
     };
 
-    class GfxTexture;
     struct Mesh final
     {
         Mesh(const Unique<GfxContext>& gfxContext, const std::filesystem::path& meshFilePath) noexcept;

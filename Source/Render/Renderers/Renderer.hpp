@@ -1,12 +1,8 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxContext.hpp>
-
 #include <Render/RenderGraph.hpp>
+#include <Render/GfxContext.hpp>
 #include <Render/GfxPipeline.hpp>
-#include <Render/GfxTexture.hpp>
-#include <Render/GfxBuffer.hpp>
 #include <Render/GfxShader.hpp>
 #include <Render/Camera.hpp>
 
@@ -15,7 +11,8 @@
 #include <Scene/Scene.hpp>
 
 // NOTE: Used only for input mappings.
-#include <GLFW/glfw3.h>
+#include <Core/CoreTypes.hpp>
+#include <Scene/Mesh.hpp>
 
 namespace Radiant
 {
@@ -39,7 +36,7 @@ namespace Radiant
         Unique<Scene> m_Scene{nullptr};
         Shared<Camera> m_MainCamera{nullptr};
         Unique<ImGuiRenderer> m_UIRenderer{nullptr};
-        DrawContext m_DrawContext        = {};
+        DrawContext m_DrawContext = {};
 
         vk::Extent2D m_ViewportExtent{};
     };

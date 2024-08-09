@@ -6,7 +6,7 @@ namespace Radiant
 {
 
     static constexpr f32 s_MouseSensitivity = 15.f;
-    static constexpr f32 s_CameraSpeed      = 0.1f;
+    static constexpr f32 s_CameraSpeed      = 5.0f;
 
     class Camera final : private Uncopyable, private Unmovable
     {
@@ -24,11 +24,12 @@ namespace Radiant
 
         NODISCARD FORCEINLINE const auto& GetProjectionMatrix() const noexcept { return m_ProjectionMatrix; }
         NODISCARD FORCEINLINE const auto& GetViewMatrix() const noexcept { return m_ViewMatrix; }
+        NODISCARD FORCEINLINE const auto GetZFar() const noexcept { return m_zFar; }
+        NODISCARD FORCEINLINE const auto GetZNear() const noexcept { return m_zNear; }
 
         void OnResized(const glm::uvec2& dimensions) noexcept
         {
-            if (dimensions == glm::uvec2{static_cast<u32>(m_FullResolution.x), static_cast<u32>(m_FullResolution.y)})
-                return;
+            if (dimensions == glm::uvec2{static_cast<u32>(m_FullResolution.x), static_cast<u32>(m_FullResolution.y)}) return;
 
             if (dimensions.y > 0) m_AR = static_cast<f32>(dimensions.x) / static_cast<f32>(dimensions.y);
 
@@ -118,10 +119,7 @@ namespace Radiant
                                          .InvFullResolution       = 1.0f / m_FullResolution,
                                          .Position                = m_Position,
                                          .zNearFar                = {m_zNear, m_zFar},
-                                         .DepthUnpackConsts       = {(m_zFar * m_zNear) / (m_zFar - m_zNear), m_zFar / (m_zFar - m_zNear)},
-                                         .ScaleBias = {static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISONS.z) / glm::log2(m_zFar / m_zNear),
-                                                       -static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISONS.z) * glm::log2(m_zNear) /
-                                                           glm::log2(m_zFar / m_zNear)}};
+                                         .DepthUnpackConsts       = {(m_zFar * m_zNear) / (m_zFar - m_zNear), m_zFar / (m_zFar - m_zNear)}};
         }
     };
 

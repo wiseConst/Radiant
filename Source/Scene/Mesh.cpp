@@ -1,8 +1,11 @@
 #include <pch.h>
 #include "Mesh.hpp"
 
-#include <Render/GfxTexture.hpp>
 #include <Core/Application.hpp>
+
+#include <Render/GfxContext.hpp>
+#include <Render/GfxTexture.hpp>
+#include <Render/GfxBuffer.hpp>
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/types.hpp>

@@ -1,9 +1,10 @@
 #include <pch.h>
 #include "GfxPipeline.hpp"
 
+#include <Core/Application.hpp>
+#include <Render/GfxDevice.hpp>
 #include <Render/GfxShader.hpp>
 #include <Render/GfxTexture.hpp>
-#include <Core/Application.hpp>
 
 namespace Radiant
 {
@@ -165,11 +166,27 @@ namespace Radiant
         }
         else
             RDNT_ASSERT(false, "This shouldn't happen! {}", __FUNCTION__);
+
+        m_Device->SetDebugName(m_Description.DebugName, *m_Dummy);
     }
 
     void GfxPipeline::Destroy() noexcept
     {
         m_Device->PushObjectToDelete(std::move(m_Handle));
+    }
+
+    GfxPipeline::operator const vk::Pipeline&() const noexcept
+    {
+        if (m_bCanSwitchHotReloadedDummy)
+        {
+            if (m_Handle) m_Device->PushObjectToDelete(std::move(m_Handle));
+            m_Handle = std::move(m_Dummy);
+            m_Dummy  = {};
+            m_bCanSwitchHotReloadedDummy.store(false);
+        }
+
+        RDNT_ASSERT(m_Handle, "Pipeline handle is invalid!");
+        return *m_Handle;
     }
 
 }  // namespace Radiant

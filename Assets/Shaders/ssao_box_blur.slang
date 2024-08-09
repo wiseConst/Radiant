@@ -20,6 +20,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 
     float ao = 0.f;
     uint accumulatedCount = 0;
+    [unroll]
     for (int x = -g_BlurSize; x <= g_BlurSize; ++x)
     {
         for (int y = -g_BlurSize; y <= g_BlurSize; ++y)

@@ -7,13 +7,15 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include <vk_mem_alloc.h>
 
+#include <vulkan/vulkan_to_string.hpp>
+
 namespace Radiant
 {
     void GfxDevice::Init(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface) noexcept
     {
         std::vector<const char*> requiredDeviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // For rendering into OS-window
-            VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME  // To neglect viewport state definition on pipeline creation
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,                 // For rendering into OS-window
+            VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,  // To neglect viewport state definition on pipeline creation
         };
 
         auto vkFeatures13 =
@@ -25,6 +27,7 @@ namespace Radiant
         auto vkFeatures12 = vk::PhysicalDeviceVulkan12Features()
                                 .setBufferDeviceAddress(vk::True)
                                 .setScalarBlockLayout(vk::True)
+                                .setStoragePushConstant8(vk::True)
                                 .setShaderInt8(vk::True)
                                 .setShaderFloat16(vk::True)
                                 .setTimelineSemaphore(vk::True)
@@ -38,7 +41,10 @@ namespace Radiant
         *paravozik = &vkFeatures12;
         paravozik  = &vkFeatures12.pNext;
 
-        auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features().setVariablePointers(vk::True).setVariablePointersStorageBuffer(vk::True);
+        auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features()
+                                .setVariablePointers(vk::True)
+                                .setVariablePointersStorageBuffer(vk::True)
+                                .setStoragePushConstant16(vk::True);
 
         *paravozik = &vkFeatures11;
         paravozik  = &vkFeatures11.pNext;
@@ -63,7 +69,7 @@ namespace Radiant
         for (auto& gpu : gpus)
         {
             const auto gpuProperties = gpu.getProperties();
-            LOG_TRACE("\t{}", gpuProperties.deviceName.data());
+            LOG_WARN("\t{}", gpuProperties.deviceName.data());
 
             if (gpus.size() == 1 || s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
                 !s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
@@ -177,6 +183,16 @@ namespace Radiant
                 }
                 LOG_INFO("Chosen GPU: {}", gpuProperties.deviceName.data());
             }
+
+            auto gpuSubgroupProperties = vk::PhysicalDeviceSubgroupProperties();
+            auto gpuProperties2        = vk::PhysicalDeviceProperties2();
+            gpuProperties2.pNext       = &gpuSubgroupProperties;
+            gpu.getProperties2(&gpuProperties2);
+
+            LOG_TRACE("Subgroup Size: {}", gpuSubgroupProperties.subgroupSize);
+            LOG_TRACE("Subgroup Supported Shader Stages: {}", vk::to_string(gpuSubgroupProperties.supportedStages));
+            LOG_TRACE("Subgroup Supported Operations: {}", vk::to_string(gpuSubgroupProperties.supportedOperations));
+            LOG_TRACE("QuadOperationsInAllStages: {}", gpuSubgroupProperties.quadOperationsInAllStages ? "TRUE" : "FALSE");
         }
 
         std::vector<vk::QueueFamilyProperties> qfProperties = m_PhysicalDevice.getQueueFamilyProperties();
@@ -236,7 +252,7 @@ namespace Radiant
         constexpr f32 queuePriority = 1.0f;
         std::vector<vk::DeviceQueueCreateInfo> queuesCI;
         for (const std::set<u32> uniqueQFIndices{*m_GeneralQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex,
-                                                           *m_TransferQueue.QueueFamilyIndex, *m_ComputeQueue.QueueFamilyIndex};
+                                                 *m_TransferQueue.QueueFamilyIndex, *m_ComputeQueue.QueueFamilyIndex};
              const auto qfIndex : uniqueQFIndices)
         {
             queuesCI.emplace_back().setQueuePriorities(queuePriority).setQueueCount(1).setQueueFamilyIndex(qfIndex);
@@ -303,8 +319,8 @@ namespace Radiant
                 bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.vendorID == pipelineCacheHeader.vendorID);
                 bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.deviceID == pipelineCacheHeader.deviceID);
                 bPipelineCacheValid =
-                    bPipelineCacheValid && (std::memcmp(m_GPUProperties.pipelineCacheUUID, pipelineCacheHeader.pipelineCacheUUID,
-                                                        VK_UUID_SIZE * sizeof(u8)) == 0);
+                    bPipelineCacheValid &&
+                    (std::memcmp(m_GPUProperties.pipelineCacheUUID, pipelineCacheHeader.pipelineCacheUUID, VK_UUID_SIZE * sizeof(u8)) == 0);
             }
 
             LOG_INFO("Found pipeline cache {}!", bPipelineCacheValid ? "valid" : "invalid");
@@ -366,6 +382,33 @@ namespace Radiant
     void GfxDevice::Unmap(VmaAllocation& allocation) const noexcept
     {
         vmaUnmapMemory(m_Allocator, allocation);
+    }
+
+    void GfxDevice::PollDeletionQueues(const bool bImmediate) noexcept
+    {
+        UnorderedSet<u64> queuesToRemove;
+
+        for (auto& [frameNumber, deletionQueue] : m_DeletionQueuesPerFrame)
+        {
+            // We have to make sure that all buffered frames stopped using our resource!
+            const u64 framesPast = frameNumber + static_cast<u64>(s_BufferedFrameCount);
+            if (!bImmediate && framesPast >= m_CurrentFrameNumber) continue;
+
+            deletionQueue.Flush();
+
+            for (auto it = deletionQueue.BufferHandlesDeque.rbegin(); it != deletionQueue.BufferHandlesDeque.rend(); ++it)
+            {
+                DeallocateBuffer((VkBuffer&)it->first, (VmaAllocation&)it->second);
+            }
+            deletionQueue.BufferHandlesDeque.clear();
+
+            queuesToRemove.emplace(frameNumber);
+        }
+
+        for (const auto queueFrameNumber : queuesToRemove)
+            m_DeletionQueuesPerFrame.erase(queueFrameNumber);
+
+        //       if (!queuesToRemove.empty()) LOG_TRACE("{}: freed {} deletion queues.", __FUNCTION__, queuesToRemove.size());
     }
 
     void GfxDevice::Shutdown() noexcept

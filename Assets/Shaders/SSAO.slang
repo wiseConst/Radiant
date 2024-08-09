@@ -62,6 +62,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     const float3x3 TBN = float3x3(T, B, N);
 
     float ao = 0.0f;
+    [unroll]
     for (uint32_t i = 0; i < g_SampleCount; ++i)
     {
         const float3 sample = viewPos + mul(TBN, g_Kernel[i]) * g_SampleRadius;

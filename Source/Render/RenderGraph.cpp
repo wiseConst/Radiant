@@ -713,9 +713,22 @@ namespace Radiant
         frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *m_GfxContext->GetBindlessPipelineLayout(), 0,
                                                           frameData.DescriptorSet, {});
 
+        // NOTE: Firstly reserve enough space for timestamps
+        if (frameData.TimestampsCapacity < m_Passes.size() * 2)
+        {
+            if (frameData.TimestampsQueryPool)
+                m_GfxContext->GetDevice()->PushObjectToDelete(
+                    [movedTimestampsQueryPool = std::move(frameData.TimestampsQueryPool)]() noexcept {});
+
+            frameData.TimestampsCapacity  = m_Passes.size() * 2;  // *2 since it works so (begin + end)
+            frameData.TimestampsQueryPool = m_GfxContext->GetDevice()->GetLogicalDevice()->createQueryPoolUnique(
+                vk::QueryPoolCreateInfo().setQueryType(vk::QueryType::eTimestamp).setQueryCount(frameData.TimestampsCapacity));
+            m_GfxContext->GetDevice()->GetLogicalDevice()->resetQueryPool(*frameData.TimestampsQueryPool, 0, frameData.TimestampsCapacity);
+        }
+
         for (auto& dependencyLevel : m_DependencyLevels)
         {
-            dependencyLevel.Execute(frameData.GeneralCommandBuffer);
+            dependencyLevel.Execute(m_GfxContext);
         }
 
         frameData.GeneralCommandBuffer.end();
@@ -735,18 +748,34 @@ namespace Radiant
                             *frameData.RenderFinishedFence);
     }
 
-    void RenderGraph::DependencyLevel::Execute(const vk::CommandBuffer& cmd) noexcept
+    void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept
     {
         // Sort passes by types to better utilize WARP occupancy.
         std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
                   [](const auto* lhs, const auto* rhs) { return lhs->m_PassType < rhs->m_PassType; });
 
+        auto& frameData = gfxContext->GetCurrentFrameData();
+
+        auto& cmd = frameData.GeneralCommandBuffer;
         for (auto& currentPass : m_Passes)
         {
 #if RDNT_DEBUG
             cmd.beginDebugUtilsLabelEXT(
                 vk::DebugUtilsLabelEXT().setPLabelName(currentPass->m_Name.data()).setColor({1.0f, 1.0f, 1.0f, 1.0f}));
 #endif
+
+            auto& gpuTask = frameData.GPUProfilerData.emplace_back();
+            gpuTask.Name  = currentPass->m_Name;
+            gpuTask.Color = Colors::ColorArray[currentPass->m_ID % Colors::ColorArray.size()];
+
+            // NOTE: https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/hpp_timestamp_queries#writing-time-stamps
+            // Calling this function defines an execution dependency similar to barrier on all commands that were submitted before it!
+            cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, *frameData.TimestampsQueryPool, frameData.CurrentTimestampIndex++);
+
+            auto& cpuTask     = frameData.CPUProfilerData.emplace_back();
+            cpuTask.StartTime = Timer::GetElapsedSecondsFromNow(frameData.FrameStartTime);
+            cpuTask.Name      = currentPass->m_Name;
+            cpuTask.Color     = Colors::ColorArray[currentPass->m_ID % Colors::ColorArray.size()];
 
             std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
             std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
@@ -896,6 +925,10 @@ namespace Radiant
                     break;
                 }
             }
+
+            cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(frameData.FrameStartTime);
+            cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *frameData.TimestampsQueryPool,
+                                frameData.CurrentTimestampIndex++);
 
 #if RDNT_DEBUG
             cmd.endDebugUtilsLabelEXT();

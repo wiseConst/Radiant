@@ -99,9 +99,6 @@ namespace Radiant
 
     bool GfxContext::BeginFrame() noexcept
     {
-        m_Device->PollDeletionQueues();
-        m_PipelineStateCache = {};
-
         if (m_bSwapchainNeedsResize)
         {
             m_Device->WaitIdle();
@@ -113,16 +110,48 @@ namespace Radiant
             return false;
         }
 
-        RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*m_FrameData[m_CurrentFrameIndex].RenderFinishedFence, vk::True,
-                                                                UINT64_MAX) == vk::Result::eSuccess,
+        auto& currentFrameData = m_FrameData[m_CurrentFrameIndex];
+        RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*currentFrameData.RenderFinishedFence, vk::True, UINT64_MAX) ==
+                        vk::Result::eSuccess,
                     "{}", __FUNCTION__);
-        m_Device->GetLogicalDevice()->resetFences(*m_FrameData[m_CurrentFrameIndex].RenderFinishedFence);
+        m_Device->GetLogicalDevice()->resetFences(*currentFrameData.RenderFinishedFence);
+
+        // NOTE: Reset all states only after every GPU op finished!
+        m_Device->PollDeletionQueues();
+        m_PipelineStateCache = {};
+        currentFrameData.CPUProfilerData.clear();
+        currentFrameData.GPUProfilerData.clear();
+        currentFrameData.FrameStartTime = Timer::Now();
+        if (currentFrameData.TimestampsQueryPool)
+        {
+            auto [result, data] = m_Device->GetLogicalDevice()->getQueryPoolResults<u64>(
+                *currentFrameData.TimestampsQueryPool, 0, currentFrameData.CurrentTimestampIndex,
+                sizeof(u64) * currentFrameData.TimestampsCapacity, sizeof(u64),
+                vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+            RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to getQueryPoolResults()!")
+
+            currentFrameData.TimestampResults = std::move(data);
+            m_Device->GetLogicalDevice()->resetQueryPool(*currentFrameData.TimestampsQueryPool, 0, currentFrameData.TimestampsCapacity);
+
+            // NOTE: CPUProfilerData is populated right when executing rendergraph, but with GPU things are different and we populate it's
+            // timings right after it finished work for appropriate frame.
+            auto& prevFrameGPUProfilerData = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].GPUProfilerData;
+            for (u32 taskIndex{}, timestampIndex{}; taskIndex < prevFrameGPUProfilerData.size(); ++taskIndex, timestampIndex += 2)
+            {
+                const auto frequencyFactor = m_Device->GetGPUProperties().limits.timestampPeriod / 1e9;
+                prevFrameGPUProfilerData[taskIndex].StartTime =
+                    (currentFrameData.TimestampResults[timestampIndex] - currentFrameData.TimestampResults[0]) * frequencyFactor;
+                prevFrameGPUProfilerData[taskIndex].EndTime =
+                    (currentFrameData.TimestampResults[timestampIndex + 1] - currentFrameData.TimestampResults[0]) * frequencyFactor;
+            }
+        }
+        currentFrameData.CurrentTimestampIndex = 0;
 
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
         {
-            const auto [result, imageIndex] = m_Device->GetLogicalDevice()->acquireNextImageKHR(
-                *m_Swapchain, UINT64_MAX, *m_FrameData[m_CurrentFrameIndex].ImageAvailableSemaphore);
+            const auto [result, imageIndex] =
+                m_Device->GetLogicalDevice()->acquireNextImageKHR(*m_Swapchain, UINT64_MAX, *currentFrameData.ImageAvailableSemaphore);
 
             if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
             {
@@ -130,9 +159,8 @@ namespace Radiant
                 return false;
             }
             else if (result != vk::Result::eSuccess)
-            {
                 RDNT_ASSERT(false, "acquireNextImageKHR(): unknown result!");
-            }
+
             m_CurrentImageIndex = imageIndex;
         }
         catch (vk::OutOfDateKHRError)
@@ -141,9 +169,9 @@ namespace Radiant
             return false;
         }
 
-        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].GeneralCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].AsyncComputeCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*m_FrameData[m_CurrentFrameIndex].DedicatedTransferCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPool);
         return true;
     }
 
@@ -152,20 +180,16 @@ namespace Radiant
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
         {
-            auto result = m_Device->GetPresentQueue().Handle.presentKHR(
+            const auto result = m_Device->GetPresentQueue().Handle.presentKHR(
                 vk::PresentInfoKHR()
                     .setImageIndices(m_CurrentImageIndex)
                     .setSwapchains(*m_Swapchain)
                     .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore));
 
             if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
-            {
                 m_bSwapchainNeedsResize = true;
-            }
             else if (result != vk::Result::eSuccess)
-            {
                 RDNT_ASSERT(false, "presentKHR(): unknown result!");
-            }
         }
         catch (vk::OutOfDateKHRError)
         {
@@ -326,13 +350,14 @@ namespace Radiant
             vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount};
         const auto megaSetLayoutExtendedInfo = vk::DescriptorSetLayoutBindingFlagsCreateInfo().setBindingFlags(bindingFlags);
 
-        m_DescriptorSetLayout = m_Device->GetLogicalDevice()->createDescriptorSetLayoutUnique(
-            vk::DescriptorSetLayoutCreateInfo()
-                .setBindings(bindings)
-                .setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool)
-                .setPNext(&megaSetLayoutExtendedInfo));
+        const auto& logicalDevice = m_Device->GetLogicalDevice();
+        m_DescriptorSetLayout =
+            logicalDevice->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo()
+                                                               .setBindings(bindings)
+                                                               .setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool)
+                                                               .setPNext(&megaSetLayoutExtendedInfo));
 
-        m_PipelineLayout = m_Device->GetLogicalDevice()->createPipelineLayoutUnique(
+        m_PipelineLayout = logicalDevice->createPipelineLayoutUnique(
             vk::PipelineLayoutCreateInfo()
                 .setSetLayouts(*m_DescriptorSetLayout)
                 .setPushConstantRanges(vk::PushConstantRange()
@@ -348,16 +373,16 @@ namespace Radiant
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
         for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
-            m_FrameData[i].GeneralCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+            m_FrameData[i].GeneralCommandPool = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex));
 
-            m_FrameData[i].AsyncComputeCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+            m_FrameData[i].AsyncComputeCommandPool = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex));
 
-            m_FrameData[i].DedicatedTransferCommandPool = m_Device->GetLogicalDevice()->createCommandPoolUnique(
+            m_FrameData[i].DedicatedTransferCommandPool = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex));
 
-            m_FrameData[i].GeneralCommandBuffer = m_Device->GetLogicalDevice()
+            m_FrameData[i].GeneralCommandBuffer = logicalDevice
                                                       ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
                                                                                    .setCommandBufferCount(1)
                                                                                    .setCommandPool(*m_FrameData[i].GeneralCommandPool)
@@ -365,17 +390,17 @@ namespace Radiant
                                                       .back();
 
             m_FrameData[i].RenderFinishedFence =
-                m_Device->GetLogicalDevice()->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
-            m_FrameData[i].ImageAvailableSemaphore = m_Device->GetLogicalDevice()->createSemaphoreUnique(vk::SemaphoreCreateInfo());
-            m_FrameData[i].RenderFinishedSemaphore = m_Device->GetLogicalDevice()->createSemaphoreUnique(vk::SemaphoreCreateInfo());
+                logicalDevice->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
+            m_FrameData[i].ImageAvailableSemaphore = logicalDevice->createSemaphoreUnique(vk::SemaphoreCreateInfo());
+            m_FrameData[i].RenderFinishedSemaphore = logicalDevice->createSemaphoreUnique(vk::SemaphoreCreateInfo());
 
             m_FrameData[i].DescriptorPool =
-                m_Device->GetLogicalDevice()->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo()
-                                                                             .setMaxSets(1)
-                                                                             .setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind)
-                                                                             .setPoolSizes(poolSizes));
+                logicalDevice->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo()
+                                                              .setMaxSets(1)
+                                                              .setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind)
+                                                              .setPoolSizes(poolSizes));
 
-            m_FrameData[i].DescriptorSet = m_Device->GetLogicalDevice()
+            m_FrameData[i].DescriptorSet = logicalDevice
                                                ->allocateDescriptorSets(vk::DescriptorSetAllocateInfo()
                                                                             .setDescriptorPool(*m_FrameData[i].DescriptorPool)
                                                                             .setSetLayouts(*m_DescriptorSetLayout))
@@ -385,13 +410,15 @@ namespace Radiant
         // Creating default white texture 1x1.
         {
             constexpr uint32_t whiteTextureData = 0xFFFFFFFF;
-            m_DefaultWhiteTexture               = MakeUnique<GfxTexture>(
-                m_Device, GfxTextureDescription{.Dimensions{1, 1, 1}, .UsageFlags = vk::ImageUsageFlagBits::eTransferDst});
+            m_DefaultWhiteTexture =
+                MakeUnique<GfxTexture>(m_Device, GfxTextureDescription(vk::ImageType::e2D, {1, 1, 1}, vk::Format::eR8G8B8A8Unorm,
+                                                                       vk::ImageUsageFlagBits::eTransferDst));
 
             m_Device->SetDebugName("RDNT_DEFAULT_WHITE_TEX", (const vk::Image&)*m_DefaultWhiteTexture);
 
-            auto stagingBuffer = MakeUnique<GfxBuffer>(
-                m_Device, GfxBufferDescription{.Capacity = sizeof(whiteTextureData), .ExtraFlags = EXTRA_BUFFER_FLAG_MAPPED});
+            auto stagingBuffer = MakeUnique<GfxBuffer>(m_Device, GfxBufferDescription(sizeof(whiteTextureData), sizeof(whiteTextureData),
+                                                                                      vk::BufferUsageFlagBits::eTransferSrc,
+                                                                                      EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
 
             stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
 
@@ -461,8 +488,7 @@ namespace Radiant
 
         // If the surface size is defined, the swap chain size must match
         m_SwapchainExtent = availableSurfaceCapabilities.currentExtent;
-        if (m_SwapchainExtent.width == std::numeric_limits<u32>::max() ||
-            m_SwapchainExtent.height == std::numeric_limits<u32>::max())
+        if (m_SwapchainExtent.width == std::numeric_limits<u32>::max() || m_SwapchainExtent.height == std::numeric_limits<u32>::max())
         {
             // If the surface size is undefined, the size is set to the size of the images requested.
             m_SwapchainExtent.width =
@@ -504,7 +530,7 @@ namespace Radiant
                 .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
                 .setImageUsage(requestedImageUsageFlags);
         const std::array<u32, 2> queueFamilyIndices{*m_Device->GetGeneralQueue().QueueFamilyIndex,
-                                                              *m_Device->GetPresentQueue().QueueFamilyIndex};
+                                                    *m_Device->GetPresentQueue().QueueFamilyIndex};
         if (m_Device->GetGeneralQueue().QueueFamilyIndex != m_Device->GetPresentQueue().QueueFamilyIndex)
         {
             // If the graphics and present queues are from different queue families, we either have to explicitly transfer

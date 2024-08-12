@@ -51,6 +51,10 @@ namespace Radiant
         io.WantCaptureKeyboard = false;
         io.WantTextInput       = false;
 
+        auto& imGuiStyle         = ImGui::GetStyle();
+        imGuiStyle.ChildRounding = imGuiStyle.GrabRounding = imGuiStyle.ScrollbarRounding = imGuiStyle.TabRounding =
+            imGuiStyle.PopupRounding = imGuiStyle.WindowRounding = imGuiStyle.FrameRounding = 8.0f;
+
         ImGui::StyleColorsDark();
         RDNT_ASSERT(ImGui_ImplVulkan_LoadFunctions(
                         [](const char* functionName, void* vulkanInstance)

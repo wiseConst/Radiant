@@ -21,7 +21,11 @@ struct PushConstantBlock
 {
     float3 scale;
     float3 translation;
+#if !RENDER_FORCE_IGPU
     half4 orientation; // NOTE: quaternions are in range[-1, 1], so on CPU we firstly convert them in range[0, 1] and then quantize into fp16.
+#else
+    float4 orientation;
+#endif
     const Shaders::CameraData *CameraData;
     const VertexPosition *VtxPositions;
     const VertexAttribute *VtxAttributes;
@@ -39,13 +43,21 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 {
     VertexStageOutput output;
 
-    const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation * 2.0f - 1.0f) + u_PC.translation; // mul(u_PC.ModelMatrix, float4(, 1.0f));
+#if !RENDER_FORCE_IGPU
+    const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation * 2.0f - 1.0f) + u_PC.translation;
+ #else
+    const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation) + u_PC.translation;
+ #endif
     output.FSInput.Color = max(Shaders::UnpackUnorm4x8(u_PC.VtxAttributes[vertexID].Color), float4(1.0f));
     output.FSInput.UV = u_PC.VtxAttributes[vertexID].UV;
     output.FSInput.FragPosWS = worldPos;
     output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, float4(worldPos, 1.0f));
 
+#if !RENDER_FORCE_IGPU
     const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation * 2.0f - 1.0f);
+#else
+    const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation);
+#endif
     const float3 N = normalize( mul(normalMatrix,  Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
     float3 T = normalize( mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
     T = normalize(T - dot(T, N) * N);
@@ -110,6 +122,7 @@ float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 a
     return (kD * albedo / Shaders::s_PI + DFG / denom) * lightColor * NdotL;
 }
 
+#define USE_LIGHT_CLUSTERS 1
 #define VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION 0
 #define VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP 0
 
@@ -169,13 +182,16 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
     const uint froxelIndex = froxelID.x + (froxelID.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x) + (froxelID.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y);
 
-    //for (uint k = 0; k < u_PC.LightClusterList[froxelIndex].PointLightCount; ++k)
-    //{
-    //    PointLight pl = u_PC.LightData->PointLights[u_PC.LightClusterList[froxelIndex].PointLightIndices[k]];
 
+    #if USE_LIGHT_CLUSTERS
+    for (uint k = 0; k < u_PC.LightClusterList[froxelIndex].PointLightCount; ++k)
+    {
+        PointLight pl = u_PC.LightData->PointLights[u_PC.LightClusterList[froxelIndex].PointLightIndices[k]];
+    #else
     for (uint k = 0; k < u_PC.LightData->PointLightCount; ++k)
     {
         PointLight pl = u_PC.LightData->PointLights[k];
+    #endif   
         const float lightToFragDistance = length(pl.sphere.Origin - fsInput.FragPosWS);
         const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
         const float3 L = normalize(pl.sphere.Origin - fsInput.FragPosWS);

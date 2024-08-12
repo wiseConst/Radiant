@@ -178,23 +178,19 @@ namespace Radiant
                         {
                             std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap by loading actual texture
                             loadedTexture = MakeShared<GfxTexture>(
-                                gfxContext->GetDevice(), GfxTextureDescription{.Type{vk::ImageType::e2D},
-                                                                               .Dimensions{width, height, 1},
-                                                                               .bExposeMips{false},
-                                                                               .bGenerateMips{bGenerateMipMaps},
-                                                                               .LayerCount{1},
-                                                                               .Format{vk::Format::eR8G8B8A8Unorm},
-                                                                               .UsageFlags{vk::ImageUsageFlagBits::eColorAttachment |
-                                                                                           vk::ImageUsageFlagBits::eTransferDst},
-                                                                               .SamplerCreateInfo{samplerCI}});
+                                gfxContext->GetDevice(),
+                                GfxTextureDescription(vk::ImageType::e2D, {width, height, 1}, vk::Format::eR8G8B8A8Unorm,
+                                                      vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
+                                                      samplerCI, 1, vk::SampleCountFlagBits::e1, false, bGenerateMipMaps));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
                         const auto imageSize = static_cast<std::size_t>(width * height * channels);
-                        auto stagingBuffer   = MakeUnique<GfxBuffer>(
-                            gfxContext->GetDevice(), GfxBufferDescription{.Capacity = imageSize, .ExtraFlags = EXTRA_BUFFER_FLAG_MAPPED});
-
+                        auto stagingBuffer   = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
+                                                                   GfxBufferDescription(imageSize, /* placeholder */ 1,
+                                                                                          vk::BufferUsageFlagBits::eTransferSrc,
+                                                                                          EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
                         stagingBuffer->SetData(imageData, imageSize);
 
                         executionContext = gfxContext->CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
@@ -380,7 +376,7 @@ namespace Radiant
             }
 
             const auto textureLoadEndTime = Timer::Now();
-            LOG_INFO("Loaded ({}) textures in [{:.8f}] ms", TextureMap.size(),
+            LOG_INFO("Loaded ({}) textures in [{:.3f}] ms", TextureMap.size(),
                      std::chrono::duration<f32, std::chrono::milliseconds::period>(textureLoadEndTime - textureLoadBeginTime).count());
         }
 
@@ -568,49 +564,46 @@ namespace Radiant
 
             // Handle vertex positions.
             auto vbpStagingBuffer = MakeUnique<GfxBuffer>(
-                gfxContext->GetDevice(), GfxBufferDescription{.Capacity   = vertexPositions.size() * sizeof(vertexPositions[0]),
-                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
-                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+                gfxContext->GetDevice(),
+                GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
+                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
             vbpStagingBuffer->SetData(vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
 
-            auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(MakeShared<GfxBuffer>(
-                gfxContext->GetDevice(),
-                GfxBufferDescription{.Capacity    = vertexPositions.size() * sizeof(vertexPositions[0]),
-                                     .ElementSize = sizeof(vertexPositions[0]),
-                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
-                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+            auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(
+                MakeShared<GfxBuffer>(gfxContext->GetDevice(),
+                                      GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
+                                                           vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
+                                                           EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)));
             cmd->copyBuffer(*vbpStagingBuffer, *vtxPosBuffer,
                             vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
 
             // Handle vertex attributes.
             auto vabStagingBuffer = MakeUnique<GfxBuffer>(
-                gfxContext->GetDevice(), GfxBufferDescription{.Capacity   = vertexAttributes.size() * sizeof(vertexAttributes[0]),
-                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
-                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+                gfxContext->GetDevice(),
+                GfxBufferDescription(vertexAttributes.size() * sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0]),
+                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
             vabStagingBuffer->SetData(vertexAttributes.data(), vertexAttributes.size() * sizeof(vertexAttributes[0]));
 
             auto& vtxAttribBuffer = VertexAttributeBuffers.emplace_back(MakeShared<GfxBuffer>(
                 gfxContext->GetDevice(),
-                GfxBufferDescription{.Capacity    = vertexAttributes.size() * sizeof(vertexAttributes[0]),
-                                     .ElementSize = sizeof(vertexAttributes[0]),
-                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
-                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+                GfxBufferDescription(vertexAttributes.size() * sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0]),
+                                     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
+                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)));
             cmd->copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
                             vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
 
             // Handle indices.
-            auto ibStagingBuffer = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
-                                                         GfxBufferDescription{.Capacity   = indices.size() * sizeof(indices[0]),
-                                                                              .UsageFlags = vk::BufferUsageFlagBits::eTransferSrc,
-                                                                              .ExtraFlags = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED});
+            auto ibStagingBuffer =
+                MakeUnique<GfxBuffer>(gfxContext->GetDevice(), GfxBufferDescription(indices.size() * sizeof(indices[0]), sizeof(indices[0]),
+                                                                                    vk::BufferUsageFlagBits::eTransferSrc,
+                                                                                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
             ibStagingBuffer->SetData(indices.data(), indices.size() * sizeof(indices[0]));
 
-            auto& ibBuffer = IndexBuffers.emplace_back(MakeShared<GfxBuffer>(
-                gfxContext->GetDevice(),
-                GfxBufferDescription{.Capacity    = indices.size() * sizeof(indices[0]),
-                                     .ElementSize = sizeof(indices[0]),
-                                     .UsageFlags  = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
-                                     .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}));
+            auto& ibBuffer = IndexBuffers.emplace_back(
+                MakeShared<GfxBuffer>(gfxContext->GetDevice(),
+                                      GfxBufferDescription(indices.size() * sizeof(indices[0]), sizeof(indices[0]),
+                                                           vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
+                                                           EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)));
             cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(indices.size() * sizeof(indices[0])));
 
             cmd->end();
@@ -685,11 +678,9 @@ namespace Radiant
         for (const auto& [_, gltfMaterial] : materialMap)
         {
             MaterialBuffers.emplace_back(MakeShared<GfxBuffer>(
-                gfxContext->GetDevice(), GfxBufferDescription{.Capacity    = sizeof(Shaders::GLTFMaterial),
-                                                              .ElementSize = sizeof(Shaders::GLTFMaterial),
-                                                              .UsageFlags  = vk::BufferUsageFlagBits::eUniformBuffer,
-                                                              .ExtraFlags  = EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED |
-                                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE}));
+                gfxContext->GetDevice(),
+                GfxBufferDescription(sizeof(Shaders::GLTFMaterial), sizeof(Shaders::GLTFMaterial), vk::BufferUsageFlagBits::eUniformBuffer,
+                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)));
             MaterialBuffers.back()->SetData(&gltfMaterial, sizeof(gltfMaterial));
         }
     }

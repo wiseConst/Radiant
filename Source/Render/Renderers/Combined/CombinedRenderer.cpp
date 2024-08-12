@@ -33,12 +33,13 @@ namespace Radiant
 
         LOG_INFO("Light clusters subdivision Z slices: {}", Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
         for (uint32_t slice{}; slice < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++slice)
-        {  // reverse z requires swap near/far
+        {
             const auto sd = m_MainCamera->GetShaderData();
             const auto ZSliceNear =
-                sd.zNearFar.y * glm::pow(sd.zNearFar.x / sd.zNearFar.y, (f32)slice / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
+                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)slice / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
             const auto ZSliceFar =
-                sd.zNearFar.y * glm::pow(sd.zNearFar.x / sd.zNearFar.y, (f32)(slice + 1) / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
+                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)(slice + 1) / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
+
             LOG_TRACE("Slice: {}, Froxel dimensions: [{:.4f}, {:.4f}].", slice, ZSliceNear, ZSliceFar);
         }
 
@@ -190,31 +191,25 @@ namespace Radiant
             "DepthPrePass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                scheduler.CreateTexture(
-                    ResourceNames::GBufferDepth,
-                    GfxTextureDescription{.Type       = vk::ImageType::e2D,
-                                          .Dimensions = glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                          .Format{vk::Format::eD32Sfloat},
-                                          .UsageFlags = vk::ImageUsageFlagBits::eDepthStencilAttachment});
+                scheduler.CreateTexture(ResourceNames::GBufferDepth,
+                                        GfxTextureDescription(vk::ImageType::e2D,
+                                                              glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                              vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment));
 
                 scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                             vk::ClearDepthStencilValue().setDepth(0.0f));
 
-                scheduler.CreateBuffer(ResourceNames::CameraBuffer,
-                                       GfxBufferDescription{.Capacity{sizeof(Shaders::CameraData)},
-                                                            .ElementSize{sizeof(Shaders::CameraData)},
-                                                            .UsageFlags{vk::BufferUsageFlagBits::eUniformBuffer},
-                                                            .ExtraFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED |
-                                                                        EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE}});
+                scheduler.CreateBuffer(
+                    ResourceNames::CameraBuffer,
+                    GfxBufferDescription(sizeof(Shaders::CameraData), sizeof(Shaders::CameraData), vk::BufferUsageFlagBits::eUniformBuffer,
+                                         EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE));
                 depthPrePassData.CameraBuffer =
                     scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
 
-                scheduler.CreateBuffer(ResourceNames::LightBuffer,
-                                       GfxBufferDescription{.Capacity{sizeof(Shaders::LightData)},
-                                                            .ElementSize{sizeof(Shaders::LightData)},
-                                                            .UsageFlags{vk::BufferUsageFlagBits::eUniformBuffer},
-                                                            .ExtraFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED |
-                                                                        EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE}});
+                scheduler.CreateBuffer(
+                    ResourceNames::LightBuffer,
+                    GfxBufferDescription(sizeof(Shaders::LightData), sizeof(Shaders::LightData), vk::BufferUsageFlagBits::eUniformBuffer,
+                                         EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE));
 
                 depthPrePassData.LightBuffer =
                     scheduler.WriteBuffer(ResourceNames::LightBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
@@ -234,10 +229,7 @@ namespace Radiant
                 for (auto& pl : m_LightData.PointLights)
                 {
                     pl.sphere.Origin += glm::vec3(0, 3.0f, 0) * Application::Get().GetDeltaTime();
-                    if (pl.sphere.Origin.y > s_MaxPointLightPos.y)
-                    {
-                        pl.sphere.Origin.y -= (s_MaxPointLightPos.y - s_MinPointLightPos.y);
-                    }
+                    if (pl.sphere.Origin.y > s_MaxPointLightPos.y) pl.sphere.Origin.y -= (s_MaxPointLightPos.y - s_MinPointLightPos.y);
                 }
 
                 auto& lightUBO = scheduler.GetBuffer(depthPrePassData.LightBuffer);
@@ -245,14 +237,17 @@ namespace Radiant
 
                 for (const auto& ro : m_DrawContext.RenderObjects)
                 {
-                    // DepthPrePass works only for opaque objects.
                     if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
 
                     struct PushConstantBlock
                     {
                         glm::vec3 scale{1.f};
                         glm::vec3 translation{0.f};
+#if !RENDER_FORCE_IGPU
                         glm::u16vec4 orientation{1};
+#else
+                        float4 orientation{1};
+#endif
                         const Shaders::CameraData* CameraData{nullptr};
                         const VertexPosition* VtxPositions{nullptr};
                     } pc = {};
@@ -261,9 +256,14 @@ namespace Radiant
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
                     glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
-                    pc.scale /= 100.0f;
 
+#if !RENDER_FORCE_IGPU
+                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
+#else
+                    pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
+#endif
+
+                    pc.scale /= 100.0f;
                     pc.CameraData   = (const Shaders::CameraData*)cameraUBO->GetBDA();
                     pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
 
@@ -289,13 +289,11 @@ namespace Radiant
                     scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
                                                                           EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
 
-                constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y *
-                                            Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
+                constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x *
+                                            Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
                 scheduler.CreateBuffer(ResourceNames::LightClusterBuffer,
-                                       GfxBufferDescription{.Capacity{lcbCapacity},
-                                                            .ElementSize{sizeof(AABB)},
-                                                            .UsageFlags{vk::BufferUsageFlagBits::eStorageBuffer},
-                                                            .ExtraFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}});
+                                       GfxBufferDescription(lcbCapacity, sizeof(AABB), vk::BufferUsageFlagBits::eStorageBuffer,
+                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
                 lcbPassData.LightClusterBuffer =
                     scheduler.WriteBuffer(ResourceNames::LightClusterBuffer, EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
                                                                                  EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
@@ -336,10 +334,9 @@ namespace Radiant
                 constexpr u64 lcaCapacity = sizeof(Shaders::LightClusterList) * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x *
                                             Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
                 scheduler.CreateBuffer(ResourceNames::LightClusterListBuffer,
-                                       GfxBufferDescription{.Capacity{lcaCapacity},
-                                                            .ElementSize{sizeof(Shaders::LightClusterList)},
-                                                            .UsageFlags{vk::BufferUsageFlagBits::eStorageBuffer},
-                                                            .ExtraFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL}});
+                                       GfxBufferDescription(lcaCapacity, sizeof(Shaders::LightClusterList),
+                                                            vk::BufferUsageFlagBits::eStorageBuffer,
+                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
                 lcaPassData.LightClusterListBuffer = scheduler.WriteBuffer(ResourceNames::LightClusterListBuffer,
                                                                            EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
                                                                                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
@@ -541,10 +538,9 @@ namespace Radiant
 
                 scheduler.CreateTexture(
                     ResourceNames::GBufferAlbedo,
-                    GfxTextureDescription{.Type       = vk::ImageType::e2D,
-                                          .Dimensions = glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                          .Format{vk::Format::eR16G16B16A16Sfloat},
-                                          .UsageFlags = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc});
+                    GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                          vk::Format::eR16G16B16A16Sfloat,
+                                          vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc));
 
                 scheduler.WriteRenderTarget(ResourceNames::GBufferAlbedo, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                             vk::ClearColorValue().setFloat32({1.0f, 0.5f, 0.0f, 1.0f}));
@@ -587,7 +583,11 @@ namespace Radiant
                     {
                         glm::vec3 scale{1.f};
                         glm::vec3 translation{0.f};
+#if !RENDER_FORCE_IGPU
                         glm::u16vec4 orientation{1};
+#else
+                        float4 orientation{1};
+#endif
                         const Shaders::CameraData* CameraData{nullptr};
                         const VertexPosition* VtxPositions{nullptr};
                         const VertexAttribute* VtxAttributes{nullptr};
@@ -606,11 +606,18 @@ namespace Radiant
                     pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
                     pc.scale /= 100.0f;
 
+#if !RENDER_FORCE_IGPU
+                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
+#else
+                    pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
+#endif
+
                     const auto zFar  = m_MainCamera->GetZFar();
                     const auto zNear = m_MainCamera->GetZNear();
                     pc.ScaleBias     = {static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z) / glm::log2(zFar / zNear),
-                                        -static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z) * glm::log2(zNear) / glm::log2(zFar / zNear)};
-                    // pc.scale *= 100.0f;
+                                        -static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z) * glm::log2(zNear) /
+                                            glm::log2(zFar / zNear)};
+
                     pc.CameraData    = (const Shaders::CameraData*)cameraUBO->GetBDA();
                     pc.VtxPositions  = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
                     pc.VtxAttributes = (const VertexAttribute*)ro.VertexAttributeBuffer->GetBDA();
@@ -632,12 +639,17 @@ namespace Radiant
                 }
             });
 
+        m_ProfilerWindow.m_GPUGraph.LoadFrameData(m_GfxContext->GetLastFrameGPUProfilerData());
+        m_ProfilerWindow.m_CPUGraph.LoadFrameData(m_GfxContext->GetLastFrameCPUProfilerData());
+
         m_UIRenderer->RenderFrame(
             m_ViewportExtent, m_RenderGraph, ResourceNames::GBufferAlbedo,
             [&]()
             {
                 static bool bShowDemoWindow = true;
                 if (bShowDemoWindow) ImGui::ShowDemoWindow(&bShowDemoWindow);
+
+                m_ProfilerWindow.Render();
 
                 if (ImGui::Begin("Application Info"))
                 {

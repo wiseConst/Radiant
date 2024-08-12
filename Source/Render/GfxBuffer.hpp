@@ -11,8 +11,27 @@ namespace Radiant
 
     struct GfxBufferDescription
     {
-        std::size_t Capacity{};
-        std::size_t ElementSize{};
+        GfxBufferDescription(const u64 capacity, const u64 elementSize, const vk::BufferUsageFlags usageFlags,
+                             const ExtraBufferFlags extraFlags, const bool bControlledByRenderGraph = false) noexcept
+            : Capacity(capacity), ElementSize(elementSize), UsageFlags(usageFlags), ExtraFlags(extraFlags),
+              bControlledByRenderGraph(bControlledByRenderGraph)
+        {
+            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
+            {
+                UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
+            }
+
+            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
+            {
+                UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
+            }
+        }
+        constexpr GfxBufferDescription() noexcept =
+            default;  // NOTE: NEVER USE IT, IT'S NOT DELETED ONLY FOR COMPATIBILITY WITH maps/other containers!
+        ~GfxBufferDescription() noexcept = default;
+
+        u64 Capacity{};
+        u64 ElementSize{};
         vk::BufferUsageFlags UsageFlags;
         ExtraBufferFlags ExtraFlags{};
         bool bControlledByRenderGraph{false};
@@ -31,17 +50,6 @@ namespace Radiant
         GfxBuffer(const Unique<GfxDevice>& device, const GfxBufferDescription& bufferDesc) noexcept
             : m_Device(device), m_Description(bufferDesc)
         {
-            if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) ==
-                EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
-            {
-                m_Description.UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
-            }
-
-            if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
-            {
-                m_Description.UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
-            }
-
             RDNT_ASSERT(m_Description.ExtraFlags > 0, "Unknown extra buffer usage flags!");
 
             Invalidate();
@@ -65,16 +73,17 @@ namespace Radiant
             std::memcpy(m_Mapped, data, dataSize);
         }
 
-        void Resize(const std::size_t newCapacity, const std::size_t newElementSize = std::numeric_limits<std::size_t>::max()) noexcept
+        void Resize(const u64 newCapacity, const u64 newElementSize = std::numeric_limits<u64>::max()) noexcept
         {
-            if (newElementSize != std::numeric_limits<std::size_t>::max()) m_Description.ElementSize = newElementSize;
+            if (newCapacity == m_Description.Capacity && newElementSize == m_Description.ElementSize) return;
+            if (newElementSize != std::numeric_limits<u64>::max()) m_Description.ElementSize = newElementSize;
 
             m_Description.Capacity = newCapacity;
             Destroy();
             Invalidate();
         }
 
-        NODISCARD std::size_t GetElementCount() const noexcept
+        NODISCARD u64 GetElementCount() const noexcept
         {
             RDNT_ASSERT(m_Description.ElementSize > 0, "Division by zero!");
             return m_Description.Capacity / m_Description.ElementSize;
@@ -85,6 +94,7 @@ namespace Radiant
       private:
         const Unique<GfxDevice>& m_Device;
         GfxBufferDescription m_Description{};
+
         vk::Buffer m_Handle{nullptr};
         VmaAllocation m_Allocation{};
         vk::DeviceSize m_MemorySize{0};

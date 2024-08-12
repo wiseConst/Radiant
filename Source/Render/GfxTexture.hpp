@@ -26,16 +26,33 @@ namespace Radiant
 
     struct GfxTextureDescription
     {
+        GfxTextureDescription(const vk::ImageType type, const glm::uvec3& dimensions, const vk::Format format,
+                              const vk::ImageUsageFlags usageFlags,
+                              const std::optional<vk::SamplerCreateInfo> samplerCreateInfo = std::nullopt, const u32 layerCount = 1,
+                              const vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1, const bool bExposeMips = false,
+                              const bool bGenerateMips = false, const bool bControlledByRenderGraph = false) noexcept
+            : Type(type), Dimensions(dimensions), Format(format), UsageFlags(usageFlags), SamplerCreateInfo(samplerCreateInfo),
+              LayerCount(layerCount), Samples(samples), bExposeMips(bExposeMips), bGenerateMips(bGenerateMips),
+              bControlledByRenderGraph(bControlledByRenderGraph)
+        {
+            UsageFlags |= vk::ImageUsageFlagBits::eSampled;
+
+            if (bGenerateMips) UsageFlags |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+        }
+        constexpr GfxTextureDescription() noexcept =
+            default;  // NOTE: NEVER USE IT, IT'S NOT DELETED ONLY FOR COMPATIBILITY WITH maps/other containers!
+        ~GfxTextureDescription() noexcept = default;
+
         vk::ImageType Type{vk::ImageType::e2D};
         glm::uvec3 Dimensions{1};
-        bool bExposeMips{false};               // Create MipChain of image views?
-        bool bGenerateMips{false};             // NOTE: Used only for mesh textures, doesn't create MipChain of image views!
-        bool bControlledByRenderGraph{false};  // NOTE: Means resource can be only created but no be bind to any memory.
-        u32 LayerCount{1};
         vk::Format Format{vk::Format::eR8G8B8A8Unorm};
         vk::ImageUsageFlags UsageFlags{vk::ImageUsageFlagBits::eSampled};
         std::optional<vk::SamplerCreateInfo> SamplerCreateInfo{std::nullopt};
+        u32 LayerCount{1};
         vk::SampleCountFlagBits Samples{vk::SampleCountFlagBits::e1};
+        bool bExposeMips{false};               // Create MipChain of image views?
+        bool bGenerateMips{false};             // NOTE: Used only for mesh textures, doesn't create MipChain of image views!
+        bool bControlledByRenderGraph{false};  // NOTE: Means resource can be only created but no be bind to any memory.
 
         // NOTE: We don't care about dimensions cuz we can resize wherever we want.
         bool operator!=(const GfxTextureDescription& other) const noexcept
@@ -54,12 +71,9 @@ namespace Radiant
         GfxTexture(const Unique<GfxDevice>& device, const GfxTextureDescription& textureDesc) noexcept
             : m_Device(device), m_Description(textureDesc)
         {
-            m_Description.UsageFlags |= vk::ImageUsageFlagBits::eSampled;
             m_UUID = ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture));
             RDNT_ASSERT((m_Description.bExposeMips && m_Description.bGenerateMips) == false,
                         "GfxTexture can't have both bExposeMips && bGenerateMips specified!");
-            if (m_Description.bGenerateMips)
-                m_Description.UsageFlags |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
             Invalidate();
         }
         ~GfxTexture() noexcept { Destroy(); }

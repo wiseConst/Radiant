@@ -15,6 +15,7 @@ namespace Radiant
         void RenderFrame() noexcept final override;
 
       private:
+        Unique<GfxPipeline> m_CirclePipeline{nullptr};
     };
 
 }  // namespace Radiant

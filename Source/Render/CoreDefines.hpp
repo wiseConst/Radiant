@@ -6,7 +6,6 @@
 namespace Radiant
 {
     static constexpr bool s_bForceGfxValidation = true;
-    static constexpr bool s_bForceIGPU          = false;
     static constexpr u8 s_BufferedFrameCount    = 2;
 
     enum class ECommandBufferType : u8

@@ -57,7 +57,7 @@ namespace Radiant
     {
       public:
         Timer() noexcept : m_StartTime(Now()) {}
-        ~Timer() = default;
+        ~Timer() noexcept = default;
 
         NODISCARD FORCEINLINE f64 GetElapsedMilliseconds() const noexcept
         {
@@ -65,11 +65,13 @@ namespace Radiant
             return elapsed.count();
         }
 
-        NODISCARD FORCEINLINE f64 GetElapsedSeconds() const noexcept
+        NODISCARD FORCEINLINE static f64 GetElapsedSecondsFromNow(
+            const std::chrono::time_point<std::chrono::high_resolution_clock>& timePoint) noexcept
         {
-            const auto elapsed = std::chrono::duration<f64>(Now() - m_StartTime);
-            return elapsed.count();
+            return std::chrono::duration<f64>(Now() - timePoint).count();
         }
+
+        NODISCARD FORCEINLINE f64 GetElapsedSeconds() const noexcept { return GetElapsedSecondsFromNow(m_StartTime); }
 
         FORCEINLINE void Reset() noexcept { m_StartTime = Now(); }
         NODISCARD FORCEINLINE static std::chrono::high_resolution_clock::time_point Now() noexcept
@@ -101,6 +103,57 @@ namespace Radiant
       protected:
         constexpr Unmovable() noexcept  = default;
         constexpr ~Unmovable() noexcept = default;
+    };
+
+    // https://github.com/Raikiri/LegitProfiler
+    namespace Colors
+    {
+        // https://flatuicolors.com/palette/defo
+#define RGBA_LE(col)                                                                                                                       \
+    (((col & 0xff000000) >> (24)) + ((col & 0x00ff0000) >> (8)) + ((col & 0x0000ff00) << (8)) + ((col & 0x000000ff) << (24)))
+
+        static constexpr u32 turqoise = RGBA_LE(0x1abc9cffu);
+        static constexpr u32 greenSea = RGBA_LE(0x16a085ffu);
+
+        static constexpr u32 emerald   = RGBA_LE(0x2ecc71ffu);
+        static constexpr u32 nephritis = RGBA_LE(0x27ae60ffu);
+
+        static constexpr u32 peterRiver = RGBA_LE(0x3498dbffu);  // blue
+        static constexpr u32 belizeHole = RGBA_LE(0x2980b9ffu);
+
+        static constexpr u32 amethyst = RGBA_LE(0x9b59b6ffu);
+        static constexpr u32 wisteria = RGBA_LE(0x8e44adffu);
+
+        static constexpr u32 sunFlower = RGBA_LE(0xf1c40fffu);
+        static constexpr u32 orange    = RGBA_LE(0xf39c12ffu);
+
+        static constexpr u32 carrot  = RGBA_LE(0xe67e22ffu);
+        static constexpr u32 pumpkin = RGBA_LE(0xd35400ffu);
+
+        static constexpr u32 alizarin    = RGBA_LE(0xe74c3cffu);
+        static constexpr u32 pomegranate = RGBA_LE(0xc0392bffu);
+
+        static constexpr u32 clouds    = RGBA_LE(0xecf0f1ffu);
+        static constexpr u32 silver    = RGBA_LE(0xbdc3c7ffu);
+        static constexpr u32 imguiText = RGBA_LE(0xF2F5FAFFu);
+
+        static constexpr std::array<u32, 17> ColorArray = {turqoise,    greenSea,   sunFlower, orange,   emerald,  alizarin,
+                                                           pomegranate, peterRiver, nephritis, amethyst, carrot,   wisteria,
+                                                           pumpkin,     belizeHole, clouds,    silver,   imguiText};
+
+    }  // namespace Colors
+
+    struct ProfilerTask final
+    {
+        ProfilerTask() noexcept  = default;
+        ~ProfilerTask() noexcept = default;
+
+        f64 StartTime{0.0};
+        f64 EndTime{0.0};
+        std::string Name{s_DEFAULT_STRING};
+        u32 Color{0xFFFFFFFF};
+
+        f64 GetLength() const noexcept { return EndTime - StartTime; }
     };
 
 }  // namespace Radiant

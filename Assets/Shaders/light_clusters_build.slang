@@ -33,20 +33,20 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint3 Gid : SV_GroupID)
     const float3 viewPos = float3(0.0f);
 
     // How many pixels in XY does a froxel use
-    const float2 froxelSize = u_PC.CameraData->FullResolution / u_PC.WorkGroupsNum.xy;
+    const float2 froxelSize = u_PC.CameraData->FullResolution / Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.xy;
 
     // calculate the min and max points of a tile in screen space
-    const float2 minPosSS = froxelSize * Gid.xy;
-    const float2 maxPosSS = froxelSize * (Gid.xy + 1);
+    const float2 minPosSS = froxelSize * Gid.xy * u_PC.CameraData->InvFullResolution;
+    const float2 maxPosSS = froxelSize * (Gid.xy + 1) * u_PC.CameraData->InvFullResolution;
 
     // convert them to view space sitting on the near plane
-    const float3 minPosVS = Shaders::ScreenSpaceToView(minPosSS * u_PC.CameraData->InvFullResolution, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
-    const float3 maxPosVS = Shaders::ScreenSpaceToView(maxPosSS * u_PC.CameraData->InvFullResolution, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
+    const float3 minPosVS = Shaders::ScreenSpaceToView(minPosSS, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
+    const float3 maxPosVS = Shaders::ScreenSpaceToView(maxPosSS, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
 
-    const float froxelNearVS = -u_PC.CameraData.zNearFar.y * pow(u_PC.CameraData.zNearFar.x / u_PC.CameraData.zNearFar.y, (float)Gid.z / (float)u_PC.WorkGroupsNum.z);
+    const float froxelNearVS = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)Gid.z / (float)u_PC.WorkGroupsNum.z);
     const Plane nearPlane = Plane(float3(0.0f, 0.0f, 1.0f), froxelNearVS);
  
-    const float froxelFarVS  = -u_PC.CameraData.zNearFar.y * pow(u_PC.CameraData.zNearFar.x / u_PC.CameraData.zNearFar.y, (float)(Gid.z + 1) / (float)u_PC.WorkGroupsNum.z);
+    const float froxelFarVS  = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)(Gid.z + 1) / (float)u_PC.WorkGroupsNum.z);
     const Plane farPlane = Plane(float3(0.0f, 0.0f, 1.0f), froxelFarVS);
     
     // Find the 4 intersection points from a tile's min/max points to this cluster's near and far planes

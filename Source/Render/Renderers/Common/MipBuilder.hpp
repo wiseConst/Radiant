@@ -1,18 +1,17 @@
 #pragma once
 
-#include <Render/CoreDefines.hpp>
-#include <Render/GfxContext.hpp>
 #include <Render/GfxPipeline.hpp>
-#include <Render/RenderGraph.hpp>
 
 namespace Radiant
 {
 
+    class RenderGraph;
+    class GfxContext;
     class MipBuilder final : private Uncopyable, private Unmovable
     {
       public:
         MipBuilder(const Unique<GfxContext>& gfxContext) noexcept : m_GfxContext(gfxContext) { Init(); }
-        ~MipBuilder() noexcept { m_GfxContext->GetDevice()->WaitIdle(); }
+        ~MipBuilder() noexcept;
 
         void BuildMips(Unique<RenderGraph>& renderGraph) noexcept;
 

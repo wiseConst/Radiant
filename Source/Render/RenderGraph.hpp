@@ -88,7 +88,7 @@ namespace Radiant
 
             void AddPass(RenderGraphPass* pass) noexcept { m_Passes.emplace_back(pass); }
 
-            void Execute(const vk::CommandBuffer& cmd) noexcept;
+            void Execute(const Unique<GfxContext>& gfxContext) noexcept;
 
           private:
             RenderGraph& m_RenderGraph;

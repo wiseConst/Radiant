@@ -18,13 +18,17 @@
 
 namespace Radiant
 {
+
+    class GfxTexture;
+    class GfxPipeline;
+    class GfxBuffer;
+
     // NOTE: Small optimization for CPU usage to issue less VK-API calls.
     struct GfxPipelineStateCache
     {
-        class GfxPipeline* LastBoundPipeline{nullptr};
-        class GfxBuffer* LastBoundIndexBuffer{nullptr};
+        GfxPipeline* LastBoundPipeline{nullptr};
+        GfxBuffer* LastBoundIndexBuffer{nullptr};
 
-        // NOTE: Other ops will be defined as the usages of them grows.
         void Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept;
         void Bind(const vk::CommandBuffer& cmd, GfxBuffer* indexBuffer, const vk::DeviceSize offset = 0,
                   const vk::IndexType indexType = vk::IndexType::eUint32) noexcept;
@@ -95,7 +99,6 @@ namespace Radiant
         vk::Queue Queue{};
     };
 
-    class GfxTexture;
     class GfxContext final : private Uncopyable, private Unmovable
     {
       public:
@@ -270,6 +273,16 @@ namespace Radiant
 
         NODISCARD FORCEINLINE auto& GetMutex() noexcept { return m_Mtx; }
 
+        NODISCARD FORCEINLINE const auto GetLastFrameCPUProfilerData() const noexcept
+        {
+            return m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].CPUProfilerData;
+        }
+
+        NODISCARD FORCEINLINE const auto GetLastFrameGPUProfilerData() const noexcept
+        {
+            return m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].GPUProfilerData;
+        }
+
       private:
         mutable std::mutex m_Mtx{};
         static inline GfxContext* s_Instance{nullptr};  // NOTE: Used only for safely pushing objects through device into deletion queue.
@@ -277,7 +290,7 @@ namespace Radiant
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
 
         // NOTE: Destroy pools only after deferred deletion queues are finished!
-        // Bindless resources pt. 3
+        // Bindless resources part3
         std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
         Unique<GfxDevice> m_Device{};
@@ -285,9 +298,15 @@ namespace Radiant
 
         struct FrameData
         {
-            // vk::UniqueQueryPool PipelineStatisticsQueryPool{};
-            // vk::UniqueQueryPool TimestampsQueryPool{};
-            // std::vector<u64> TimestampResults;
+            // Profiling...
+            std::chrono::time_point<std::chrono::high_resolution_clock> FrameStartTime{Timer::Now()};
+            mutable vk::UniqueQueryPool TimestampsQueryPool{};
+            mutable u32 TimestampsCapacity{};
+            mutable u32 CurrentTimestampIndex{};
+            mutable std::vector<u64> TimestampResults;
+            mutable std::vector<ProfilerTask> GPUProfilerData;
+            mutable std::vector<ProfilerTask> CPUProfilerData;
+
             vk::UniqueCommandPool GeneralCommandPool{};
             vk::CommandBuffer GeneralCommandBuffer{};
 
@@ -298,13 +317,13 @@ namespace Radiant
             vk::UniqueSemaphore ImageAvailableSemaphore{};
             vk::UniqueSemaphore RenderFinishedSemaphore{};
 
-            // Bindless resources pt. 1
+            // Bindless resources part1
             vk::UniqueDescriptorPool DescriptorPool{};
             vk::DescriptorSet DescriptorSet{};
         };
         std::array<FrameData, s_BufferedFrameCount> m_FrameData{};
 
-        // Bindless resources pt. 2
+        // Bindless resources part2
         vk::UniqueDescriptorSetLayout m_DescriptorSetLayout{};
         vk::UniquePipelineLayout m_PipelineLayout{};
 

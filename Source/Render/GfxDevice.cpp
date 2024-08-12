@@ -27,10 +27,13 @@ namespace Radiant
         auto vkFeatures12 = vk::PhysicalDeviceVulkan12Features()
                                 .setBufferDeviceAddress(vk::True)
                                 .setScalarBlockLayout(vk::True)
+#if !RENDER_FORCE_IGPU
                                 .setStoragePushConstant8(vk::True)
+#endif
                                 .setShaderInt8(vk::True)
                                 .setShaderFloat16(vk::True)
                                 .setTimelineSemaphore(vk::True)
+                                .setHostQueryReset(vk::True)
                                 .setDescriptorIndexing(vk::True)
                                 .setDescriptorBindingPartiallyBound(vk::True)
                                 .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
@@ -42,9 +45,11 @@ namespace Radiant
         paravozik  = &vkFeatures12.pNext;
 
         auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features()
-                                .setVariablePointers(vk::True)
-                                .setVariablePointersStorageBuffer(vk::True)
-                                .setStoragePushConstant16(vk::True);
+#if !RENDER_FORCE_IGPU
+                                .setStoragePushConstant16(vk::True)
+#endif
+                                .setVariablePointers(vk::True)                // NOTE: Fucking slang requires it
+                                .setVariablePointersStorageBuffer(vk::True);  // NOTE: Fucking slang requires it
 
         *paravozik = &vkFeatures11;
         paravozik  = &vkFeatures11.pNext;
@@ -53,7 +58,8 @@ namespace Radiant
                                                                           .setShaderInt16(vk::True)
                                                                           .setShaderInt64(vk::True)
                                                                           .setFillModeNonSolid(vk::True)
-                                                                          .setSamplerAnisotropy(vk::True);
+                                                                          .setSamplerAnisotropy(vk::True)
+                                                                          .setPipelineStatisticsQuery(vk::True);
         SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, requiredDeviceFeatures, &vkFeatures13);
 
         InitVMA(instance);
@@ -71,13 +77,13 @@ namespace Radiant
             const auto gpuProperties = gpu.getProperties();
             LOG_WARN("\t{}", gpuProperties.deviceName.data());
 
-            if (gpus.size() == 1 || s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
-                !s_bForceIGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+            if (gpus.size() == 1 || RENDER_FORCE_IGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu ||
+                !RENDER_FORCE_IGPU && gpuProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
             {
-                const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
+                RDNT_ASSERT(gpuProperties.limits.timestampPeriod != 0, "{} doesn't support timestamp queries!",
+                            gpuProperties.deviceName.data());
 
-                constexpr u32 NVidiaVendorID{0x10DE};
-                constexpr u32 AMDVendorID{0x1002};
+                const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
 
                 // [NVIDIA] called without pageable device local memory.
                 // Use pageableDeviceLocalMemory from VK_EXT_pageable_device_local_memory when it is available.
@@ -103,54 +109,6 @@ namespace Radiant
 
                     RDNT_ASSERT(bExtensionFound, "Device extension: {} not supported!", rde);
                 }
-
-                // Check if left structure is contained in second.
-                constexpr auto AreAllFlagsSet = [](const vk::PhysicalDeviceFeatures& lhs, const vk::PhysicalDeviceFeatures& rhs)
-                {
-                    return (!lhs.robustBufferAccess || rhs.robustBufferAccess) && (!lhs.fullDrawIndexUint32 || rhs.fullDrawIndexUint32) &&
-                           (!lhs.imageCubeArray || rhs.imageCubeArray) && (!lhs.independentBlend || rhs.independentBlend) &&
-                           (!lhs.geometryShader || rhs.geometryShader) && (!lhs.tessellationShader || rhs.tessellationShader) &&
-                           (!lhs.sampleRateShading || rhs.sampleRateShading) && (!lhs.dualSrcBlend || rhs.dualSrcBlend) &&
-                           (!lhs.logicOp || rhs.logicOp) && (!lhs.multiDrawIndirect || rhs.multiDrawIndirect) &&
-                           (!lhs.drawIndirectFirstInstance || rhs.drawIndirectFirstInstance) && (!lhs.depthClamp || rhs.depthClamp) &&
-                           (!lhs.depthBiasClamp || rhs.depthBiasClamp) && (!lhs.fillModeNonSolid || rhs.fillModeNonSolid) &&
-                           (!lhs.depthBounds || rhs.depthBounds) && (!lhs.wideLines || rhs.wideLines) &&
-                           (!lhs.largePoints || rhs.largePoints) && (!lhs.alphaToOne || rhs.alphaToOne) &&
-                           (!lhs.multiViewport || rhs.multiViewport) && (!lhs.samplerAnisotropy || rhs.samplerAnisotropy) &&
-                           (!lhs.textureCompressionETC2 || rhs.textureCompressionETC2) &&
-                           (!lhs.textureCompressionASTC_LDR || rhs.textureCompressionASTC_LDR) &&
-                           (!lhs.textureCompressionBC || rhs.textureCompressionBC) &&
-                           (!lhs.occlusionQueryPrecise || rhs.occlusionQueryPrecise) &&
-                           (!lhs.pipelineStatisticsQuery || rhs.pipelineStatisticsQuery) &&
-                           (!lhs.vertexPipelineStoresAndAtomics || rhs.vertexPipelineStoresAndAtomics) &&
-                           (!lhs.fragmentStoresAndAtomics || rhs.fragmentStoresAndAtomics) &&
-                           (!lhs.shaderTessellationAndGeometryPointSize || rhs.shaderTessellationAndGeometryPointSize) &&
-                           (!lhs.shaderImageGatherExtended || rhs.shaderImageGatherExtended) &&
-                           (!lhs.shaderStorageImageExtendedFormats || rhs.shaderStorageImageExtendedFormats) &&
-                           (!lhs.shaderStorageImageMultisample || rhs.shaderStorageImageMultisample) &&
-                           (!lhs.shaderStorageImageReadWithoutFormat || rhs.shaderStorageImageReadWithoutFormat) &&
-                           (!lhs.shaderStorageImageWriteWithoutFormat || rhs.shaderStorageImageWriteWithoutFormat) &&
-                           (!lhs.shaderUniformBufferArrayDynamicIndexing || rhs.shaderUniformBufferArrayDynamicIndexing) &&
-                           (!lhs.shaderSampledImageArrayDynamicIndexing || rhs.shaderSampledImageArrayDynamicIndexing) &&
-                           (!lhs.shaderStorageBufferArrayDynamicIndexing || rhs.shaderStorageBufferArrayDynamicIndexing) &&
-                           (!lhs.shaderStorageImageArrayDynamicIndexing || rhs.shaderStorageImageArrayDynamicIndexing) &&
-                           (!lhs.shaderClipDistance || rhs.shaderClipDistance) && (!lhs.shaderCullDistance || rhs.shaderCullDistance) &&
-                           (!lhs.shaderFloat64 || rhs.shaderFloat64) && (!lhs.shaderInt64 || rhs.shaderInt64) &&
-                           (!lhs.shaderInt16 || rhs.shaderInt16) && (!lhs.shaderResourceResidency || rhs.shaderResourceResidency) &&
-                           (!lhs.shaderResourceMinLod || rhs.shaderResourceMinLod) && (!lhs.sparseBinding || rhs.sparseBinding) &&
-                           (!lhs.sparseResidencyBuffer || rhs.sparseResidencyBuffer) &&
-                           (!lhs.sparseResidencyImage2D || rhs.sparseResidencyImage2D) &&
-                           (!lhs.sparseResidencyImage3D || rhs.sparseResidencyImage3D) &&
-                           (!lhs.sparseResidency2Samples || rhs.sparseResidency2Samples) &&
-                           (!lhs.sparseResidency4Samples || rhs.sparseResidency4Samples) &&
-                           (!lhs.sparseResidency8Samples || rhs.sparseResidency8Samples) &&
-                           (!lhs.sparseResidency16Samples || rhs.sparseResidency16Samples) &&
-                           (!lhs.sparseResidencyAliased || rhs.sparseResidencyAliased) &&
-                           (!lhs.variableMultisampleRate || rhs.variableMultisampleRate) && (!lhs.inheritedQueries || rhs.inheritedQueries);
-                };
-
-                RDNT_ASSERT(AreAllFlagsSet(requiredDeviceFeatures, gpu.getFeatures()),
-                            "Required device features flags aren't present in available device features!");
 
                 m_PhysicalDevice          = gpu;
                 m_GPUProperties           = gpuProperties;
@@ -209,9 +167,10 @@ namespace Radiant
             if (!m_GeneralQueue.QueueFamilyIndex.has_value() && (queueFlags & generalQueueFlags) == generalQueueFlags)
             {
                 m_GeneralQueue.QueueFamilyIndex = i;
+                RDNT_ASSERT(qfProperties[i].timestampValidBits != 0, "Queue Family [{}] doesn't support timestamp queries!", i);
 
-                if (!m_PresentQueue.QueueFamilyIndex.has_value() && m_PhysicalDevice.getSurfaceSupportKHR(i, *surface))
-                    m_PresentQueue.QueueFamilyIndex = i;
+                RDNT_ASSERT(m_PhysicalDevice.getSurfaceSupportKHR(i, *surface), "Dedicated present queue not supported right now!");
+                if (!m_PresentQueue.QueueFamilyIndex.has_value()) m_PresentQueue.QueueFamilyIndex = i;
 
                 continue;
             }
@@ -242,8 +201,12 @@ namespace Radiant
             {
                 LOG_INFO("Found Async-Compute queue at family [{}]", i);
                 m_ComputeQueue.QueueFamilyIndex = i;
+                RDNT_ASSERT(qfProperties[i].timestampValidBits != 0, "Queue Family [{}] doesn't support timestamp queries!", i);
             }
         }
+        RDNT_ASSERT(m_GeneralQueue.QueueFamilyIndex.has_value() && m_PresentQueue.QueueFamilyIndex.has_value() &&
+                        *m_GeneralQueue.QueueFamilyIndex == *m_PresentQueue.QueueFamilyIndex,
+                    "General Queue Family Index should contain present support!");
         RDNT_ASSERT(m_GeneralQueue.QueueFamilyIndex.has_value(), "Failed to find General Queue Family Index!");
         RDNT_ASSERT(m_PresentQueue.QueueFamilyIndex.has_value(), "Failed to find Present Queue Family Index!");
         RDNT_ASSERT(m_TransferQueue.QueueFamilyIndex.has_value(), "Failed to find Dedicated-Transfer Queue Family Index!");
@@ -326,7 +289,7 @@ namespace Radiant
             LOG_INFO("Found pipeline cache {}!", bPipelineCacheValid ? "valid" : "invalid");
 
             // NOTE: Currently on my AMD iGPU loading pipeline caches throws exception from (bcryptprimitives.dll)
-            if (bPipelineCacheValid && !s_bForceIGPU)
+            if (bPipelineCacheValid && !RENDER_FORCE_IGPU)
                 pipelineCacheCI.setInitialDataSize(pipelineCacheBlob.size() * pipelineCacheBlob[0])
                     .setPInitialData(pipelineCacheBlob.data());
         }
@@ -408,7 +371,7 @@ namespace Radiant
         for (const auto queueFrameNumber : queuesToRemove)
             m_DeletionQueuesPerFrame.erase(queueFrameNumber);
 
-        //       if (!queuesToRemove.empty()) LOG_TRACE("{}: freed {} deletion queues.", __FUNCTION__, queuesToRemove.size());
+        if (!queuesToRemove.empty()) LOG_TRACE("{}: freed {} deletion queues.", __FUNCTION__, queuesToRemove.size());
     }
 
     void GfxDevice::Shutdown() noexcept

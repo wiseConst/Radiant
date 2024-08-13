@@ -51,7 +51,6 @@ static const float g_SampleBias = 0.0285f;
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
-    return 1.0f;
     const uint2 rotationUV = uint2(fsInput.uv * u_PC.CameraData->FullResolution * 0.25f) % 4;
     const float3 noise = normalize(g_RotationVectors[rotationUV.y * 4 + rotationUV.x] * 2.0f - 1.0f);
     
@@ -59,7 +58,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     const float3 N = normalize(cross(ddx(viewPos), ddy(viewPos)));
     const float3 T = normalize(noise - N * dot(N, noise));
     const float3 B = cross(N, T);
-    const float3x3 TBN = float3x3(T, B, N);
+    const float3x3 TBN = transpose(float3x3(T, B, N));
 
     float ao = 0.0f;
     [unroll]
@@ -71,7 +70,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
         offsetUV = mul(u_PC.CameraData->ProjectionMatrix, offsetUV);
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;
         
-        if (Shaders::is_saturated(offsetUV.xy)) continue;
+       // if (Shaders::is_saturated(offsetUV.xy)) continue;
 
         const float sampledDepth = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(offsetUV.xy).r, u_PC.CameraData->DepthUnpackConsts);
         const float rangeCheck = smoothstep(0.0f, 1.0f, g_SampleRadius / abs(viewPos.z - sampledDepth));

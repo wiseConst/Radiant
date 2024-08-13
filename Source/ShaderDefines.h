@@ -17,7 +17,7 @@ namespace Radiant
 #endif
 
 // NOTE: AMD iGPU doesn't support storagePushConstant8/16, but I wanna preserve them on my NV dGPU so I can fastly transfer quantized data.
-#define RENDER_FORCE_IGPU 1
+#define RENDER_FORCE_IGPU 0
 
     struct VertexPosition
     {

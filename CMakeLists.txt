@@ -69,7 +69,7 @@ endif()
 # ============= ThirdParty =============
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.1.29)
+set(SLANG_VERSION 2024.9.1)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")

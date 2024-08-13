@@ -159,10 +159,10 @@ namespace Radiant
             m_PBRPipeline->HotReload();
             m_LightClustersBuildPipeline->HotReload();
             m_LightClustersAssignmentPipeline->HotReload();
-            // m_DepthPrePassPipeline->HotReload();
-            // m_SSSPipeline->HotReload();
-            // m_SSAOPipeline->HotReload();
-            // m_SSAOBoxBlurPipeline->HotReload();
+            m_DepthPrePassPipeline->HotReload();
+            m_SSSPipeline->HotReload();
+            m_SSAOPipeline->HotReload();
+            m_SSAOBoxBlurPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -434,21 +434,18 @@ namespace Radiant
         {
             RGResourceID CameraBuffer;
             RGResourceID DepthTexture;
-            RGResourceID SSAOTexture;
         } ssaoPassData = {};
         m_RenderGraph->AddPass(
             "SSAOPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                scheduler.CreateTexture(
-                    ResourceNames::SSAOTexture,
-                    GfxTextureDescription{.Type       = vk::ImageType::e2D,
-                                          .Dimensions = glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                          .Format{vk::Format::eR8Unorm},
-                                          .UsageFlags = vk::ImageUsageFlagBits::eColorAttachment});
-                ssaoPassData.SSAOTexture =
-                    scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                                vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+                scheduler.CreateTexture(ResourceNames::SSAOTexture,
+                                        GfxTextureDescription(vk::ImageType::e2D,
+                                                              glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                              vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
+
+                scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                            vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
                 ssaoPassData.DepthTexture =
                     scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
                 ssaoPassData.CameraBuffer =
@@ -487,12 +484,10 @@ namespace Radiant
             "SSAOBoxBlurPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                scheduler.CreateTexture(
-                    ResourceNames::SSAOTextureBlurred,
-                    GfxTextureDescription{.Type       = vk::ImageType::e2D,
-                                          .Dimensions = glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                          .Format{vk::Format::eR8Unorm},
-                                          .UsageFlags = vk::ImageUsageFlagBits::eColorAttachment});
+                scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
+                                        GfxTextureDescription(vk::ImageType::e2D,
+                                                              glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                              vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
 
                 scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                             vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
@@ -560,8 +555,8 @@ namespace Radiant
                 // mainPassData.SSSTexture = scheduler.ReadTexture(ResourceNames::SSSTexture,
                 // EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
 
-                // mainPassData.SSAOTexture = scheduler.ReadTexture(ResourceNames::SSAOTextureBlurred,
-                // EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                /*mainPassData.SSAOTexture =
+                    scheduler.ReadTexture(ResourceNames::SSAOTextureBlurred, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);*/
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -573,7 +568,7 @@ namespace Radiant
                 pipelineStateCache.Bind(cmd, m_PBRPipeline.get());
 
                 // auto& sssTexture  = scheduler.GetTexture(mainPassData.SSSTexture);
-                // auto& ssaoTexture = scheduler.GetTexture(mainPassData.SSAOTexture);
+                // auto& ssaoTexture            = scheduler.GetTexture(mainPassData.SSAOTexture);
                 auto& cameraUBO              = scheduler.GetBuffer(mainPassData.CameraBuffer);
                 auto& lightUBO               = scheduler.GetBuffer(mainPassData.LightBuffer);
                 auto& lightClusterListBuffer = scheduler.GetBuffer(mainPassData.LightClusterListBuffer);
@@ -623,7 +618,7 @@ namespace Radiant
                     pc.VtxAttributes = (const VertexAttribute*)ro.VertexAttributeBuffer->GetBDA();
                     pc.MaterialData  = (const Shaders::GLTFMaterial*)ro.MaterialBuffer->GetBDA();
                     // pc.SSAOTextureID = ssaoTexture->GetBindlessTextureID();
-                    // pc.SSSTextureID  = sssTexture->GetBindlessTextureID();
+                    //  pc.SSSTextureID  = sssTexture->GetBindlessTextureID();
                     pc.LightData        = (const Shaders::LightData*)lightUBO->GetBDA();
                     pc.LightClusterList = (const Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
 

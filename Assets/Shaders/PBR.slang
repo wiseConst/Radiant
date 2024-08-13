@@ -8,7 +8,8 @@ struct FragmentStageInput
     float2 UV;
     float3 FragPosWS;
     float3 Normal;
-    float3x3 TBN;
+    float3 Tangent;
+    float3 Bitangent;
 };
 
 struct VertexStageOutput
@@ -58,12 +59,14 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
 #else
     const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation);
 #endif
-    const float3 N = normalize( mul(normalMatrix,  Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
-    float3 T = normalize( mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
-    T = normalize(T - dot(T, N) * N);
-    const float3 B = float(u_PC.VtxAttributes[vertexID].TSign) * cross(N, T);
-    output.FSInput.Normal = N;
-    output.FSInput.TBN = float3x3(T, B, N);
+
+    output.FSInput.Normal = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
+    
+    float3 T = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
+    T = normalize(T - dot(T, output.FSInput.Normal) * output.FSInput.Normal);
+    output.FSInput.Tangent = T;
+
+    output.FSInput.Bitangent = float(u_PC.VtxAttributes[vertexID].TSign) * cross(output.FSInput.Normal, T);
 
     return output;
 }
@@ -97,12 +100,16 @@ float3 EvaluateFresnel(const float HdotV, const float3 F0)
     return F0 + (F90 - F0) * pow(1.0f - HdotV, 5.0f);
 }
 
-float3 EvaluateNormalMap(const float3x3 TBN, const float2 uv, const Shaders::GLTFMaterial* materialData)
+float3 EvaluateNormalMap(const float3 T, const float3 B, const float3 N, const float2 uv, const Shaders::GLTFMaterial *materialData)
 {
-    const float3 N = (Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale;
-    return normalize(mul(TBN, N));
+    if (materialData->NormalTextureID != 0)
+    {
+        const float3 sampledN = (Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale;
+        const float3x3 TBN = transpose(float3x3(T, B, N)); // NOTE: slang treats matrices as rowXcol, but we target colXrow!
+        return normalize(mul(TBN, sampledN));
+    }
+    return normalize(N);
 }
-
 
 // NOTE: Input: normalized vectors V, L, N.
 float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 L, const float3 N)
@@ -171,7 +178,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     float3 irradiance = ambient + emissive;
 
     const float3 V = normalize(u_PC.CameraData->Position - fsInput.FragPosWS);
-    const float3 N = materialData->NormalTextureID != 0 ? EvaluateNormalMap(fsInput.TBN, fsInput.UV, materialData) : normalize(fsInput.Normal);
+    const float3 N = EvaluateNormalMap(fsInput.Tangent, fsInput.Bitangent, fsInput.Normal, fsInput.UV, materialData);
     const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
     const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
 

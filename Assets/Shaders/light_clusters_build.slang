@@ -1,12 +1,12 @@
-// build_light_clusters.slang
+// light_clusters_build.slang
 
 #include "../../Source/ShaderDefines.h"
+#include "light_clusters_defines.hpp"
 
 struct PushConstantBlock
 {
     const Shaders::CameraData *CameraData;
     AABB *Clusters;
-    uint3 WorkGroupsNum;
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
@@ -18,44 +18,42 @@ float3 IntersectSegmentPlane(const float3 startPoint, const float3 endPoint, con
     return startPoint + t * direction; // NOTE: This doesn't check if 't' is in range [0, 1]!
 }
 
+static constexpr float3 s_INV_LIGHT_CLUSTER_SUBDIVISIONS = 1.0f / Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS;
+
 // NOTES:
+// 0) Whole compute shader targets view space where Z is negative.
 // 1) Working in reversed Z space(so near = 1.0f, and far = 0.0f).
-// 2) For now!!! We dispatch 1 workgroup that has only 1 fucking thread that computes our froxel
-// 3) For now!!! u_PC.WorkGroupsNum is the same as Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS
+// 2) Impl details: imagine subdiv scheme 16x8x24 => 3072 clusters, we have to use compute capabilities smarter,
+// let's assume workgroup local size(4, 4, 4), it means we have to dispatch
+// 3072/(4*4*4) = 48 workgroups instead of 3072(in case 1 thread of workgroup builds cluster)
+
 
 [shader("compute")]
-//[numthreads(LIGHT_CLUSTER_SUBDIVISON_SIZE_X, LIGHT_CLUSTER_SUBDIVISON_SIZE_Y, LIGHT_CLUSTER_SUBDIVISON_SIZE_Z)]
-[numthreads(1, 1, 1)]
-void computeMain(uint3 DTid: SV_DispatchThreadID, uint3 Gid : SV_GroupID)
+[numthreads(LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE)]
+void computeMain(uint3 DTid: SV_DispatchThreadID)
 {
-    //const uint lid = WaveGetLaneIndex();
+    const uint froxelIndex = DTid.x + DTid.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x + DTid.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x;
+    if (froxelIndex >= Shaders::s_LIGHT_CLUSTER_COUNT) return;
+    
+    // Calculate the min and max points of a tile in screen space(not kind of screen space tbh).
+    const float2 minPosSS = s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * DTid.xy;
+    const float2 maxPosSS = s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * (DTid.xy + 1) ;
 
-    const float3 viewPos = float3(0.0f);
-
-    // How many pixels in XY does a froxel use
-    const float2 froxelSize = u_PC.CameraData->FullResolution / Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.xy;
-
-    // calculate the min and max points of a tile in screen space
-    const float2 minPosSS = froxelSize * Gid.xy * u_PC.CameraData->InvFullResolution;
-    const float2 maxPosSS = froxelSize * (Gid.xy + 1) * u_PC.CameraData->InvFullResolution;
-
-    // convert them to view space sitting on the near plane
+    // Convert them to view space sitting on the near plane.
     const float3 minPosVS = Shaders::ScreenSpaceToView(minPosSS, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
     const float3 maxPosVS = Shaders::ScreenSpaceToView(maxPosSS, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;
 
-    const float froxelNearVS = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)Gid.z / (float)u_PC.WorkGroupsNum.z);
+    const float froxelNearVS = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)DTid.z * s_INV_LIGHT_CLUSTER_SUBDIVISIONS.z);
     const Plane nearPlane = Plane(float3(0.0f, 0.0f, 1.0f), froxelNearVS);
- 
-    const float froxelFarVS  = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)(Gid.z + 1) / (float)u_PC.WorkGroupsNum.z);
+
+    const float froxelFarVS = -u_PC.CameraData.zNearFar.x * pow(u_PC.CameraData.zNearFar.y / u_PC.CameraData.zNearFar.x, (float)(DTid.z + 1) * s_INV_LIGHT_CLUSTER_SUBDIVISIONS.z);
     const Plane farPlane = Plane(float3(0.0f, 0.0f, 1.0f), froxelFarVS);
-    
-    // Find the 4 intersection points from a tile's min/max points to this cluster's near and far planes
+
+    // Find the 4 intersection points from a tile's min/max points to this cluster's near and far planes.
+    const float3 viewPos = float3(0.0f);
     const float3 minPointNear = IntersectSegmentPlane(viewPos, minPosVS, nearPlane);
     const float3 minPointFar  = IntersectSegmentPlane(viewPos, minPosVS, farPlane);
     const float3 maxPointNear = IntersectSegmentPlane(viewPos, maxPosVS, nearPlane);
-    const float3 maxPointFar  = IntersectSegmentPlane(viewPos, maxPosVS, farPlane);
-
-    // const uint froxelIndex = Gid.z * u_PC.WorkGroupsNum.x * u_PC.WorkGroupsNum.y + Gid.y * u_PC.WorkGroupsNum.x + Gid.x;
-    const uint froxelIndex = Gid.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y + Gid.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x + Gid.x;
+    const float3 maxPointFar = IntersectSegmentPlane(viewPos, maxPosVS, farPlane);
     u_PC.Clusters[froxelIndex] = AABB(min(min(maxPointNear, maxPointFar), min(minPointNear, minPointFar)), max(max(minPointNear, minPointFar), max(maxPointNear, maxPointFar)));
 }

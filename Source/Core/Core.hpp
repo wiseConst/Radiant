@@ -47,6 +47,8 @@ namespace Radiant
 
     class ThreadPool final : private Uncopyable, private Unmovable
     {
+        static constexpr bool s_bSetCPUCoreAffinity = true;
+
       public:
         ThreadPool() noexcept
         {
@@ -90,6 +92,9 @@ namespace Radiant
 
         void Init() noexcept
         {
+            // NOTE: Currently thread affinity assigning highly based on that CPU phys cores = CPU logic cores / 2, need to improve further.
+            u32 threadIndex = 0;
+
             LOG_TRACE("Created threadpool with {} workers.", m_Workers.size());
             std::ranges::for_each(m_Workers,
                                   [&](auto& worker)
@@ -112,6 +117,32 @@ namespace Radiant
                                                   func();
                                               }
                                           });
+
+#if defined(RDNT_WINDOWS)
+                                      // Attaching thread to specific CPU
+                                      const u32 cpuCoreIndex       = threadIndex / 2;
+                                      const HANDLE nativeHandle    = worker.native_handle();
+                                      const DWORD_PTR affinityMask = 1ull << cpuCoreIndex;
+                                      RDNT_ASSERT(SetThreadAffinityMask(nativeHandle, affinityMask) > 0,
+                                                  "Failed to attach the thread to {} CPU core!", cpuCoreIndex);
+
+                                      // Setting high priority to the thread.
+                                      // By default, each thread we create is THREAD_PRIORITY_DEFAULT.
+                                      // Modifying this could help threads not be overtaken by the operating system by lesser priority
+                                      // threads. I've found no way to increase performance with this yet, only decrease it.
+                                      RDNT_ASSERT(SetThreadPriority(nativeHandle, THREAD_PRIORITY_HIGHEST) != 0,
+                                                  "Failed to set thread priority to THREAD_PRIORITY_HIGHEST");
+
+                                      std::wstringstream wss;
+                                      wss << "Worker_Thread_" << threadIndex << "_Core_" << cpuCoreIndex;
+                                      RDNT_ASSERT(SUCCEEDED(SetThreadDescription(nativeHandle, wss.str().data())),
+                                                  "Failed to set name to thread {}!", threadIndex);
+
+#else
+#error Implement thread affinity setup in other systems!
+#endif
+
+                                      ++threadIndex;
                                   });
         }
     };

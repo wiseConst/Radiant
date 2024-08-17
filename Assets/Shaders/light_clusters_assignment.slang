@@ -1,6 +1,7 @@
-// cull_light_clusters.slang
+// light_clusters_assignment.slang
 
 #include "../../Source/ShaderDefines.h"
+#include "light_clusters_defines.hpp"
 
 struct PushConstantBlock
 {
@@ -18,19 +19,18 @@ bool TestSphereAABB(Sphere sphere, AABB aabb)
     return dot(dist, dist) <= sphere.Radius * sphere.Radius;
 }
 
-#define LIGHT_CLUSTER_CULL_WG_SIZE 128
-
 [shader("compute")]
-[numthreads(LIGHT_CLUSTER_CULL_WG_SIZE, 1, 1)]
-void computeMain(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+[numthreads(LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE, 1, 1)]
+void computeMain(uint3 DTid : SV_DispatchThreadID)
 {
-    const uint froxelIndex = Gid.x * LIGHT_CLUSTER_CULL_WG_SIZE + GTid.x;
+    const uint froxelIndex = DTid.x;
     u_PC.LightClusterList[froxelIndex].PointLightCount = 0;
 
     for (uint32_t i = 0; i < u_PC.LightData->PointLightCount; ++i)
     {
         Sphere plWS = u_PC.LightData->PointLights[i].sphere;
-        Sphere plVS = Sphere(mul(u_PC.CameraData->ViewMatrix, float4(plWS.Origin, 1.0f)).xyz, plWS.Radius);
+        const float3 plPositionVS = mul(u_PC.CameraData->ViewMatrix, float4(plWS.Origin, 1.0f)).xyz;
+        Sphere plVS = Sphere(plPositionVS, plWS.Radius);
         if (!TestSphereAABB(plVS, u_PC.Clusters[froxelIndex])) continue;
 
         u_PC.LightClusterList[froxelIndex].PointLightIndices[u_PC.LightClusterList[froxelIndex].PointLightCount] = i;

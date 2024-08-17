@@ -92,18 +92,12 @@ namespace Radiant
             float4(1.0f, 1.0f, 1.0f, 1.0f)   // White
         };
 
-#define MAX_POINT_LIGHT_COUNT 100
+#define MAX_POINT_LIGHT_COUNT 512
         struct LightData
         {
             DirectionalLight Sun;
             uint32_t PointLightCount;
             PointLight PointLights[MAX_POINT_LIGHT_COUNT];
-        };
-
-        struct LightClusterList
-        {
-            uint32_t PointLightCount;
-            uint32_t PointLightIndices[MAX_POINT_LIGHT_COUNT];
         };
 
         struct CameraData
@@ -291,14 +285,6 @@ namespace Radiant
     }
 
 #endif
-
-        // NOTE: Since my AMD iGPU has workgroup local size limits(1024), now each thread computes 3 clusters.
-#define LIGHT_CLUSTER_SUBDIVISON_SIZE_X 16u
-#define LIGHT_CLUSTER_SUBDIVISON_SIZE_Y 8u
-#define LIGHT_CLUSTER_SUBDIVISON_SIZE_Z 8u
-
-        // Clustered Shading, 3456 clusters(16x9x24), depth slices logarithmic, DOOM2016 has 16x8x24
-        static constexpr uint3 s_LIGHT_CLUSTER_SUBDIVISIONS = uint3(16, 9, 24);
 
     }  // namespace Shaders
 

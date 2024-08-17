@@ -180,11 +180,18 @@ namespace Radiant
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
         {
+            auto& cpuTask     = m_FrameData[m_CurrentFrameIndex].CPUProfilerData.emplace_back();
+            cpuTask.StartTime = Timer::GetElapsedSecondsFromNow(m_FrameData[m_CurrentFrameIndex].FrameStartTime);
+            cpuTask.Name      = "SwapchainPresent";
+            cpuTask.Color     = Colors::ColorArray[0];
+
             const auto result = m_Device->GetPresentQueue().Handle.presentKHR(
                 vk::PresentInfoKHR()
                     .setImageIndices(m_CurrentImageIndex)
                     .setSwapchains(*m_Swapchain)
                     .setWaitSemaphores(*m_FrameData[m_CurrentFrameIndex].RenderFinishedSemaphore));
+
+            cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[m_CurrentFrameIndex].FrameStartTime);
 
             if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
                 m_bSwapchainNeedsResize = true;

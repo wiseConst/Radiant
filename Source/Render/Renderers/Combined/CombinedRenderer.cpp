@@ -3,12 +3,14 @@
 
 #include <Core/Application.hpp>
 #include <Core/Window/GLFWWindow.hpp>
-#include <GLFW/glfw3.h>
+
+#include <light_clusters_defines.hpp>
 
 namespace Radiant
 {
     namespace ResourceNames
     {
+        const std::string LightBuffer{"Resource_Light_Buffer"};
         const std::string CameraBuffer{"Resource_Camera_Buffer"};
         const std::string GBufferDepth{"Resource_GBuffer_Depth"};
 
@@ -21,7 +23,6 @@ namespace Radiant
         const std::string LightClusterBuffer{"Resource_Light_Cluster_Buffer"};  // Light cluster buffer after build stage
         const std::string LightClusterListBuffer{
             "Resource_Light_Cluster_List_Buffer"};  // Light cluster list filled with light indices after cluster assignment stage
-        const std::string LightBuffer{"Resource_Light_Buffer"};
 
     }  // namespace ResourceNames
 
@@ -32,7 +33,7 @@ namespace Radiant
         m_Scene      = MakeUnique<Scene>("CombinedRendererTest");
 
         LOG_INFO("Light clusters subdivision Z slices: {}", Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
-        for (uint32_t slice{}; slice < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++slice)
+        for (u32 slice{}; slice < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++slice)
         {
             const auto sd = m_MainCamera->GetShaderData();
             const auto ZSliceNear =
@@ -159,10 +160,10 @@ namespace Radiant
             m_PBRPipeline->HotReload();
             m_LightClustersBuildPipeline->HotReload();
             m_LightClustersAssignmentPipeline->HotReload();
-            m_DepthPrePassPipeline->HotReload();
-            m_SSSPipeline->HotReload();
-            m_SSAOPipeline->HotReload();
-            m_SSAOBoxBlurPipeline->HotReload();
+            // m_DepthPrePassPipeline->HotReload();
+            // m_SSSPipeline->HotReload();
+            // m_SSAOPipeline->HotReload();
+            // m_SSAOBoxBlurPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -285,15 +286,15 @@ namespace Radiant
             "LightClustersBuildPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
             [&](RenderGraphResourceScheduler& scheduler)
             {
+                constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_COUNT;
+                scheduler.CreateBuffer(ResourceNames::LightClusterBuffer,
+                                       GfxBufferDescription(lcbCapacity, sizeof(AABB), vk::BufferUsageFlagBits::eStorageBuffer,
+                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
+
                 lcbPassData.CameraBuffer =
                     scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
                                                                           EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
 
-                constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x *
-                                            Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
-                scheduler.CreateBuffer(ResourceNames::LightClusterBuffer,
-                                       GfxBufferDescription(lcbCapacity, sizeof(AABB), vk::BufferUsageFlagBits::eStorageBuffer,
-                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
                 lcbPassData.LightClusterBuffer =
                     scheduler.WriteBuffer(ResourceNames::LightClusterBuffer, EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
                                                                                  EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
@@ -307,17 +308,17 @@ namespace Radiant
                 {
                     const Shaders::CameraData* CameraData;
                     AABB* Clusters;
-                    uint3 WorkGroupsNum;
                 } pc = {};
 
                 auto& cameraUBO      = scheduler.GetBuffer(lcbPassData.CameraBuffer);
                 pc.CameraData        = (const Shaders::CameraData*)cameraUBO->GetBDA();
                 auto& lightClusterSB = scheduler.GetBuffer(lcbPassData.LightClusterBuffer);
                 pc.Clusters          = (AABB*)lightClusterSB->GetBDA();
-                pc.WorkGroupsNum     = Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS;
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
-                cmd.dispatch(pc.WorkGroupsNum.x, pc.WorkGroupsNum.y, pc.WorkGroupsNum.z);
+                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE));
             });
 
         struct LightClustersAssignmentPassData
@@ -331,8 +332,7 @@ namespace Radiant
             "LightClustersAssignmentPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                constexpr u64 lcaCapacity = sizeof(Shaders::LightClusterList) * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x *
-                                            Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
+                constexpr u64 lcaCapacity = sizeof(Shaders::LightClusterList) * Shaders::s_LIGHT_CLUSTER_COUNT;
                 scheduler.CreateBuffer(ResourceNames::LightClusterListBuffer,
                                        GfxBufferDescription(lcaCapacity, sizeof(Shaders::LightClusterList),
                                                             vk::BufferUsageFlagBits::eStorageBuffer,
@@ -340,7 +340,6 @@ namespace Radiant
                 lcaPassData.LightClusterListBuffer = scheduler.WriteBuffer(ResourceNames::LightClusterListBuffer,
                                                                            EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
                                                                                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
-
                 lcaPassData.CameraBuffer =
                     scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
                                                                           EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
@@ -374,9 +373,8 @@ namespace Radiant
                 pc.LightClusterList          = (Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
-                constexpr u32 clusterCount = Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y *
-                                             Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z;
-                cmd.dispatch(clusterCount / 128, 1, 1);
+
+                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (float)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
             });
 
 #if 0
@@ -650,6 +648,10 @@ namespace Radiant
                 {
                     const auto& io = ImGui::GetIO();
                     ImGui::Text("Application average [%.3f] ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+
+                    ImGui::Separator();
+                    ImGui::Text("Renderer: %s", m_GfxContext->GetDevice()->GetGPUProperties().deviceName);
+                    ImGui::Separator();
 
                     if (ImGui::TreeNodeEx("RenderGraph Statistics", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                     {

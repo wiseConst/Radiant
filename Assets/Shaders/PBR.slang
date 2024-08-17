@@ -1,6 +1,7 @@
 // PBR.slang
 
 #include "../../Source/ShaderDefines.h"
+#include "light_clusters_defines.hpp"
 
 struct FragmentStageInput
 { 
@@ -129,14 +130,14 @@ float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 a
     return (kD * albedo / Shaders::s_PI + DFG / denom) * lightColor * NdotL;
 }
 
-#define USE_LIGHT_CLUSTERS 1
 #define VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION 0
 #define VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP 0
 
 #ifdef VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
 float4 Heatmap(uint lightCount)
 {
-    const float3 mapTex[] = {
+    static const uint heatmapSize = 6;
+    const float3 heatmap[heatmapSize] = {
         float3(0, 0, 0),
 		float3(0, 0, 1),
 		float3(0, 1, 1),
@@ -144,14 +145,21 @@ float4 Heatmap(uint lightCount)
 		float3(1, 1, 0),
 		float3(1, 0, 0),
     };
-    const uint mapTexLen = 5;
     const uint maxHeat = 50;
-    const float l = clamp(float(lightCount) / maxHeat, 0.0f, 1.0f) * mapTexLen;
-    const float3 a = mapTex[int(floor(l))];
-    const float3 b = mapTex[int(ceil(l))];
+    const float l = saturate(float(lightCount) / maxHeat) * (heatmapSize - 1);
+    const float3 a = heatmap[int(floor(l))];
+    const float3 b = heatmap[int(ceil(l))];
     return float4(lerp(a, b, l - floor(l)), 1.f);
 }
 #endif
+
+uint GetLightClusterIndex(const float2 fullResolution, const uint3 lightClusterSubdivisions, const uint slice, const float2 fragCoord)
+{
+    // Locating which cluster this fragment is part of.
+    const float2 froxelSize = fullResolution / (float2)lightClusterSubdivisions.xy;
+    const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
+    return froxelID.x + froxelID.y * lightClusterSubdivisions.x + froxelID.z * lightClusterSubdivisions.x * lightClusterSubdivisions.y;
+}
 
 [shader("fragment")]
 float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragCoord : SV_Position) : SV_Target
@@ -184,21 +192,11 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
 
     irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, normalize(u_PC.LightData.Sun.Direction), N);
 
-    // Locating which cluster this fragment is part of.
-    const float2 froxelSize = u_PC.CameraData.FullResolution / (float2)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.xy;
-    const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
-    const uint froxelIndex = froxelID.x + (froxelID.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x) + (froxelID.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y);
+    const uint froxelIndex = GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
 
-
-    #if USE_LIGHT_CLUSTERS
     for (uint k = 0; k < u_PC.LightClusterList[froxelIndex].PointLightCount; ++k)
     {
         PointLight pl = u_PC.LightData->PointLights[u_PC.LightClusterList[froxelIndex].PointLightIndices[k]];
-    #else
-    for (uint k = 0; k < u_PC.LightData->PointLightCount; ++k)
-    {
-        PointLight pl = u_PC.LightData->PointLights[k];
-    #endif   
         const float lightToFragDistance = length(pl.sphere.Origin - fsInput.FragPosWS);
         const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
         const float3 L = normalize(pl.sphere.Origin - fsInput.FragPosWS);
@@ -210,7 +208,17 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     irradiance.rgb = Shaders::Linear2sRGB(float4(irradiance.rgb, 1.0f)).xyz;
 
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
-    return lerp(Heatmap(u_PC.LightClusterList[froxelIndex].PointLightCount), float4(irradiance, albedo.a), 0.3f);
+    uint heatmapPointLightCount = 0;
+
+#define COMPUTE_POINT_LIGHTS_ALONG_ALL_DEPTH_SLICES 0
+#if COMPUTE_POINT_LIGHTS_ALONG_ALL_DEPTH_SLICES
+    for (uint sliceIndex = 0; sliceIndex < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++sliceIndex)
+        heatmapPointLightCount += u_PC.LightClusterList[GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, sliceIndex, fragCoord.xy)].PointLightCount;
+#else
+    heatmapPointLightCount += u_PC.LightClusterList[froxelIndex].PointLightCount;
+#endif
+
+    return lerp(Heatmap(heatmapPointLightCount), float4(irradiance, albedo.a), 0.3f);
 #endif
 
     if (albedo.a < materialData->AlphaCutoff) discard;

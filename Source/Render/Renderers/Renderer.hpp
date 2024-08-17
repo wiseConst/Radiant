@@ -8,11 +8,12 @@
 
 #include <Render/Renderers/Common/ImGuiRenderer.hpp>
 
+#include <Core/CoreTypes.hpp>
 #include <Scene/Scene.hpp>
+#include <Scene/Mesh.hpp>
 
 // NOTE: Used only for input mappings.
-#include <Core/CoreTypes.hpp>
-#include <Scene/Mesh.hpp>
+#include <GLFW/glfw3.h>
 
 namespace Radiant
 {

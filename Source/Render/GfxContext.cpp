@@ -425,7 +425,7 @@ namespace Radiant
 
             auto stagingBuffer = MakeUnique<GfxBuffer>(m_Device, GfxBufferDescription(sizeof(whiteTextureData), sizeof(whiteTextureData),
                                                                                       vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                      EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
+                                                                                      EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
 
             stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
 
@@ -556,9 +556,9 @@ namespace Radiant
             swapchainCI.setOldSwapchain(*oldSwapchain);
         }
 
-        m_Swapchain = m_Device->GetLogicalDevice()->createSwapchainKHRUnique(swapchainCI);
-
+        m_Swapchain       = m_Device->GetLogicalDevice()->createSwapchainKHRUnique(swapchainCI);
         m_SwapchainImages = m_Device->GetLogicalDevice()->getSwapchainImagesKHR(*m_Swapchain);
+
         m_SwapchainImageViews.reserve(m_SwapchainImages.size());
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, imageFormat, {},
                                                     {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});

@@ -13,6 +13,7 @@ namespace Radiant
         const std::string LightBuffer{"Resource_Light_Buffer"};
         const std::string CameraBuffer{"Resource_Camera_Buffer"};
         const std::string GBufferDepth{"Resource_GBuffer_Depth"};
+        const std::string FinalPassTexture{"Resource_Final_Texture"};
 
         const std::string GBufferAlbedo{"Resource_GBuffer_Albedo"};
 
@@ -96,6 +97,19 @@ namespace Radiant
                 .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ALPHA}};
             GfxPipelineDescription pipelineDesc = {.DebugName = "PBR", .PipelineOptions = gpo, .Shader = pbrShader};
             m_PBRPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+        }
+
+        {
+            auto finalPassShader =
+                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/final.slang"});
+            GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eA2B10G10R10UnormPack32},
+                                                   .CullMode{vk::CullModeFlagBits::eNone},
+                                                   .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                   .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                   .PolygonMode{vk::PolygonMode::eFill}};
+            GfxPipelineDescription pipelineDesc = {.DebugName = "FinalPass", .PipelineOptions = gpo, .Shader = finalPassShader};
+            m_FinalPassPipeline =
+                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
         }
 
         {
@@ -200,17 +214,17 @@ namespace Radiant
                 scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                             vk::ClearDepthStencilValue().setDepth(0.0f));
 
-                scheduler.CreateBuffer(
-                    ResourceNames::CameraBuffer,
-                    GfxBufferDescription(sizeof(Shaders::CameraData), sizeof(Shaders::CameraData), vk::BufferUsageFlagBits::eUniformBuffer,
-                                         EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE));
+                scheduler.CreateBuffer(ResourceNames::CameraBuffer,
+                                       GfxBufferDescription(sizeof(Shaders::CameraData), sizeof(Shaders::CameraData),
+                                                            vk::BufferUsageFlagBits::eUniformBuffer,
+                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR));
                 depthPrePassData.CameraBuffer =
                     scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
 
-                scheduler.CreateBuffer(
-                    ResourceNames::LightBuffer,
-                    GfxBufferDescription(sizeof(Shaders::LightData), sizeof(Shaders::LightData), vk::BufferUsageFlagBits::eUniformBuffer,
-                                         EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE));
+                scheduler.CreateBuffer(ResourceNames::LightBuffer,
+                                       GfxBufferDescription(sizeof(Shaders::LightData), sizeof(Shaders::LightData),
+                                                            vk::BufferUsageFlagBits::eUniformBuffer,
+                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR));
 
                 depthPrePassData.LightBuffer =
                     scheduler.WriteBuffer(ResourceNames::LightBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
@@ -529,11 +543,10 @@ namespace Radiant
             {
                 mainPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceState::RESOURCE_STATE_DEPTH_READ);
 
-                scheduler.CreateTexture(
-                    ResourceNames::GBufferAlbedo,
-                    GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                          vk::Format::eR16G16B16A16Sfloat,
-                                          vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc));
+                scheduler.CreateTexture(ResourceNames::GBufferAlbedo,
+                                        GfxTextureDescription(vk::ImageType::e2D,
+                                                              glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                              vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment));
 
                 scheduler.WriteRenderTarget(ResourceNames::GBufferAlbedo, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                             vk::ClearColorValue().setFloat32({1.0f, 0.5f, 0.0f, 1.0f}));
@@ -632,11 +645,50 @@ namespace Radiant
                 }
             });
 
+        struct FinalPassData
+        {
+            RGResourceID MainPassTexture;
+        } finalPassData;
+        m_RenderGraph->AddPass(
+            "FinalPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            [&](RenderGraphResourceScheduler& scheduler)
+            {
+                finalPassData.MainPassTexture =
+                    scheduler.ReadTexture(ResourceNames::GBufferAlbedo, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+
+                scheduler.CreateTexture(
+                    ResourceNames::FinalPassTexture,
+                    GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                          vk::Format::eA2B10G10R10UnormPack32,
+                                          vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc));
+                scheduler.WriteRenderTarget(ResourceNames::FinalPassTexture, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
+                                            vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+
+                scheduler.SetViewportScissors(
+                    vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
+                    vk::Rect2D().setExtent(m_ViewportExtent));
+            },
+            [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            {
+                auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                pipelineStateCache.Bind(cmd, m_FinalPassPipeline.get());
+
+                struct PushConstantBlock
+                {
+                    u32 MainPassTextureID;
+                } pc = {};
+
+                pc.MainPassTextureID = scheduler.GetTexture(finalPassData.MainPassTexture)->GetBindlessTextureID();
+
+                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
+                cmd.draw(3, 1, 0, 0);
+            });
+
         m_ProfilerWindow.m_GPUGraph.LoadFrameData(m_GfxContext->GetLastFrameGPUProfilerData());
         m_ProfilerWindow.m_CPUGraph.LoadFrameData(m_GfxContext->GetLastFrameCPUProfilerData());
 
         m_UIRenderer->RenderFrame(
-            m_ViewportExtent, m_RenderGraph, ResourceNames::GBufferAlbedo,
+            m_ViewportExtent, m_RenderGraph, ResourceNames::FinalPassTexture,
             [&]()
             {
                 static bool bShowDemoWindow = true;

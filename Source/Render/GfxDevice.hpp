@@ -88,9 +88,15 @@ namespace Radiant
                                                                        std::forward<VmaAllocation>(allocation));
         }
 
+        void AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,
+                            const vk::MemoryPropertyFlags preferredFlags) noexcept;
+        void FreeMemory(VmaAllocation& allocation) noexcept;
+
+        void BindTexture(vk::Image& image, const VmaAllocation& allocation, const u64 allocationLocalOffset) const noexcept;
         void AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept;
         void DeallocateTexture(VkImage& image, VmaAllocation& allocation) const noexcept;
 
+        void BindBuffer(vk::Buffer& buffer, const VmaAllocation& allocation, const u64 allocationLocalOffset) const noexcept;
         void AllocateBuffer(const ExtraBufferFlags extraBufferFlags, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
                             VmaAllocation& allocation) const noexcept;
         void DeallocateBuffer(VkBuffer& buffer, VmaAllocation& allocation) const noexcept;
@@ -98,14 +104,14 @@ namespace Radiant
         void* Map(VmaAllocation& allocation) const noexcept;
         void Unmap(VmaAllocation& allocation) const noexcept;
 
-        NODISCARD const vk::Sampler& GetSampler(const vk::SamplerCreateInfo& samplerCI) noexcept
+        NODISCARD const vk::Sampler& GetSampler(const vk::SamplerCreateInfo& samplerCI) const noexcept
         {
             std::scoped_lock lock(m_Mtx);
             if (!m_SamplerMap.contains(samplerCI)) m_SamplerMap[samplerCI] = m_Device->createSamplerUnique(samplerCI);
             return *m_SamplerMap[samplerCI];
         }
 
-        NODISCARD const vk::Sampler& GetDefaultSampler() noexcept
+        NODISCARD const vk::Sampler& GetDefaultSampler() const noexcept
         {
             const auto defaultSamplerCI = vk::SamplerCreateInfo()
                                               .setUnnormalizedCoordinates(vk::False)
@@ -116,11 +122,8 @@ namespace Radiant
                                               .setMinFilter(vk::Filter::eLinear)
                                               .setMipmapMode(vk::SamplerMipmapMode::eLinear)
                                               .setMinLod(0.0f)
-                                              .setMaxLod(1.0f)
                                               .setMaxLod(vk::LodClampNone)
-                                              .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
-                                              .setAnisotropyEnable(vk::True)
-                                              .setMaxAnisotropy(m_GPUProperties.limits.maxSamplerAnisotropy);
+                                              .setBorderColor(vk::BorderColor::eIntOpaqueBlack);
             return GetSampler(defaultSamplerCI);
         }
 
@@ -134,7 +137,7 @@ namespace Radiant
 
         vk::UniquePipelineCache m_PipelineCache{};
 
-        UnorderedMap<vk::SamplerCreateInfo, vk::UniqueSampler> m_SamplerMap{};
+        mutable UnorderedMap<vk::SamplerCreateInfo, vk::UniqueSampler> m_SamplerMap{};
 
         struct Queue
         {

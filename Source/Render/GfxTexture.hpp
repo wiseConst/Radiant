@@ -64,6 +64,7 @@ namespace Radiant
         }
     };
 
+    // TODO: Cubemaps
     class GfxDevice;
     class GfxTexture final : private Uncopyable, private Unmovable
     {
@@ -78,7 +79,8 @@ namespace Radiant
         }
         ~GfxTexture() noexcept { Destroy(); }
 
-        operator const vk::Image&() const noexcept { return m_Image; }
+        void RenderGraph_Finalize() noexcept;
+        operator vk::Image&() noexcept { return m_Image; }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept
         {
@@ -96,7 +98,7 @@ namespace Radiant
         }
 
         void GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept;
-        void Resize(const glm::uvec3& dimensions) noexcept;
+        bool Resize(const glm::uvec3& dimensions) noexcept;
 
         NODISCARD FORCEINLINE u32 GetBindlessImageID(const u8 mipLevel = 0) const noexcept
         {
@@ -145,6 +147,7 @@ namespace Radiant
 
         constexpr GfxTexture() noexcept = delete;
         void Invalidate() noexcept;
+        void CreateMipChainAndSubmitToBindlessPool() noexcept;
         void Destroy() noexcept;
     };
 

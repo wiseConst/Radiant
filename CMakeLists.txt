@@ -69,6 +69,25 @@ endif()
 
 # ============= ThirdParty =============
 
+# graphviz
+set(GRAPHVIZ_VERSION 12.1.0)
+set(GRAPHVIZ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/graphviz)
+if (NOT EXISTS ${GRAPHVIZ_ROOT})
+    message(STATUS "Downloading graphviz...")
+    set(GRAPHVIZ_URL "https://gitlab.com/api/v4/projects/4207231/packages/generic/graphviz-releases/${GRAPHVIZ_VERSION}/windows_10_cmake_Release_Graphviz-${GRAPHVIZ_VERSION}")
+    if (WIN32)
+        file(DOWNLOAD ${GRAPHVIZ_URL}-win64.zip ${GRAPHVIZ_ROOT}.zip)
+    elseif(UNIX)
+        message("Graphviz downloading for other than windows systems isn't supported for now!")
+    elseif(APPLE)
+        message("Graphviz downloading for other than windows systems isn't supported for now!")
+    endif()
+
+    message(STATUS "Extracting graphviz...")
+    file(ARCHIVE_EXTRACT INPUT ${GRAPHVIZ_ROOT}.zip DESTINATION ${GRAPHVIZ_ROOT})
+    file(REMOVE ${GRAPHVIZ_ROOT}.zip)
+endif()
+
 # slang - modern feature-rich, cross-gfx-api, robust shader language
 set(SLANG_VERSION 2024.9.1)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)

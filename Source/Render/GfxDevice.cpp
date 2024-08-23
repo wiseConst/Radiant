@@ -18,8 +18,11 @@ namespace Radiant
             VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,  // To neglect viewport state definition on pipeline creation
         };
 
-        auto vkFeatures13 =
-            vk::PhysicalDeviceVulkan13Features().setDynamicRendering(vk::True).setSynchronization2(vk::True).setMaintenance4(vk::True);
+        auto vkFeatures13 = vk::PhysicalDeviceVulkan13Features()
+                                .setDynamicRendering(vk::True)
+                                .setSynchronization2(vk::True)
+                                .setShaderDemoteToHelperInvocation(vk::True)  // NOTE: Fucking slang requires it
+                                .setMaintenance4(vk::True);
 
         // The train starts here...
         void** paravozik = &vkFeatures13.pNext;
@@ -297,6 +300,28 @@ namespace Radiant
         m_PipelineCache = m_Device->createPipelineCacheUnique(pipelineCacheCI);
     }
 
+    void GfxDevice::AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,
+                                   const vk::MemoryPropertyFlags preferredFlags) noexcept
+    {
+        const VmaAllocationCreateInfo allocationCI = {/*.usage          = VMA_MEMORY_USAGE_AUTO,*/
+                                                      .preferredFlags = (VkMemoryPropertyFlags)preferredFlags};
+
+        RDNT_ASSERT(vmaAllocateMemory(m_Allocator, (const VkMemoryRequirements*)&finalMemoryRequirements, &allocationCI, &allocation,
+                                      nullptr) == VK_SUCCESS,
+                    "vmaAllocateMemory() failed!");
+    }
+
+    void GfxDevice::FreeMemory(VmaAllocation& allocation) noexcept
+    {
+        vmaFreeMemory(m_Allocator, allocation);
+    }
+
+    void GfxDevice::BindTexture(vk::Image& image, const VmaAllocation& allocation, const u64 allocationLocalOffset) const noexcept
+    {
+        RDNT_ASSERT(vmaBindImageMemory2(m_Allocator, allocation, allocationLocalOffset, (VkImage&)image, nullptr) == VK_SUCCESS,
+                    "vmaBindImageMemory2() failed!");
+    }
+
     void GfxDevice::AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept
     {
         const VmaAllocationCreateInfo allocationCI = {/*.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,*/ .usage =
@@ -312,17 +337,35 @@ namespace Radiant
         vmaDestroyImage(m_Allocator, image, allocation);
     }
 
+    void GfxDevice::BindBuffer(vk::Buffer& buffer, const VmaAllocation& allocation, const u64 allocationLocalOffset) const noexcept
+    {
+        RDNT_ASSERT(vmaBindBufferMemory2(m_Allocator, allocation, allocationLocalOffset, (VkBuffer&)buffer, nullptr) == VK_SUCCESS,
+                    "vmaBindBufferMemory2() failed!");
+    }
+
     void GfxDevice::AllocateBuffer(const ExtraBufferFlags extraBufferFlags, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
                                    VmaAllocation& allocation) const noexcept
     {
+        const bool bIsReBARRequired =
+            (extraBufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
         const bool bIsDeviceLocal =
             (extraBufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
-        const VmaAllocationCreateFlags allocationCreateFlags =
-            bIsDeviceLocal ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-        const VmaAllocationCreateInfo allocationCI = {.flags = allocationCreateFlags,
-                                                      .usage = VMA_MEMORY_USAGE_AUTO,
-                                                      .requiredFlags =
-                                                          bIsDeviceLocal ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : VkMemoryPropertyFlags{0}};
+
+        VmaAllocationCreateFlags allocationCreateFlags{0};
+        if (bIsReBARRequired /* ReBAR means VRAM writeable by PCIe from CPU, so it's device local! */)
+        {
+            allocationCreateFlags |=
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+        }
+        else if (!bIsDeviceLocal)
+        {
+            allocationCreateFlags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        }
+
+        const VmaAllocationCreateInfo allocationCI = {
+            .flags         = allocationCreateFlags,
+            .usage         = VMA_MEMORY_USAGE_AUTO,
+            .requiredFlags = bIsDeviceLocal && !bIsReBARRequired ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : VkMemoryPropertyFlags{0}};
 
         const VkBufferCreateInfo& oldVkBufferCI = bufferCI;
         RDNT_ASSERT(vmaCreateBuffer(m_Allocator, &oldVkBufferCI, &allocationCI, &buffer, &allocation, nullptr) == VK_SUCCESS,

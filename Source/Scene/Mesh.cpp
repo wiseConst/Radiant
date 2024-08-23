@@ -190,7 +190,7 @@ namespace Radiant
                         auto stagingBuffer   = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
                                                                    GfxBufferDescription(imageSize, /* placeholder */ 1,
                                                                                           vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                          EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
+                                                                                          EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
                         stagingBuffer->SetData(imageData, imageSize);
 
                         executionContext = gfxContext->CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
@@ -334,6 +334,7 @@ namespace Radiant
             const auto& currentSamplerInfo = asset->samplers[i];
             samplerCIs[i] =
                 vk::SamplerCreateInfo()
+                    .setUnnormalizedCoordinates(vk::False)
                     .setMinLod(0.0f)
                     .setMaxLod(vk::LodClampNone)
                     .setMagFilter(FastGltfUtils::ConvertFilterToVulkan(currentSamplerInfo.magFilter.value_or(fastgltf::Filter::Linear)))
@@ -343,7 +344,6 @@ namespace Radiant
                     .setAddressModeU(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapS))
                     .setAddressModeV(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
                     .setAddressModeW(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
-                    .setUnnormalizedCoordinates(vk::False)
                     .setBorderColor(vk::BorderColor::eFloatOpaqueWhite)
                     .setAnisotropyEnable(vk::True)
                     .setMaxAnisotropy(gfxContext->GetDevice()->GetGPUProperties().limits.maxSamplerAnisotropy);
@@ -566,7 +566,7 @@ namespace Radiant
             auto vbpStagingBuffer = MakeUnique<GfxBuffer>(
                 gfxContext->GetDevice(),
                 GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
-                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
+                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
             vbpStagingBuffer->SetData(vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
 
             auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(
@@ -581,7 +581,7 @@ namespace Radiant
             auto vabStagingBuffer = MakeUnique<GfxBuffer>(
                 gfxContext->GetDevice(),
                 GfxBufferDescription(vertexAttributes.size() * sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0]),
-                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
+                                     vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
             vabStagingBuffer->SetData(vertexAttributes.data(), vertexAttributes.size() * sizeof(vertexAttributes[0]));
 
             auto& vtxAttribBuffer = VertexAttributeBuffers.emplace_back(MakeShared<GfxBuffer>(
@@ -596,7 +596,7 @@ namespace Radiant
             auto ibStagingBuffer =
                 MakeUnique<GfxBuffer>(gfxContext->GetDevice(), GfxBufferDescription(indices.size() * sizeof(indices[0]), sizeof(indices[0]),
                                                                                     vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED));
+                                                                                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
             ibStagingBuffer->SetData(indices.data(), indices.size() * sizeof(indices[0]));
 
             auto& ibBuffer = IndexBuffers.emplace_back(
@@ -673,14 +673,13 @@ namespace Radiant
             renderNode->RefreshTransform(glm::mat4{1.f});
         }
 
-        // TODO: Store materials in VRAM?
-        // Load material buffers.
+        // Load material buffers(marking as ReBAR btw).
         for (const auto& [_, gltfMaterial] : materialMap)
         {
             MaterialBuffers.emplace_back(MakeShared<GfxBuffer>(
                 gfxContext->GetDevice(),
                 GfxBufferDescription(sizeof(Shaders::GLTFMaterial), sizeof(Shaders::GLTFMaterial), vk::BufferUsageFlagBits::eUniformBuffer,
-                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)));
+                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR)));
             MaterialBuffers.back()->SetData(&gltfMaterial, sizeof(gltfMaterial));
         }
     }

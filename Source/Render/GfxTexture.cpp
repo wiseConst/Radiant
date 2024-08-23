@@ -62,21 +62,37 @@ namespace Radiant
     {
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
-        m_Device->AllocateTexture(vk::ImageCreateInfo()
-                                      .setInitialLayout(vk::ImageLayout::eUndefined)
-                                      .setArrayLayers(m_Description.LayerCount)
-                                      .setImageType(m_Description.Type)
-                                      .setSamples(m_Description.Samples)
-                                      .setExtent(vk::Extent3D()
-                                                     .setWidth(m_Description.Dimensions.x)
-                                                     .setHeight(m_Description.Dimensions.y)
-                                                     .setDepth(m_Description.Dimensions.z))
-                                      .setFormat(m_Description.Format)
-                                      .setMipLevels(m_Description.bGenerateMips || m_Description.bExposeMips ? mipLevelCount : 1)
-                                      .setTiling(vk::ImageTiling::eOptimal)
-                                      .setSharingMode(vk::SharingMode::eExclusive)
-                                      .setUsage(m_Description.UsageFlags),
-                                  (VkImage&)m_Image, m_Allocation);
+        const auto imageCI = vk::ImageCreateInfo()
+                                 .setInitialLayout(vk::ImageLayout::eUndefined)
+                                 .setArrayLayers(m_Description.LayerCount)
+                                 .setImageType(m_Description.Type)
+                                 .setSamples(m_Description.Samples)
+                                 .setExtent(vk::Extent3D()
+                                                .setWidth(m_Description.Dimensions.x)
+                                                .setHeight(m_Description.Dimensions.y)
+                                                .setDepth(m_Description.Dimensions.z))
+                                 .setFormat(m_Description.Format)
+                                 .setMipLevels(m_Description.bGenerateMips || m_Description.bExposeMips ? mipLevelCount : 1)
+                                 .setTiling(vk::ImageTiling::eOptimal)
+                                 .setSharingMode(vk::SharingMode::eExclusive)
+                                 .setUsage(m_Description.UsageFlags);
+
+        if (m_Description.bControlledByRenderGraph)
+        {
+            m_Image = m_Device->GetLogicalDevice()->createImage(imageCI);
+            return;
+        }
+        else
+        {
+            m_Device->AllocateTexture(imageCI, (VkImage&)m_Image, m_Allocation);
+        }
+
+        CreateMipChainAndSubmitToBindlessPool();
+    }
+
+    void GfxTexture::CreateMipChainAndSubmitToBindlessPool() noexcept
+    {
+        const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
         m_MipChain.resize(m_Description.bExposeMips ? mipLevelCount : 1);
         for (u32 baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
@@ -174,6 +190,11 @@ namespace Radiant
         }
     }
 
+    void GfxTexture::RenderGraph_Finalize() noexcept
+    {
+        CreateMipChainAndSubmitToBindlessPool();
+    }
+
     void GfxTexture::GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept
     {
         RDNT_ASSERT(m_Description.bGenerateMips, "bGenerateMips is not specified!");
@@ -255,20 +276,21 @@ namespace Radiant
         cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
     }
 
-    void GfxTexture::Resize(const glm::uvec3& dimensions) noexcept
+    bool GfxTexture::Resize(const glm::uvec3& dimensions) noexcept
     {
-        if (m_Description.Dimensions == dimensions) return;
-
+        if (m_Description.Dimensions == dimensions) return false;
         m_Description.Dimensions = dimensions;
 
         Destroy();
         Invalidate();
+        return true;
     }
 
     void GfxTexture::Destroy() noexcept
     {
         m_Device->PushObjectToDelete(
-            [movedMipChain = std::move(m_MipChain), movedImage = std::move(m_Image), movedAllocation = std::move(m_Allocation)]() noexcept
+            [bControlledByRenderGraph = m_Description.bControlledByRenderGraph, movedMipChain = std::move(m_MipChain),
+             movedImage = std::move(m_Image), movedAllocation = std::move(m_Allocation)]() noexcept
             {
                 for (auto& mipInfo : movedMipChain)
                 {
@@ -277,7 +299,15 @@ namespace Radiant
                     if (mipInfo.BindlessImageID.has_value())
                         GfxContext::Get().PopBindlessThing(nonConstMipInfo.BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
                 }
-                GfxContext::Get().GetDevice()->DeallocateTexture((VkImage&)movedImage, (VmaAllocation&)movedAllocation);
+
+                if (bControlledByRenderGraph)
+                {
+                    GfxContext::Get().GetDevice()->GetLogicalDevice()->destroyImage(movedImage);
+                }
+                else
+                {
+                    GfxContext::Get().GetDevice()->DeallocateTexture((VkImage&)movedImage, (VmaAllocation&)movedAllocation);
+                }
             });
     }
 

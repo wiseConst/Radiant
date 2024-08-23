@@ -231,6 +231,11 @@ namespace Radiant
     namespace CoreUtils
     {
 
+        FORCEINLINE static u64 AlignSize(const u64 val, const u64 alignment) noexcept
+        {
+            return (val + alignment - 1) & ~(alignment - 1);
+        }
+
         template <typename T> static std::vector<T> LoadData(const std::string_view& dataPath) noexcept
         {
             static_assert(std::is_trivial<T>::value, "T must be a trivial type");

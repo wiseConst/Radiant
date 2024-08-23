@@ -21,7 +21,7 @@ namespace Radiant
                 UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
             }
 
-            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
+            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST)
             {
                 UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
             }
@@ -56,6 +56,9 @@ namespace Radiant
         }
         ~GfxBuffer() noexcept { Destroy(); }
 
+        void RenderGraph_Finalize(VmaAllocation& allocation) noexcept;
+        operator vk::Buffer&() noexcept { return m_Handle; }
+
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
         NODISCARD FORCEINLINE const auto& GetMemorySize() const noexcept { return m_MemorySize; }
 
@@ -73,14 +76,15 @@ namespace Radiant
             std::memcpy(m_Mapped, data, dataSize);
         }
 
-        void Resize(const u64 newCapacity, const u64 newElementSize = std::numeric_limits<u64>::max()) noexcept
+        bool Resize(const u64 newCapacity, const u64 newElementSize = std::numeric_limits<u64>::max()) noexcept
         {
-            if (newCapacity == m_Description.Capacity && newElementSize == m_Description.ElementSize) return;
+            if (newCapacity == m_Description.Capacity && newElementSize == m_Description.ElementSize) return false;
             if (newElementSize != std::numeric_limits<u64>::max()) m_Description.ElementSize = newElementSize;
 
             m_Description.Capacity = newCapacity;
             Destroy();
             Invalidate();
+            return true;
         }
 
         NODISCARD u64 GetElementCount() const noexcept
@@ -88,8 +92,6 @@ namespace Radiant
             RDNT_ASSERT(m_Description.ElementSize > 0, "Division by zero!");
             return m_Description.Capacity / m_Description.ElementSize;
         }
-
-        operator const vk::Buffer&() const noexcept { return m_Handle; }
 
       private:
         const Unique<GfxDevice>& m_Device;

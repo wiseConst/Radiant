@@ -5,8 +5,9 @@
 
 namespace Radiant
 {
-    static constexpr bool s_bForceGfxValidation = true;
-    static constexpr u8 s_BufferedFrameCount    = 2;
+    static constexpr bool s_bUseResourceMemoryAliasing = true;
+    static constexpr bool s_bForceGfxValidation        = true;
+    static constexpr u8 s_BufferedFrameCount           = 2;
 
     enum class ECommandBufferType : u8
     {
@@ -18,10 +19,12 @@ namespace Radiant
     using ExtraBufferFlags = u32;
     enum EExtraBufferFlag : ExtraBufferFlags
     {
-        EXTRA_BUFFER_FLAG_ADDRESSABLE = BIT(0),
+        EXTRA_BUFFER_FLAG_ADDRESSABLE = BIT(0),  // Should express buffer device address?
         EXTRA_BUFFER_FLAG_DEVICE_LOCAL =
             BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE,  // NOTE: Implies both device memory and buffer device address(GPU virtual address)
-        EXTRA_BUFFER_FLAG_MAPPED = BIT(2),           // Implies host memory
+        EXTRA_BUFFER_FLAG_HOST = BIT(2),             // Implies host(CPU) memory
+        EXTRA_BUFFER_FLAG_RESIZABLE_BAR =
+            BIT(3) | EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EXTRA_BUFFER_FLAG_HOST,  // NOTE: Implies memory that can be used by both CPU and GPU!
     };
 
     using ResourceStateFlags = u32;

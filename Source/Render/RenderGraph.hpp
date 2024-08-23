@@ -19,10 +19,11 @@
 
 namespace Radiant
 {
-    // https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
-    // https://levelup.gitconnected.com/gpu-memory-aliasing-45933681a15e
     // https://levelup.gitconnected.com/organizing-gpu-work-with-directed-acyclic-graphs-f3fd5f2c2af3
+    // https://levelup.gitconnected.com/gpu-memory-aliasing-45933681a15e
     // https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/resource_aliasing.html
+    // https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
+    // https://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/
 
     class RenderGraph;
     class RenderGraphPass;
@@ -30,9 +31,24 @@ namespace Radiant
     class RenderGraphResourceScheduler;
 
     // TODO:
-    //   struct MipSet final
-    //{
-    //};
+    /*using MipList  = std::vector<uint32_t>;
+    using MipRange = std::pair<uint32_t, std::optional<uint32_t>>;
+
+    struct MipSet
+    {
+        static MipSet Empty();
+        static MipSet Explicit(const MipList& mips);
+        static MipSet IndexFromStart(uint32_t index);
+        static MipSet IndexFromEnd(uint32_t index);
+        static MipSet FirstMip();
+        static MipSet LastMip();
+        static MipSet AllMips();
+        static MipSet Range(uint32_t firstMip, std::optional<uint32_t> lastMip);
+
+        using MipVariant = std::variant<MipList, MipRange, uint32_t, uint32_t>;
+
+        std::optional<MipVariant> Combination = std::nullopt;
+    };*/
 
     // RenderGraphPass
     enum class ERenderGraphPassType : u8
@@ -53,7 +69,7 @@ namespace Radiant
     struct RenderGraphBufferHandle
     {
         u64 ID{0};
-        ExtraBufferFlags BufferFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED};
+        ExtraBufferFlags BufferFlags{EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST};
     };
 
     using RGTextureHandle = u64;
@@ -157,6 +173,7 @@ namespace Radiant
         void BuildAdjacencyLists() noexcept;
         void TopologicalSort() noexcept;
         void BuildDependencyLevels() noexcept;
+        void CreateResources() noexcept;
 
         void GraphvizDump() const noexcept;
     };
@@ -181,12 +198,121 @@ namespace Radiant
     using RenderGraphResourceTexture = RenderGraphResource<GfxTexture>;
     using RenderGraphResourceBuffer  = RenderGraphResource<GfxBuffer>;
 
-#if RESOURCE_ALIASING_TODO
-    class RenderGraphResourceAliaser final : private Uncopyable, private Unmovable
+    // NOTE:
+    // 1) All CPU-side(ReBAR as well!!) buffers are buffered by default, but GPU-side aren't!
+    // 2) All textures aren't buffered!
+    class RenderGraphResourcePool final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphResourceAliaser() noexcept  = default;
-        ~RenderGraphResourceAliaser() noexcept = default;
+        RenderGraphResourcePool(const Unique<GfxDevice>& device) noexcept : m_Device(device), m_DeviceRMA(this)
+        {
+            for (u8 i{}; i < s_BufferedFrameCount; ++i)
+            {
+                m_ReBARRMA[i] = ResourceMemoryAliaser(this);
+                m_HostRMA[i]  = ResourceMemoryAliaser(this);
+            }
+        }
+        ~RenderGraphResourcePool() noexcept
+        {
+            m_Device->WaitIdle();
+
+            m_DeviceRMA.CleanMemoryBuckets();
+            for (u8 i{}; i < s_BufferedFrameCount; ++i)
+            {
+                m_HostRMA[i].CleanMemoryBuckets();
+                m_ReBARRMA[i].CleanMemoryBuckets();
+            }
+        }
+
+        void Tick() noexcept
+        {
+            ++m_GlobalFrameNumber;
+            m_CurrentFrameIndex = m_GlobalFrameNumber % s_BufferedFrameCount;
+
+            for (u32 i{}; i < m_Textures.size();)
+            {
+                const u64 framesPast = m_Textures[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
+                if (framesPast < m_GlobalFrameNumber)
+                {
+                    std::swap(m_Textures[i], m_Textures.back());
+                    m_Textures.pop_back();
+                }
+                else
+                {
+                    m_Textures[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
+                    ++i;
+                }
+            }
+
+            constexpr auto BufferTickFunc = [](GfxBufferVector& bufferVector, const u64 globalFrameNumber) noexcept
+            {
+                for (u32 i{}; i < bufferVector.size();)
+                {
+                    const u64 framesPast = bufferVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
+                    if (framesPast < globalFrameNumber)
+                    {
+                        std::swap(bufferVector[i], bufferVector.back());
+                        bufferVector.pop_back();
+                    }
+                    else
+                    {
+                        bufferVector[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
+                        ++i;
+                    }
+                }
+            };
+
+            BufferTickFunc(m_DeviceBuffers, m_GlobalFrameNumber);
+            BufferTickFunc(m_HostBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
+            BufferTickFunc(m_ReBARBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
+        }
+
+        NODISCARD RGTextureHandle CreateTexture(const GfxTextureDescription& textureDesc, const std::string& textureName,
+                                                const RGResourceID& resourceID) noexcept;
+        NODISCARD RGBufferHandle CreateBuffer(const GfxBufferDescription& bufferDesc, const std::string& bufferName,
+                                              const RGResourceID& resourceID) noexcept;
+
+        NODISCARD FORCEINLINE Unique<RenderGraphResourceTexture>& GetTexture(const RGTextureHandle& handleID) noexcept
+        {
+            RDNT_ASSERT(handleID < m_Textures.size(), "RGTextureHandle is invalid!");
+            return m_Textures[handleID].Handle;
+        }
+
+        NODISCARD Unique<RenderGraphResourceBuffer>& GetBuffer(const RGBufferHandle& handleID) noexcept
+        {
+            RDNT_ASSERT(handleID.BufferFlags != 0 || handleID.BufferFlags == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL ||
+                            handleID.BufferFlags ==
+                                (EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) ||
+                            handleID.BufferFlags == EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR,
+                        "Invalid buffer flags!");
+
+            // NOTE: Handling rebar first cuz it contains device and host bits!
+            const bool bIsReBAR = (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
+                                  EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
+            if (bIsReBAR)
+            {
+                RDNT_ASSERT(handleID.ID < m_ReBARBuffers[m_CurrentFrameIndex].size(), "ReBAR: CPU+GPU BufferHandle is invalid!");
+                return m_ReBARBuffers[m_CurrentFrameIndex][handleID.ID].Handle;
+            }
+
+            const bool bIsDeviceLocal = (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
+                                        EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+            if (bIsDeviceLocal)
+            {
+                RDNT_ASSERT(handleID.ID < m_DeviceBuffers.size(), "GPUBufferHandle is invalid!");
+                return m_DeviceBuffers[handleID.ID].Handle;
+            }
+
+            const bool bIsHostVisible =
+                (handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST;
+            if (bIsHostVisible)
+            {
+                RDNT_ASSERT(handleID.ID < m_HostBuffers[m_CurrentFrameIndex].size(), "CPUBufferHandle is invalid!");
+                return m_HostBuffers[m_CurrentFrameIndex][handleID.ID].Handle;
+            }
+
+            RDNT_ASSERT(false, "{}: Nothing to return!", __FUNCTION__);
+        }
 
         void CalculateEffectiveLifetimes(const std::vector<u32>& topologicallySortedPassesID,
                                          const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept
@@ -204,121 +330,52 @@ namespace Radiant
                     begin                       = std::min(begin, topsortPassIndex);
                     end                         = std::max(end, topsortPassIndex);
                 }
-                m_ResourceLifetimeMap[resourceID] = EffectiveLifetime{.Begin = begin, .End = end};
-            }
-        }
 
-      private:
-        // NOTE: Each of this in future will represent pass or dependency level(if multiple queues)
-        struct EffectiveLifetime
-        {
-            u32 Begin{0};
-            u32 End{0};
-        };
-
-        UnorderedMap<RGResourceID, EffectiveLifetime> m_ResourceLifetimeMap{};
-
-        //        constexpr RenderGraphResourceAliaser() noexcept = delete;
-    };
-#endif
-
-    // NOTE:
-    // 1) All CPU-side buffers are buffered by default, but GPU-side aren't!
-    // 2) All textures aren't buffered!
-    class RenderGraphResourcePool final : private Uncopyable, private Unmovable
-    {
-      public:
-        RenderGraphResourcePool(const Unique<GfxDevice>& device) noexcept : m_Device(device) {}
-        ~RenderGraphResourcePool() noexcept = default;
-
-        void Tick() noexcept
-        {
-            ++m_GlobalFrameNumber;
-            m_CurrentFrameNumber = m_GlobalFrameNumber % s_BufferedFrameCount;
-
-            for (u32 i{}; i < m_Textures.size();)
-            {
-                const u64 framesPast = m_Textures[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
-                if (framesPast < m_GlobalFrameNumber)
-                {
-                    std::swap(m_Textures[i], m_Textures.back());
-                    m_Textures.pop_back();
-                }
+                const auto el = EffectiveLifetime{.Begin = begin, .End = end};
+                if (m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
+                    m_ReBARRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
+                else if (m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
+                    m_HostRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
+                else if (m_DeviceRMA.m_ResourceInfoMap.contains(resourceID))
+                    m_DeviceRMA.m_ResourceLifetimeMap[resourceID] = el;
                 else
-                {
-                    m_Textures[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
-                    ++i;
-                }
-            }
-
-            for (u32 i{}; i < m_DeviceBuffers.size();)
-            {
-                const u64 framesPast = m_DeviceBuffers[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
-                if (framesPast < m_GlobalFrameNumber)
-                {
-                    std::swap(m_DeviceBuffers[i], m_DeviceBuffers.back());
-                    m_DeviceBuffers.pop_back();
-                }
-                else
-                {
-                    m_DeviceBuffers[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
-                    ++i;
-                }
-            }
-
-            auto& currentHostBuffersVector = m_HostBuffers[m_CurrentFrameNumber];
-            for (u32 i{}; i < currentHostBuffersVector.size();)
-            {
-                const u64 framesPast = currentHostBuffersVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
-                if (framesPast < m_GlobalFrameNumber)
-                {
-                    std::swap(currentHostBuffersVector[i], currentHostBuffersVector.back());
-                    currentHostBuffersVector.pop_back();
-                }
-                else
-                {
-                    currentHostBuffersVector[i].Handle->SetState(EResourceState::RESOURCE_STATE_UNDEFINED);
-                    ++i;
-                }
+                    RDNT_ASSERT(false, "Unknown resource id?! It isn't present in any resource info map!");
             }
         }
 
-        NODISCARD RGTextureHandle CreateTexture(const GfxTextureDescription& textureDesc) noexcept;
-        NODISCARD RGBufferHandle CreateBuffer(const GfxBufferDescription& bufferDesc) noexcept;
-
-        NODISCARD FORCEINLINE Unique<RenderGraphResourceTexture>& GetTexture(const RGTextureHandle& handleID) noexcept
+        void FillResourceInfo(const std::variant<RGTextureHandle, RGBufferHandle>& resourceHandle, const RGResourceID& id,
+                              const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
+                              const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
         {
-            RDNT_ASSERT(handleID < m_Textures.size(), "RGTextureHandle is invalid!");
-            return m_Textures[handleID].Handle;
-        }
-
-        NODISCARD Unique<RenderGraphResourceBuffer>& GetBuffer(const RGBufferHandle& handleID) noexcept
-        {
-            RDNT_ASSERT(handleID.BufferFlags != 0 || handleID.BufferFlags == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL ||
-                            handleID.BufferFlags ==
-                                (EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED | EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE),
-                        "Invalid buffer flags!");
-
-            if ((handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
-                EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
+            if (const auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resourceHandle))
             {
-                RDNT_ASSERT(handleID.ID < m_DeviceBuffers.size(), "GPUBufferHandle is invalid!");
-                return m_DeviceBuffers[handleID.ID].Handle;
+                m_DeviceRMA.FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
             }
-
-            if ((handleID.BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
+            else if (const auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resourceHandle))
             {
-                RDNT_ASSERT(handleID.ID < m_HostBuffers[m_CurrentFrameNumber].size(), "CPUBufferHandle is invalid!");
-                return m_HostBuffers[m_CurrentFrameNumber][handleID.ID].Handle;
-            }
+                const bool bIsReBAR = (rgBufferHandle->BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
+                                      EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
+                const bool bIsDeviceLocal = (rgBufferHandle->BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
+                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+                const bool bIsHostVisible =
+                    (rgBufferHandle->BufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST;
 
-            RDNT_ASSERT(false, "{}: Nothing to return!", __FUNCTION__);
+                // NOTE: Handling rebar first cuz it contains device and host bits!
+                if (bIsReBAR)
+                    m_ReBARRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, id, debugName, memoryRequirements,
+                                                                     memoryPropertyFlags);
+                else if (bIsHostVisible)
+                    m_HostRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
+                else if (bIsDeviceLocal)
+                    m_DeviceRMA.FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
+            }
         }
+        void BindResourcesToMemoryRegions() noexcept;
 
       private:
         const Unique<GfxDevice>& m_Device;
         u64 m_GlobalFrameNumber{0};
-        u8 m_CurrentFrameNumber{0};
+        u8 m_CurrentFrameIndex{0};
 
         struct PooledBuffer
         {
@@ -327,7 +384,9 @@ namespace Radiant
         };
         using GfxBufferVector = std::vector<PooledBuffer>;
 
-        std::array<GfxBufferVector, s_BufferedFrameCount> m_HostBuffers;
+        using GfxBufferVectorPerFrame = std::array<GfxBufferVector, s_BufferedFrameCount>;
+        GfxBufferVectorPerFrame m_HostBuffers;
+        GfxBufferVectorPerFrame m_ReBARBuffers;
         GfxBufferVector m_DeviceBuffers;
 
         struct PooledTexture
@@ -336,6 +395,116 @@ namespace Radiant
             u64 LastUsedFrameIndex{};
         };
         std::vector<PooledTexture> m_Textures;
+
+        // RESOURCE ALIASING
+
+        // NOTE: Each of this in future will represent pass or dependency level(if multiple queues)
+        struct EffectiveLifetime
+        {
+            u32 Begin{0};
+            u32 End{0};
+        };
+        FORCEINLINE static bool DoEffectiveLifetimeConflict(const EffectiveLifetime& lhs, const EffectiveLifetime& rhs) noexcept
+        {
+            return lhs.Begin <= rhs.End && rhs.Begin <= lhs.End;
+        }
+
+        struct ResourceBucket
+        {
+            vk::MemoryPropertyFlags MemoryPropertyFlags{};
+            vk::MemoryRequirements MemoryRequirements{};
+            VmaAllocation Allocation{VK_NULL_HANDLE};
+
+            struct OverlappedResource
+            {
+                std::variant<RGTextureHandle, RGBufferHandle> ResourceHandle{};
+                RGResourceID ID{};
+                u32 Offset{};
+                std::string DebugName{s_DEFAULT_STRING};
+                vk::MemoryRequirements MemoryRequirements{};
+                vk::MemoryPropertyFlags MemoryPropertyFlags{};
+            };
+
+            std::vector<std::vector<OverlappedResource>> StorageOfRows;
+        };
+
+        struct RenderGraphResourceInfo
+        {
+            std::variant<RGTextureHandle, RGBufferHandle> ResourceHandle{};  // to decide which rma should it go
+            std::string DebugName{s_DEFAULT_STRING};                         // to simply set debug name and other shit
+            vk::MemoryRequirements MemoryRequirements{};                     // to properly choose memory things
+            vk::MemoryPropertyFlags MemoryPropertyFlags{};                   // to properly choose memory bucket based on memory type
+        };
+
+        struct ResourceMemoryAliaser
+        {
+            void FillResourceInfo(const std::variant<RGTextureHandle, RGBufferHandle>& resourceHandle, const RGResourceID& resourceID,
+                                  const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
+                                  const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
+            {
+                // NOTE: Huge check if we need trigger memory reallocation.
+                if (m_ResourceInfoMap.contains(resourceID) && !m_ResourcesNeededMemoryRebind.contains(resourceID))
+                {
+                    bool bResourceHandleDifferent = false;
+                    if (m_ResourceInfoMap[resourceID].ResourceHandle.index() == resourceHandle.index())
+                    {
+                        if (const auto* rgTextureHandleLhs = std::get_if<RGTextureHandle>(&resourceHandle);
+                            const auto* rgTextureHandleRhs = std::get_if<RGTextureHandle>(&m_ResourceInfoMap[resourceID].ResourceHandle))
+                        {
+                            bResourceHandleDifferent = *rgTextureHandleLhs != *rgTextureHandleRhs;
+                        }
+                        else if (const auto* rgBufferHandleLhs = std::get_if<RGBufferHandle>(&resourceHandle);
+                                 const auto* rgBufferHandleRhs = std::get_if<RGBufferHandle>(&m_ResourceInfoMap[resourceID].ResourceHandle))
+                        {
+                            bResourceHandleDifferent = rgBufferHandleLhs->ID != rgBufferHandleRhs->ID ||
+                                                       rgBufferHandleLhs->BufferFlags != rgBufferHandleRhs->BufferFlags;
+                        }
+                    }
+                    else
+                        bResourceHandleDifferent = true;
+
+                    const bool bResourceNeedsToBeReallocated = bResourceHandleDifferent ||
+                                                               m_ResourceInfoMap[resourceID].MemoryRequirements != memoryRequirements ||
+                                                               m_ResourceInfoMap[resourceID].MemoryPropertyFlags != memoryPropertyFlags;
+                    if (bResourceNeedsToBeReallocated) m_ResourcesNeededMemoryRebind.emplace(resourceID);
+                }
+
+                m_ResourceInfoMap[resourceID] = {.ResourceHandle      = resourceHandle,
+                                                 .DebugName           = debugName,
+                                                 .MemoryRequirements  = memoryRequirements,
+                                                 .MemoryPropertyFlags = memoryPropertyFlags};
+            }
+            void BindResourcesToMemoryRegions() noexcept;
+            void CleanMemoryBuckets() noexcept
+            {
+                RDNT_ASSERT(m_ResourcePoolPtr, "ResourcePoolPtr isn't valid!");
+                for (auto& memoryBucket : m_MemoryBuckets)
+                {
+                    m_ResourcePoolPtr->m_Device->PushObjectToDelete(
+                        [movedAllocation = std::move(memoryBucket.Allocation)]() noexcept
+                        { GfxContext::Get().GetDevice()->FreeMemory((VmaAllocation&)movedAllocation); });
+                }
+
+                m_MemoryBuckets.clear();
+            }
+
+            ResourceMemoryAliaser(RenderGraphResourcePool* resourcePool) noexcept : m_ResourcePoolPtr(resourcePool) {}
+            ResourceMemoryAliaser() noexcept  = default;  // NOTE: Shouldn't be used!
+            ~ResourceMemoryAliaser() noexcept = default;
+
+            RenderGraphResourcePool* m_ResourcePoolPtr{nullptr};
+            UnorderedMap<RGResourceID, RenderGraphResourceInfo> m_ResourceInfoMap;
+            UnorderedMap<RGResourceID, EffectiveLifetime> m_ResourceLifetimeMap;
+            UnorderedSet<RGResourceID> m_ResourcesNeededMemoryRebind;
+            std::vector<ResourceBucket> m_MemoryBuckets;
+        };
+
+        using ResourceMemoryAliaserPerFrame = std::array<ResourceMemoryAliaser, s_BufferedFrameCount>;
+        ResourceMemoryAliaserPerFrame m_HostRMA;
+        ResourceMemoryAliaserPerFrame m_ReBARRMA;
+        ResourceMemoryAliaser m_DeviceRMA;
+
+        // RESOURCE ALIASING
 
         constexpr RenderGraphResourcePool() noexcept = delete;
     };
@@ -354,11 +523,11 @@ namespace Radiant
         NODISCARD RGResourceID ReadTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
         NODISCARD RGResourceID WriteTexture(const std::string& name, const ResourceStateFlags resourceState) noexcept;
         NODISCARD void WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
-                                                 const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
-                                                 const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
-                                                 const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare) noexcept;
-        NODISCARD void WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
-                                                 const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue) noexcept;
+                                         const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
+                                         const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
+                                         const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare) noexcept;
+        NODISCARD void WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp, const vk::AttachmentStoreOp storeOp,
+                                         const vk::ClearColorValue& clearValue) noexcept;
 
         void CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept;
         NODISCARD FORCEINLINE Unique<GfxBuffer>& GetBuffer(const RGResourceID& resourceID) const noexcept

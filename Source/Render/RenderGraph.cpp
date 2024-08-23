@@ -630,16 +630,15 @@ namespace Radiant
         u32 dependencyLevelCount{1};
 
         // 1. Perform longest distance(from root node) search for each node.
-        for (const auto passID : m_TopologicallySortedPassesID)
+        for (const auto node : m_TopologicallySortedPassesID)
         {
-            for (const auto adjacentPassID : m_AdjacencyLists[passID])
+            for (const auto adjacentNode : m_AdjacencyLists[node])
             {
-                if (longestPassDistances[adjacentPassID] < longestPassDistances[passID] + 1)
-                {
-                    const auto newLongestDistance        = longestPassDistances[passID] + 1;
-                    longestPassDistances[adjacentPassID] = newLongestDistance;
-                    dependencyLevelCount                 = std::max(newLongestDistance + 1, dependencyLevelCount);
-                }
+                if (longestPassDistances[adjacentNode] >= longestPassDistances[node] + 1) continue;
+
+                const auto newLongestDistance      = longestPassDistances[node] + 1;
+                longestPassDistances[adjacentNode] = newLongestDistance;
+                dependencyLevelCount               = std::max(newLongestDistance + 1, dependencyLevelCount);
             }
         }
 
@@ -659,51 +658,69 @@ namespace Radiant
         }
     }
 
+    void RenderGraph::CreateResources() noexcept
+    {
+        for (auto& [textureName, textureDesc] : m_TextureCreates)
+        {
+            textureDesc.bControlledByRenderGraph    = s_bUseResourceMemoryAliasing;
+            const auto resourceID                   = GetResourceID(textureName);
+            const auto resourceHandle               = m_ResourcePool->CreateTexture(textureDesc, textureName, resourceID);
+            m_ResourceIDToTextureHandle[resourceID] = resourceHandle;
+
+            if constexpr (s_bUseResourceMemoryAliasing)
+            {
+                auto& gfxTextureHandle = m_ResourcePool->GetTexture(m_ResourceIDToTextureHandle[resourceID])->Get();
+                m_ResourcePool->FillResourceInfo(
+                    resourceHandle, resourceID, textureName,
+                    m_GfxContext->GetDevice()->GetLogicalDevice()->getImageMemoryRequirements(*gfxTextureHandle),
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+            }
+        }
+
+        for (auto& [bufferName, bufferDesc] : m_BufferCreates)
+        {
+            bufferDesc.bControlledByRenderGraph    = s_bUseResourceMemoryAliasing;
+            const auto resourceID                  = GetResourceID(bufferName);
+            const auto resourceHandle              = m_ResourcePool->CreateBuffer(bufferDesc, bufferName, resourceID);
+            m_ResourceIDToBufferHandle[resourceID] = resourceHandle;
+
+            if constexpr (s_bUseResourceMemoryAliasing)
+            {
+                vk::MemoryPropertyFlags memoryPropertyFlags{};
+                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
+                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
+                    memoryPropertyFlags |= vk::MemoryPropertyFlagBits::eDeviceLocal;
+
+                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST)
+                    memoryPropertyFlags |= vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+
+                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
+                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR)
+                    memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible |
+                                          vk::MemoryPropertyFlagBits::eHostCoherent;
+
+                auto& gfxBufferHandle = m_ResourcePool->GetBuffer(m_ResourceIDToBufferHandle[resourceID])->Get();
+                m_ResourcePool->FillResourceInfo(
+                    resourceHandle, resourceID, bufferName,
+                    m_GfxContext->GetDevice()->GetLogicalDevice()->getBufferMemoryRequirements(*gfxBufferHandle), memoryPropertyFlags);
+            }
+        }
+
+        if constexpr (s_bUseResourceMemoryAliasing)
+        {
+            m_ResourcePool->CalculateEffectiveLifetimes(m_TopologicallySortedPassesID, m_ResourcesUsedByPassesID);
+            m_ResourcePool->BindResourcesToMemoryRegions();
+        }
+
+        m_TextureCreates.clear();
+        m_BufferCreates.clear();
+    }
+
     void RenderGraph::Execute() noexcept
     {
         RDNT_ASSERT(!m_TopologicallySortedPassesID.empty(), "RenderGraph isn't built!");
 
-#if RESOURCE_ALIASING_TODO
-        RenderGraphResourceAliaser resourceAliaser{};
-        resourceAliaser.CalculateEffectiveLifetimes(m_TopologicallySortedPassesID, m_ResourcesUsedByPassesID);
-
-        std::vector<std::pair<RGResourceID, vk::MemoryRequirements>> resourceSizes;
-        vk::DeviceSize memoryUsage{0};
-#endif
-
-        for (const auto& [textureName, textureDesc] : m_TextureCreates)
-        {
-            const auto resourceID                   = GetResourceID(textureName);
-            m_ResourceIDToTextureHandle[resourceID] = m_ResourcePool->CreateTexture(textureDesc);
-            const vk::Image& image                  = *m_ResourcePool->GetTexture(m_ResourceIDToTextureHandle[resourceID])->Get();
-            m_GfxContext->GetDevice()->SetDebugName(textureName, image);
-
-#if RESOURCE_ALIASING_TODO
-            resourceSizes.emplace_back(resourceID, m_GfxContext->GetDevice()->GetLogicalDevice()->getImageMemoryRequirements(image));
-            memoryUsage += resourceSizes.back().second.size;
-#endif
-        }
-        m_TextureCreates.clear();
-
-        for (const auto& [bufferName, bufferDesc] : m_BufferCreates)
-        {
-            const auto resourceID                  = GetResourceID(bufferName);
-            m_ResourceIDToBufferHandle[resourceID] = m_ResourcePool->CreateBuffer(bufferDesc);
-            const vk::Buffer& buffer               = *m_ResourcePool->GetBuffer(m_ResourceIDToBufferHandle[resourceID])->Get();
-            m_GfxContext->GetDevice()->SetDebugName(bufferName, buffer);
-
-#if RESOURCE_ALIASING_TODO
-            resourceSizes.emplace_back(resourceID, m_GfxContext->GetDevice()->GetLogicalDevice()->getBufferMemoryRequirements(buffer));
-            memoryUsage += resourceSizes.back().second.size;
-#endif
-        }
-        m_BufferCreates.clear();
-#if RESOURCE_ALIASING_TODO
-        resourceSizes.shrink_to_fit();
-        LOG_INFO("Overall render graph memory usage: {:.4f} MB.", memoryUsage / 1024.0f / 1024.0f);
-        std::ranges::sort(resourceSizes.begin(), resourceSizes.end(),
-                          [](const auto& lhs, const auto& rhs) { return lhs.second.size > rhs.second.size; });
-#endif
+        CreateResources();
 
         const auto& frameData = m_GfxContext->GetCurrentFrameData();
         frameData.GeneralCommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
@@ -750,7 +767,7 @@ namespace Radiant
 
     void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept
     {
-        // Sort passes by types to better utilize WARP occupancy.
+        // Sort passes by type to not drain the pipeline fully.
         std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
                   [](const auto* lhs, const auto* rhs) { return lhs->m_PassType < rhs->m_PassType; });
 
@@ -1058,9 +1075,12 @@ namespace Radiant
         m_Pass.m_Scissor  = scissor;
     }
 
-    NODISCARD RGTextureHandle RenderGraphResourcePool::CreateTexture(const GfxTextureDescription& textureDesc) noexcept
+    NODISCARD RGTextureHandle RenderGraphResourcePool::CreateTexture(const GfxTextureDescription& textureDesc,
+                                                                     const std::string& textureName,
+                                                                     const RGResourceID& resourceID) noexcept
     {
-        // TODO: Better aliasing techniques
+        const auto setTextureDebugNameFunc = [&](const std::string& textureName, const vk::Image& image)
+        { m_Device->SetDebugName(textureName, image); };
 
         RGTextureHandle handleID{0};
         for (auto& [RGTexture, lastUsedFrame] : m_Textures)
@@ -1072,21 +1092,100 @@ namespace Radiant
             }
 
             lastUsedFrame = m_GlobalFrameNumber;
-            RGTexture->Get()->Resize(textureDesc.Dimensions);
+
+            auto& gfxTextureHandle = RGTexture->Get();
+            if (gfxTextureHandle->Resize(textureDesc.Dimensions)) m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
+
+            setTextureDebugNameFunc(textureName, *gfxTextureHandle);
             return handleID;
         }
 
-        handleID = m_Textures.size();
-        m_Textures.emplace_back(MakeUnique<RenderGraphResourceTexture>(MakeUnique<GfxTexture>(m_Device, textureDesc)), m_GlobalFrameNumber);
+        handleID        = m_Textures.size();
+        auto& RGTexture = m_Textures.emplace_back(MakeUnique<RenderGraphResourceTexture>(MakeUnique<GfxTexture>(m_Device, textureDesc)),
+                                                  m_GlobalFrameNumber);
+        setTextureDebugNameFunc(textureName, *(RGTexture.Handle->Get()));
+        m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
         return handleID;
     }
 
-    NODISCARD RGBufferHandle RenderGraphResourcePool::CreateBuffer(const GfxBufferDescription& bufferDesc) noexcept
+    NODISCARD RGBufferHandle RenderGraphResourcePool::CreateBuffer(const GfxBufferDescription& bufferDesc, const std::string& bufferName,
+                                                                   const RGResourceID& resourceID) noexcept
     {
-        // TODO: Better aliasing techniques
+        const auto setBufferDebugNameFunc = [&](const std::string& bufferName, const vk::Buffer& buffer)
+        { m_Device->SetDebugName(bufferName, buffer); };
 
         RGBufferHandle handleID = {};
-        if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
+
+        // NOTE: Handling rebar first cuz it contains device and host bits!
+        const bool bIsReBARPresent = (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
+                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
+        if (bIsReBARPresent)
+        {
+            for (auto& [RGBuffer, lastUsedFrame] : m_ReBARBuffers[m_CurrentFrameIndex])
+            {
+                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
+                {
+                    ++handleID.ID;
+                    continue;
+                }
+
+                handleID.BufferFlags  = bufferDesc.ExtraFlags;
+                lastUsedFrame         = m_GlobalFrameNumber;
+                auto& gfxBufferHandle = RGBuffer->Get();
+
+                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
+                    m_ReBARRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
+
+                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
+                return handleID;
+            }
+
+            handleID = RenderGraphBufferHandle{.ID = m_ReBARBuffers[m_CurrentFrameIndex].size(), .BufferFlags = bufferDesc.ExtraFlags};
+            auto& RGBuffer = m_ReBARBuffers[m_CurrentFrameIndex].emplace_back(
+                MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
+            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
+            m_ReBARRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
+            return handleID;
+        }
+
+        const bool bIsHostVisible =
+            (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST;
+
+        handleID = {};
+        if (bIsHostVisible)
+        {
+            for (auto& [RGBuffer, lastUsedFrame] : m_HostBuffers[m_CurrentFrameIndex])
+            {
+                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
+                {
+                    ++handleID.ID;
+                    continue;
+                }
+
+                handleID.BufferFlags  = bufferDesc.ExtraFlags;
+                lastUsedFrame         = m_GlobalFrameNumber;
+                auto& gfxBufferHandle = RGBuffer->Get();
+
+                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
+                    m_HostRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
+
+                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
+                return handleID;
+            }
+
+            handleID       = RenderGraphBufferHandle{.ID = m_HostBuffers[m_CurrentFrameIndex].size(), .BufferFlags = bufferDesc.ExtraFlags};
+            auto& RGBuffer = m_HostBuffers[m_CurrentFrameIndex].emplace_back(
+                MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
+            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
+            m_HostRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
+            return handleID;
+        }
+
+        const bool bIsDeviceLocal =
+            (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+
+        handleID = {};
+        if (bIsDeviceLocal)
         {
             for (auto& [RGBuffer, lastUsedFrame] : m_DeviceBuffers)
             {
@@ -1096,42 +1195,178 @@ namespace Radiant
                     continue;
                 }
 
-                handleID.BufferFlags = bufferDesc.ExtraFlags;
-                lastUsedFrame        = m_GlobalFrameNumber;
-                RGBuffer->Get()->Resize(bufferDesc.Capacity, bufferDesc.ElementSize);
+                handleID.BufferFlags  = bufferDesc.ExtraFlags;
+                lastUsedFrame         = m_GlobalFrameNumber;
+                auto& gfxBufferHandle = RGBuffer->Get();
+
+                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
+                    m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
+
+                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
                 return handleID;
             }
 
-            handleID = RenderGraphBufferHandle{.ID = m_DeviceBuffers.size(), .BufferFlags = bufferDesc.ExtraFlags};
-            m_DeviceBuffers.emplace_back(MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)),
-                                         m_GlobalFrameNumber);
-            return handleID;
-        }
-
-        handleID = {};
-        if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_MAPPED)
-        {
-            for (auto& [RGBuffer, lastUsedFrame] : m_HostBuffers[m_CurrentFrameNumber])
-            {
-                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
-                {
-                    ++handleID.ID;
-                    continue;
-                }
-
-                handleID.BufferFlags = bufferDesc.ExtraFlags;
-                lastUsedFrame        = m_GlobalFrameNumber;
-                RGBuffer->Get()->Resize(bufferDesc.Capacity, bufferDesc.ElementSize);
-                return handleID;
-            }
-
-            handleID = RenderGraphBufferHandle{.ID = m_HostBuffers[m_CurrentFrameNumber].size(), .BufferFlags = bufferDesc.ExtraFlags};
-            m_HostBuffers[m_CurrentFrameNumber].emplace_back(
+            handleID       = RenderGraphBufferHandle{.ID = m_DeviceBuffers.size(), .BufferFlags = bufferDesc.ExtraFlags};
+            auto& RGBuffer = m_DeviceBuffers.emplace_back(
                 MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
+            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
+            m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
             return handleID;
         }
 
         RDNT_ASSERT(false, "{}: nothing to return!");
+    }
+
+    void RenderGraphResourcePool::BindResourcesToMemoryRegions() noexcept
+    {
+        m_DeviceRMA.BindResourcesToMemoryRegions();
+        m_ReBARRMA[m_CurrentFrameIndex].BindResourcesToMemoryRegions();
+        m_HostRMA[m_CurrentFrameIndex].BindResourcesToMemoryRegions();
+    }
+
+    void RenderGraphResourcePool::ResourceMemoryAliaser::BindResourcesToMemoryRegions() noexcept
+    {
+        if (m_ResourceInfoMap.empty() || m_ResourcesNeededMemoryRebind.empty()) return;
+        CleanMemoryBuckets();
+
+        struct RenderGraphResourceUnaliased
+        {
+            std::variant<RGTextureHandle, RGBufferHandle> ResourceHandle{};
+            RGResourceID ID{};
+            std::string DebugName{s_DEFAULT_STRING};
+            vk::MemoryRequirements MemoryRequirements{};
+            vk::MemoryPropertyFlags MemoryPropertyFlags{};
+        };
+
+        std::deque<RenderGraphResourceUnaliased> unaliasedResources;
+        for (const auto& [resourceID, resourceInfo] : m_ResourceInfoMap)
+        {
+            unaliasedResources.emplace_back(resourceInfo.ResourceHandle, resourceID, resourceInfo.DebugName,
+                                            resourceInfo.MemoryRequirements, resourceInfo.MemoryPropertyFlags);
+        }
+        std::sort(std::execution::par, unaliasedResources.begin(), unaliasedResources.end(),
+                  [](const auto& lhs, const auto& rhs) { return lhs.MemoryRequirements.size > rhs.MemoryRequirements.size; });
+
+        u64 memoryUsage{0};
+        for (const auto& unaliasedResource : unaliasedResources)
+        {
+            LOG_INFO("{} costs: {:.4f} MB, has EL: [{}, {}].", unaliasedResource.DebugName,
+                     unaliasedResource.MemoryRequirements.size / 1024.f / 1024.f, m_ResourceLifetimeMap[unaliasedResource.ID].Begin,
+                     m_ResourceLifetimeMap[unaliasedResource.ID].End);
+            memoryUsage += unaliasedResource.MemoryRequirements.size;
+        }
+        LOG_TRACE("RenderGraphResourcePool: Total Memory Usage {:.2f} MB", memoryUsage / 1024.0f / 1024.0f);
+
+        while (!unaliasedResources.empty())
+        {
+            bool bResourceAssigned    = false;
+            auto resourceToBeAssigned = std::move(unaliasedResources.front());
+            unaliasedResources.pop_front();
+
+            for (auto& memoryBucket : m_MemoryBuckets)
+            {
+                // NOTES:
+                // 1) First row's resource in bucket fully occupies it!
+                // 2) Memory type should be the same! (but it's already the same since I splitted RMA by memory types)
+                if (DoEffectiveLifetimeConflict(m_ResourceLifetimeMap[memoryBucket.StorageOfRows[0][0].ID],
+                                                m_ResourceLifetimeMap[resourceToBeAssigned.ID]) /*||
+                    resourceToBeAssigned.MemoryPropertyFlags != memoryBucket.StorageOfRows[0][0].MemoryPropertyFlags*/)
+                    continue;
+
+                for (auto& row : memoryBucket.StorageOfRows)
+                {
+                    const auto& lastResourceInRow = row.back();
+                    const bool bNeedsNewRow       = lastResourceInRow.Offset + lastResourceInRow.MemoryRequirements.size >=
+                                                  memoryBucket.StorageOfRows[0][0].MemoryRequirements.size ||
+                                              lastResourceInRow.Offset + resourceToBeAssigned.MemoryRequirements.size >
+                                                  memoryBucket.StorageOfRows[0][0].MemoryRequirements.size;
+                    if (!bNeedsNewRow)
+                    {
+                        row.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID,
+                                         lastResourceInRow.Offset + lastResourceInRow.MemoryRequirements.size,
+                                         resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements,
+                                         resourceToBeAssigned.MemoryPropertyFlags);
+                    }
+                    else
+                    {
+                        auto& newRow = memoryBucket.StorageOfRows.emplace_back();
+                        newRow.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, 0, resourceToBeAssigned.DebugName,
+                                            resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
+                    }
+
+                    bResourceAssigned = true;
+                    break;
+                }
+                if (bResourceAssigned) break;
+            }
+
+            if (!bResourceAssigned)
+            {
+                auto& bucket   = m_MemoryBuckets.emplace_back();
+                auto& firstRow = bucket.StorageOfRows.emplace_back();
+                firstRow.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, 0, resourceToBeAssigned.DebugName,
+                                      resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
+            }
+        }
+
+        u64 memoryUsageAfterAliasing{0};
+        for (const auto& memoryBucket : m_MemoryBuckets)
+        {
+            memoryUsageAfterAliasing += memoryBucket.StorageOfRows[0][0].MemoryRequirements.size;
+        }
+        LOG_TRACE("RenderGraphResourcePool: Total Memory Usage After Aliasing {:.2f} MB, Reduction {:.2f}%",
+                  memoryUsageAfterAliasing / 1024.0f / 1024.0f,
+                  (memoryUsage - memoryUsageAfterAliasing) / static_cast<f32>(memoryUsage) * 100.0f);
+
+        // 1. Gather memory requirements.
+        // 2. Bind resource to memory.
+        for (auto& memoryBucket : m_MemoryBuckets)
+        {
+            RDNT_ASSERT(!memoryBucket.StorageOfRows.empty() && !memoryBucket.StorageOfRows.front().empty(), "MemoryBucket is invalid!");
+            // NOTE: First row's resource in bucket fully occupies it!
+            memoryBucket.MemoryRequirements  = memoryBucket.StorageOfRows[0][0].MemoryRequirements;
+            memoryBucket.MemoryPropertyFlags = memoryBucket.StorageOfRows[0][0].MemoryPropertyFlags;
+
+            for (const auto& row : memoryBucket.StorageOfRows)
+            {
+                for (const auto& resource : row)
+                {
+                    memoryBucket.MemoryRequirements.alignment =
+                        std::max(memoryBucket.MemoryRequirements.alignment, resource.MemoryRequirements.alignment);
+                    memoryBucket.MemoryRequirements.memoryTypeBits &= resource.MemoryRequirements.memoryTypeBits;
+                    memoryBucket.MemoryPropertyFlags |= resource.MemoryPropertyFlags;
+                }
+            }
+
+            RDNT_ASSERT(memoryBucket.MemoryRequirements.memoryTypeBits != 0, "Invalid memory type bits!");
+
+            m_ResourcePoolPtr->m_Device->AllocateMemory(memoryBucket.Allocation, memoryBucket.MemoryRequirements,
+                                                        memoryBucket.MemoryPropertyFlags);
+            for (const auto& row : memoryBucket.StorageOfRows)
+            {
+                for (const auto& resource : row)
+                {
+                    if (!m_ResourcesNeededMemoryRebind.contains(resource.ID)) continue;
+
+                    if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resource.ResourceHandle))
+                    {
+                        auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
+                        m_ResourcePoolPtr->m_Device->BindTexture(*gfxTextureHandle, memoryBucket.Allocation, resource.Offset);
+                        gfxTextureHandle->RenderGraph_Finalize();
+                    }
+
+                    if (auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resource.ResourceHandle))
+                    {
+                        auto& gfxBufferHandle = m_ResourcePoolPtr->GetBuffer(*rgBufferHandle)->Get();
+                        m_ResourcePoolPtr->m_Device->BindBuffer(*gfxBufferHandle, memoryBucket.Allocation, resource.Offset);
+                        gfxBufferHandle->RenderGraph_Finalize(memoryBucket.Allocation);
+                    }
+                }
+            }
+        }
+        m_ResourcesNeededMemoryRebind.clear();
+
+        LOG_TRACE("Resource aliasing done!");
     }
 
 }  // namespace Radiant

@@ -203,10 +203,6 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
         irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedo.rgb, metallicRoughness, V, L, N);
     }
 
-    // Reinhard tone map(HDR->LDR) + gamma correction
-    irradiance.rgb = irradiance.rgb / (irradiance.rgb + float3(1.0f));
-    irradiance.rgb = Shaders::Linear2sRGB(float4(irradiance.rgb, 1.0f)).xyz;
-
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
     uint heatmapPointLightCount = 0;
 

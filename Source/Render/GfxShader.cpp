@@ -79,6 +79,9 @@ namespace Radiant
         compileOptions.emplace_back(slang::CompilerOptionName::DisableWarning,
                                     slang::CompilerOptionValue{.kind         = slang::CompilerOptionValueKind::String,
                                                                .stringValue0 = "39001"});  // NOTE: vulkan bindings aliasing
+        compileOptions.emplace_back(slang::CompilerOptionName::DisableWarning,
+                                    slang::CompilerOptionValue{.kind         = slang::CompilerOptionValueKind::String,
+                                                               .stringValue0 = "41012"});  // NOTE: spvSparseResidency
 
         if constexpr (RDNT_DEBUG)
         {

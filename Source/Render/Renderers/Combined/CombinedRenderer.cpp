@@ -12,10 +12,12 @@ namespace Radiant
     {
         const std::string LightBuffer{"Resource_Light_Buffer"};
         const std::string CameraBuffer{"Resource_Camera_Buffer"};
+
         const std::string GBufferDepth{"Resource_GBuffer_Depth"};
-        const std::string FinalPassTexture{"Resource_Final_Texture"};
 
         const std::string GBufferAlbedo{"Resource_GBuffer_Albedo"};
+
+        const std::string FinalPassTexture{"Resource_Final_Texture"};
 
         const std::string SSSTexture{"Resource_ScreenSpaceShadows"};
         const std::string SSAOTexture{"Resource_SSAO"};
@@ -147,6 +149,34 @@ namespace Radiant
                 MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
         }
 
+        {
+            auto bloomDownsampleShader = MakeShared<GfxShader>(
+                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/pbr_bloom_downsample.slang"});
+            GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
+                                                   .CullMode{vk::CullModeFlagBits::eNone},
+                                                   .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                   .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                   .PolygonMode{vk::PolygonMode::eFill}};
+            GfxPipelineDescription pipelineDesc = {.DebugName = "BloomDownsample", .PipelineOptions = gpo, .Shader = bloomDownsampleShader};
+            m_BloomDownsamplePipeline =
+                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+        }
+
+        {
+            auto bloomUpsampleBlurShader = MakeShared<GfxShader>(
+                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/pbr_bloom_upsample_blur.slang"});
+            GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
+                                                   .CullMode{vk::CullModeFlagBits::eNone},
+                                                   .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                   .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                   .PolygonMode{vk::PolygonMode::eFill},
+                                                   .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ADDITIVE}};
+            GfxPipelineDescription pipelineDesc = {
+                .DebugName = "BloomUpsampleBlur", .PipelineOptions = gpo, .Shader = bloomUpsampleBlurShader};
+            m_BloomUpsampleBlurPipeline =
+                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+        }
+
         m_LightData.Sun.Direction   = {0.0f, 0.8f, 0.5f};
         m_LightData.Sun.Intensity   = 1.0f;
         m_LightData.Sun.Color       = Shaders::PackUnorm4x8(glm::vec4(1.0f));
@@ -171,13 +201,17 @@ namespace Radiant
         static bool bHotReloadQueued{false};
         if (bHotReloadQueued && mainWindow->IsKeyReleased(GLFW_KEY_V))  // Check state frame before and current
         {
+            // m_DepthPrePassPipeline->HotReload();
             m_PBRPipeline->HotReload();
+            m_FinalPassPipeline->HotReload();
+            m_FinalPassPipeline->HotReload();
             m_LightClustersBuildPipeline->HotReload();
             m_LightClustersAssignmentPipeline->HotReload();
-            // m_DepthPrePassPipeline->HotReload();
             // m_SSSPipeline->HotReload();
-            // m_SSAOPipeline->HotReload();
-            // m_SSAOBoxBlurPipeline->HotReload();
+            m_SSAOPipeline->HotReload();
+            m_SSAOBoxBlurPipeline->HotReload();
+            m_BloomDownsamplePipeline->HotReload();
+            m_BloomUpsampleBlurPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -197,10 +231,47 @@ namespace Radiant
                       return lhs.AlphaMode < rhs.AlphaMode;
                   });
 
-        struct DepthPrePassData
+        struct FramePreparePassData
         {
             RGResourceID CameraBuffer;
             RGResourceID LightBuffer;
+        } fpPassData = {};
+        m_RenderGraph->AddPass(
+            "FramePreparePass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_TRANSFER,
+            [&](RenderGraphResourceScheduler& scheduler)
+            {
+                scheduler.CreateBuffer(ResourceNames::CameraBuffer,
+                                       GfxBufferDescription(sizeof(Shaders::CameraData), sizeof(Shaders::CameraData),
+                                                            vk::BufferUsageFlagBits::eUniformBuffer,
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                fpPassData.CameraBuffer =
+                    scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
+
+                scheduler.CreateBuffer(ResourceNames::LightBuffer,
+                                       GfxBufferDescription(sizeof(Shaders::LightData), sizeof(Shaders::LightData),
+                                                            vk::BufferUsageFlagBits::eUniformBuffer,
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                fpPassData.LightBuffer =
+                    scheduler.WriteBuffer(ResourceNames::LightBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
+            },
+            [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            {
+                auto& cameraUBO = scheduler.GetBuffer(fpPassData.CameraBuffer);
+                cameraUBO->SetData(&m_MainCamera->GetShaderData(), sizeof(Shaders::CameraData));
+
+                for (auto& pl : m_LightData.PointLights)
+                {
+                    pl.sphere.Origin += glm::vec3(0, 3.0f, 0) * Application::Get().GetDeltaTime();
+                    if (pl.sphere.Origin.y > s_MaxPointLightPos.y) pl.sphere.Origin.y -= (s_MaxPointLightPos.y - s_MinPointLightPos.y);
+                }
+
+                auto& lightUBO = scheduler.GetBuffer(fpPassData.LightBuffer);
+                lightUBO->SetData(&m_LightData, sizeof(m_LightData));
+            });
+
+        struct DepthPrePassData
+        {
+            RGResourceID CameraBuffer;
         } depthPrePassData = {};
         m_RenderGraph->AddPass(
             "DepthPrePass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
@@ -211,23 +282,11 @@ namespace Radiant
                                                               glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                                               vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment));
 
-                scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                            vk::ClearDepthStencilValue().setDepth(0.0f));
+                scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                            vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f));
 
-                scheduler.CreateBuffer(ResourceNames::CameraBuffer,
-                                       GfxBufferDescription(sizeof(Shaders::CameraData), sizeof(Shaders::CameraData),
-                                                            vk::BufferUsageFlagBits::eUniformBuffer,
-                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR));
                 depthPrePassData.CameraBuffer =
-                    scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
-
-                scheduler.CreateBuffer(ResourceNames::LightBuffer,
-                                       GfxBufferDescription(sizeof(Shaders::LightData), sizeof(Shaders::LightData),
-                                                            vk::BufferUsageFlagBits::eUniformBuffer,
-                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR));
-
-                depthPrePassData.LightBuffer =
-                    scheduler.WriteBuffer(ResourceNames::LightBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT);
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -239,17 +298,6 @@ namespace Radiant
                 pipelineStateCache.Bind(cmd, m_DepthPrePassPipeline.get());
 
                 auto& cameraUBO = scheduler.GetBuffer(depthPrePassData.CameraBuffer);
-                cameraUBO->SetData(&m_MainCamera->GetShaderData(), sizeof(Shaders::CameraData));
-
-                for (auto& pl : m_LightData.PointLights)
-                {
-                    pl.sphere.Origin += glm::vec3(0, 3.0f, 0) * Application::Get().GetDeltaTime();
-                    if (pl.sphere.Origin.y > s_MaxPointLightPos.y) pl.sphere.Origin.y -= (s_MaxPointLightPos.y - s_MinPointLightPos.y);
-                }
-
-                auto& lightUBO = scheduler.GetBuffer(depthPrePassData.LightBuffer);
-                lightUBO->SetData(&m_LightData, sizeof(m_LightData));
-
                 for (const auto& ro : m_DrawContext.RenderObjects)
                 {
                     if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
@@ -258,11 +306,7 @@ namespace Radiant
                     {
                         glm::vec3 scale{1.f};
                         glm::vec3 translation{0.f};
-#if !RENDER_FORCE_IGPU
-                        glm::u16vec4 orientation{1};
-#else
                         float4 orientation{1};
-#endif
                         const Shaders::CameraData* CameraData{nullptr};
                         const VertexPosition* VtxPositions{nullptr};
                     } pc = {};
@@ -271,14 +315,9 @@ namespace Radiant
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
                     glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-
-#if !RENDER_FORCE_IGPU
-                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
-#else
-                    pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
-#endif
-
                     pc.scale /= 100.0f;
+                    pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
+
                     pc.CameraData   = (const Shaders::CameraData*)cameraUBO->GetBDA();
                     pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
 
@@ -303,15 +342,14 @@ namespace Radiant
                 constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_COUNT;
                 scheduler.CreateBuffer(ResourceNames::LightClusterBuffer,
                                        GfxBufferDescription(lcbCapacity, sizeof(AABB), vk::BufferUsageFlagBits::eStorageBuffer,
-                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT));
+                lcbPassData.LightClusterBuffer = scheduler.WriteBuffer(ResourceNames::LightClusterBuffer,
+                                                                       EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT |
+                                                                           EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
 
                 lcbPassData.CameraBuffer =
-                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                          EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
-
-                lcbPassData.LightClusterBuffer =
-                    scheduler.WriteBuffer(ResourceNames::LightClusterBuffer, EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
-                                                                                 EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
             },
             [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
@@ -350,19 +388,19 @@ namespace Radiant
                 scheduler.CreateBuffer(ResourceNames::LightClusterListBuffer,
                                        GfxBufferDescription(lcaCapacity, sizeof(Shaders::LightClusterList),
                                                             vk::BufferUsageFlagBits::eStorageBuffer,
-                                                            EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL));
-                lcaPassData.LightClusterListBuffer = scheduler.WriteBuffer(ResourceNames::LightClusterListBuffer,
-                                                                           EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
-                                                                               EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT));
+                lcaPassData.LightClusterListBuffer = scheduler.WriteBuffer(
+                    ResourceNames::LightClusterListBuffer,
+                    EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT | EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
                 lcaPassData.CameraBuffer =
-                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                          EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
-                lcaPassData.LightClusterBuffer =
-                    scheduler.ReadBuffer(ResourceNames::LightClusterBuffer, EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
-                                                                                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+                lcaPassData.LightClusterBuffer = scheduler.ReadBuffer(ResourceNames::LightClusterBuffer,
+                                                                      EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
                 lcaPassData.LightBuffer =
-                    scheduler.ReadBuffer(ResourceNames::LightBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                         EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::LightBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                         EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
             },
             [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
@@ -409,12 +447,12 @@ namespace Radiant
                                           .Format{vk::Format::eR8Unorm},
                                           .UsageFlags = vk::ImageUsageFlagBits::eStorage});
                 sssPassData.SSSTexture =
-                    scheduler.WriteTexture(ResourceNames::SSSTexture, EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.WriteTexture(ResourceNames::SSSTexture, EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
                 sssPassData.DepthTexture =
-                    scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
                 sssPassData.CameraBuffer =
-                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                          EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
             },
             [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
@@ -456,13 +494,13 @@ namespace Radiant
                                                               glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                                               vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
 
-                scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                            vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
-                ssaoPassData.DepthTexture =
-                    scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+                ssaoPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, MipSet::FirstMip(),
+                                                                  EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
                 ssaoPassData.CameraBuffer =
-                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                          EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -501,11 +539,11 @@ namespace Radiant
                                                               glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                                               vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
 
-                scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                            vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+                scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
 
-                ssaoBoxBlurPassData.SSAOTexture =
-                    scheduler.ReadTexture(ResourceNames::SSAOTexture, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                ssaoBoxBlurPassData.SSAOTexture = scheduler.ReadTexture(ResourceNames::SSAOTexture, MipSet::FirstMip(),
+                                                                        EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -541,33 +579,34 @@ namespace Radiant
             "MainPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                mainPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, EResourceState::RESOURCE_STATE_DEPTH_READ);
-
                 scheduler.CreateTexture(ResourceNames::GBufferAlbedo,
                                         GfxTextureDescription(vk::ImageType::e2D,
                                                               glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                                               vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment));
 
-                scheduler.WriteRenderTarget(ResourceNames::GBufferAlbedo, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                            vk::ClearColorValue().setFloat32({1.0f, 0.5f, 0.0f, 1.0f}));
+                scheduler.WriteRenderTarget(ResourceNames::GBufferAlbedo, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 0.5f, 0.0f, 1.0f}));
+                mainPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, MipSet::FirstMip(),
+                                                                  EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT);
+
                 mainPassData.CameraBuffer =
-                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                          EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE |
-                                                                          EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 mainPassData.LightBuffer =
-                    scheduler.ReadBuffer(ResourceNames::LightBuffer, EResourceState::RESOURCE_STATE_UNIFORM_BUFFER |
-                                                                         EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                    scheduler.ReadBuffer(ResourceNames::LightBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                         EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
-                mainPassData.LightClusterListBuffer = scheduler.ReadBuffer(ResourceNames::LightClusterListBuffer,
-                                                                           EResourceState::RESOURCE_STATE_STORAGE_BUFFER |
-                                                                               EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                mainPassData.LightClusterListBuffer = scheduler.ReadBuffer(
+                    ResourceNames::LightClusterListBuffer, EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT |
+                                                               EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 // mainPassData.SSSTexture = scheduler.ReadTexture(ResourceNames::SSSTexture,
-                // EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
+                // EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
-                /*mainPassData.SSAOTexture =
-                    scheduler.ReadTexture(ResourceNames::SSAOTextureBlurred, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);*/
+                // mainPassData.SSAOTexture = scheduler.ReadTexture(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(),
+                //                                                  EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -589,11 +628,7 @@ namespace Radiant
                     {
                         glm::vec3 scale{1.f};
                         glm::vec3 translation{0.f};
-#if !RENDER_FORCE_IGPU
-                        glm::u16vec4 orientation{1};
-#else
                         float4 orientation{1};
-#endif
                         const Shaders::CameraData* CameraData{nullptr};
                         const VertexPosition* VtxPositions{nullptr};
                         const VertexAttribute* VtxAttributes{nullptr};
@@ -611,12 +646,7 @@ namespace Radiant
                     glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
                     pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
                     pc.scale /= 100.0f;
-
-#if !RENDER_FORCE_IGPU
-                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
-#else
                     pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
-#endif
 
                     const auto zFar  = m_MainCamera->GetZFar();
                     const auto zNear = m_MainCamera->GetZNear();
@@ -629,7 +659,7 @@ namespace Radiant
                     pc.VtxAttributes = (const VertexAttribute*)ro.VertexAttributeBuffer->GetBDA();
                     pc.MaterialData  = (const Shaders::GLTFMaterial*)ro.MaterialBuffer->GetBDA();
                     // pc.SSAOTextureID = ssaoTexture->GetBindlessTextureID();
-                    //  pc.SSSTextureID  = sssTexture->GetBindlessTextureID();
+                    //   pc.SSSTextureID  = sssTexture->GetBindlessTextureID();
                     pc.LightData        = (const Shaders::LightData*)lightUBO->GetBDA();
                     pc.LightClusterList = (const Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
 
@@ -645,24 +675,167 @@ namespace Radiant
                 }
             });
 
+#if 1
+        static constexpr u32 s_BloomMipCount{4};
+        struct BloomMipChainData
+        {
+            glm::uvec2 Size{1};
+        };
+        std::vector<BloomMipChainData> bloomMipChain(s_BloomMipCount);
+
+        // 1. Downsample
+        struct BloomDownsamplePassData
+        {
+            RGResourceID SrcTexture;
+        };
+
+        std::vector<BloomDownsamplePassData> bdPassDatas(s_BloomMipCount);
+        glm::uvec2 currentDownsampleDimensions(m_ViewportExtent.width, m_ViewportExtent.height);
+        for (u32 i{}; i < s_BloomMipCount - 1; ++i)
+        {
+            currentDownsampleDimensions /= 2;
+            currentDownsampleDimensions = glm::max(currentDownsampleDimensions, 1u);
+            bloomMipChain[i].Size       = currentDownsampleDimensions;
+
+            const auto currentViewportExtent = vk::Extent2D(currentDownsampleDimensions.x, currentDownsampleDimensions.y);
+            const std::string passName       = "BloomDownsample" + std::to_string(i);
+            const std::string textureName    = "BloomDownsampleTexture";
+            //    LOG_INFO("{},write to tex:{}", passName, i);
+
+            m_RenderGraph->AddPass(
+                passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                [&, i](RenderGraphResourceScheduler& scheduler)
+                {
+                    if (i == 0)
+                    {
+                        scheduler.CreateTexture(
+                            textureName,
+                            GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                  vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eColorAttachment,
+                                                  vk::SamplerCreateInfo()
+                                                      .setMinFilter(vk::Filter::eLinear)
+                                                      .setMagFilter(vk::Filter::eLinear)
+                                                      .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                      .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
+                                                  1, vk::SampleCountFlagBits::e1, /* bExposeMips */ true));
+                        scheduler.WriteRenderTarget(textureName, MipSet::Explicit(i + 1), vk::AttachmentLoadOp::eClear,
+                                                    vk::AttachmentStoreOp::eStore,
+                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+
+                        bdPassDatas[i].SrcTexture = scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
+                                                                          EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                    }
+                    else
+                    {
+                        scheduler.WriteRenderTarget(textureName, MipSet::Explicit(i + 1), vk::AttachmentLoadOp::eClear,
+                                                    vk::AttachmentStoreOp::eStore,
+                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+
+                        bdPassDatas[i].SrcTexture = scheduler.ReadTexture(textureName, MipSet::Explicit(i),
+                                                                          EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                    }
+
+                    scheduler.SetViewportScissors(vk::Viewport()
+                                                      .setMinDepth(0.0f)
+                                                      .setMaxDepth(1.0f)
+                                                      .setWidth(currentViewportExtent.width)
+                                                      .setHeight(currentViewportExtent.height),
+                                                  vk::Rect2D().setExtent(currentViewportExtent));
+                },
+                [&, i](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                {
+                    /*auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    pipelineStateCache.Bind(cmd, m_BloomDownsamplePipeline.get());
+                    */     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_BloomDownsamplePipeline);
+
+                    struct PushConstantBlock
+                    {
+                        uint32_t SrcTextureID;
+                        glm::vec2 SrcTexelSize;  // rcp(SrcTextureResolution)
+                    } pc            = {};
+                    pc.SrcTextureID = scheduler.GetTexture(bdPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
+                    pc.SrcTexelSize = 1.0f / (glm::vec2)bloomMipChain[i].Size;
+
+                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
+                    cmd.draw(3, 1, 0, 0);
+                });
+        }
+
+        // 2. Upsample + blur
+        struct BloomUpsampleBlurPassData
+        {
+            RGResourceID SrcTexture;
+        };
+        std::vector<BloomUpsampleBlurPassData> bubPassDatas(s_BloomMipCount);
+        for (i32 i = s_BloomMipCount - 1; i > 0; --i)
+        {
+            const auto& nextMip = bloomMipChain[i - 1];
+
+            const auto currentViewportExtent = vk::Extent2D(nextMip.Size.x * 2, nextMip.Size.y * 2);
+            const std::string passName       = "BloomUpsampleBlur" + std::to_string(i - 1);
+            const std::string textureName    = "BloomUpsampleBlurTexture" + std::to_string(i - 1);
+            //   LOG_INFO("{},write to tex:{}", passName, i - 1);
+            m_RenderGraph->AddPass(
+                passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                [&](RenderGraphResourceScheduler& scheduler)
+                {
+                    const std::string prevTextureName =
+                        (i == s_BloomMipCount - 1 ? "BloomDownsampleTexture" : "BloomUpsampleBlurTexture" + std::to_string(i));
+                    scheduler.WriteRenderTarget(prevTextureName, MipSet::Explicit(i - 1),
+                                                i - 1 == 0 ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+                                                vk::AttachmentStoreOp::eStore, {}, textureName);
+
+                    bubPassDatas[i].SrcTexture = scheduler.ReadTexture(prevTextureName, MipSet::Explicit(i),
+                                                                       EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                    scheduler.SetViewportScissors(vk::Viewport()
+                                                      .setMinDepth(0.0f)
+                                                      .setMaxDepth(1.0f)
+                                                      .setWidth(currentViewportExtent.width)
+                                                      .setHeight(currentViewportExtent.height),
+                                                  vk::Rect2D().setExtent(currentViewportExtent));
+                },
+                [&, i](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                {
+                    /*auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    pipelineStateCache.Bind(cmd, m_BloomUpsampleBlurPipeline.get());
+                    */cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_BloomUpsampleBlurPipeline);
+
+                    struct PushConstantBlock
+                    {
+                        uint32_t SrcTextureID;
+                        glm::vec2 SampleFilterRadius;  // NOTE: Make sure aspect ratio is taken into account!
+                    } pc                  = {};
+                    pc.SrcTextureID       = scheduler.GetTexture(bubPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
+                    pc.SampleFilterRadius = glm::vec2(0.005f);
+                    pc.SampleFilterRadius.y *= m_MainCamera->GetAspectRatio();
+
+                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
+                    cmd.draw(3, 1, 0, 0);
+                });
+        }
+#endif
+
         struct FinalPassData
         {
+            RGResourceID BloomTexture;
             RGResourceID MainPassTexture;
-        } finalPassData;
+        } finalPassData = {};
         m_RenderGraph->AddPass(
             "FinalPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                finalPassData.MainPassTexture =
-                    scheduler.ReadTexture(ResourceNames::GBufferAlbedo, EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE);
-
                 scheduler.CreateTexture(
                     ResourceNames::FinalPassTexture,
                     GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                           vk::Format::eA2B10G10R10UnormPack32,
                                           vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc));
-                scheduler.WriteRenderTarget(ResourceNames::FinalPassTexture, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                                            vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+                scheduler.WriteRenderTarget(ResourceNames::FinalPassTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+
+                finalPassData.BloomTexture    = scheduler.ReadTexture("BloomUpsampleBlurTexture0", MipSet::FirstMip(),
+                                                                      EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                finalPassData.MainPassTexture = scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
+                                                                      EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(m_ViewportExtent.width).setHeight(m_ViewportExtent.height),
@@ -676,9 +849,10 @@ namespace Radiant
                 struct PushConstantBlock
                 {
                     u32 MainPassTextureID;
-                } pc = {};
-
+                    u32 BloomTextureID;
+                } pc                 = {};
                 pc.MainPassTextureID = scheduler.GetTexture(finalPassData.MainPassTexture)->GetBindlessTextureID();
+                pc.BloomTextureID    = scheduler.GetTexture(finalPassData.BloomTexture)->GetBindlessTextureID();
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
                 cmd.draw(3, 1, 0, 0);

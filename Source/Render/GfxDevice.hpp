@@ -14,13 +14,31 @@ template <> struct ankerl::unordered_dense::hash<vk::SamplerCreateInfo>
 
     [[nodiscard]] auto operator()(const vk::SamplerCreateInfo& x) const noexcept -> std::uint64_t
     {
-        return detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter) +
-                                    static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
-                                    static_cast<std::uint64_t>(x.addressModeV) + static_cast<std::uint64_t>(x.addressModeW) +
-                                    static_cast<std::uint64_t>(x.mipLodBias) + static_cast<std::uint64_t>(x.anisotropyEnable) +
-                                    static_cast<std::uint64_t>(x.maxAnisotropy) + static_cast<std::uint64_t>(x.compareEnable) +
-                                    static_cast<std::uint64_t>(x.compareOp) + static_cast<std::uint64_t>(x.minLod) +
-                                    static_cast<std::uint64_t>(x.maxLod) + static_cast<std::uint64_t>(x.borderColor));
+        std::uint64_t pNextHash{0};
+        const void* pNext = x.pNext;
+        while (pNext)
+        {
+            const auto* baseStructure = (vk::BaseInStructure*)pNext;
+            if (!baseStructure) break;
+
+            if (baseStructure->sType == vk::StructureType::eSamplerReductionModeCreateInfo)
+            {
+                const auto* samplerReductionCI = (vk::SamplerReductionModeCreateInfo*)pNext;
+                if (!samplerReductionCI) continue;
+
+                pNextHash += detail::wyhash::hash(static_cast<std::uint64_t>(samplerReductionCI->reductionMode));
+            }
+
+            pNext = baseStructure->pNext ? baseStructure->pNext : nullptr;
+        }
+
+        return pNextHash + detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter) +
+                                                static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
+                                                static_cast<std::uint64_t>(x.addressModeV) + static_cast<std::uint64_t>(x.addressModeW) +
+                                                static_cast<std::uint64_t>(x.mipLodBias) + static_cast<std::uint64_t>(x.anisotropyEnable) +
+                                                static_cast<std::uint64_t>(x.maxAnisotropy) + static_cast<std::uint64_t>(x.compareEnable) +
+                                                static_cast<std::uint64_t>(x.compareOp) + static_cast<std::uint64_t>(x.minLod) +
+                                                static_cast<std::uint64_t>(x.maxLod) + static_cast<std::uint64_t>(x.borderColor));
     }
 };
 
@@ -134,6 +152,7 @@ namespace Radiant
         vk::UniqueDevice m_Device{};
         vk::PhysicalDevice m_PhysicalDevice{};
         vk::PhysicalDeviceProperties m_GPUProperties{};
+        bool m_bMemoryPrioritySupported{false};
 
         vk::UniquePipelineCache m_PipelineCache{};
 

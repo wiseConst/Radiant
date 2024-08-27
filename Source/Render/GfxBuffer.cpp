@@ -7,13 +7,10 @@ namespace Radiant
 {
     void GfxBuffer::RenderGraph_Finalize(VmaAllocation& allocation) noexcept
     {
-        if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
+        if (m_Description.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT)
             m_BDA = m_Device->GetLogicalDevice()->getBufferAddress(vk::BufferDeviceAddressInfo().setBuffer(m_Handle));
 
-        if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST ||
-            (m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
-                EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR)
-            m_Mapped = m_Device->Map(allocation);
+        if (m_Description.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT) m_Mapped = m_Device->Map(allocation);
 
         // NOTE: Storing allocation, but not relying on it!
         m_Allocation = allocation;
@@ -34,13 +31,10 @@ namespace Radiant
 
         m_Device->AllocateBuffer(m_Description.ExtraFlags, bufferCI, (VkBuffer&)m_Handle, m_Allocation);
 
-        if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
+        if (m_Description.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT)
             m_BDA = m_Device->GetLogicalDevice()->getBufferAddress(vk::BufferDeviceAddressInfo().setBuffer(m_Handle));
 
-        if ((m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST ||
-            (m_Description.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
-                EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR)
-            m_Mapped = m_Device->Map(m_Allocation);
+        if (m_Description.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT) m_Mapped = m_Device->Map(m_Allocation);
     }
 
     void GfxBuffer::Destroy() noexcept

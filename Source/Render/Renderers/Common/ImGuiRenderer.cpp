@@ -108,7 +108,8 @@ namespace Radiant
             "ImGuiPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                s_ImGuiPassData.BackbufferTexture = scheduler.ReadTexture(backbufferName, EResourceState::RESOURCE_STATE_COPY_SOURCE);
+                s_ImGuiPassData.BackbufferTexture =
+                    scheduler.ReadTexture(backbufferName, MipSet::FirstMip(), EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT);
                 scheduler.SetViewportScissors(
                     vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(viewportExtent.width).setHeight(viewportExtent.height),
                     vk::Rect2D().setExtent(viewportExtent));

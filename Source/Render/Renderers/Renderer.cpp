@@ -44,6 +44,7 @@ namespace Radiant
         auto& mainWindow = Application::Get().GetMainWindow();
         if (mainWindow->IsMouseButtonPressed(GLFW_MOUSE_BUTTON_2)) m_MainCamera->Rotate(deltaTime, mainWindow->GetCursorPos());
 
+        RDNT_ASSERT(m_MainCamera, "MainCamera is invalid!");
         m_MainCamera->UpdateMousePos(mainWindow->GetCursorPos());
 
         glm::vec3 velocity{0.f};

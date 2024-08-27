@@ -5,51 +5,51 @@
 
 namespace Radiant
 {
-    static constexpr bool s_bUseResourceMemoryAliasing = true;
+    static constexpr bool s_bUseResourceMemoryAliasing = false;
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr u8 s_BufferedFrameCount           = 2;
 
-    enum class ECommandBufferType : u8
+    enum class ECommandBufferTypeBits : u8
     {
-        COMMAND_BUFFER_TYPE_GENERAL            = BIT(0),
-        COMMAND_BUFFER_TYPE_ASYNC_COMPUTE      = BIT(1),
-        COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER = BIT(2),
+        COMMAND_BUFFER_TYPE_GENERAL_BIT            = BIT(0),
+        COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT      = BIT(1),
+        COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT = BIT(2),
     };
 
     using ExtraBufferFlags = u32;
-    enum EExtraBufferFlag : ExtraBufferFlags
+    enum EExtraBufferFlagBits : ExtraBufferFlags
     {
-        EXTRA_BUFFER_FLAG_ADDRESSABLE = BIT(0),  // Should express buffer device address?
-        EXTRA_BUFFER_FLAG_DEVICE_LOCAL =
-            BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE,  // NOTE: Implies both device memory and buffer device address(GPU virtual address)
-        EXTRA_BUFFER_FLAG_HOST = BIT(2),             // Implies host(CPU) memory
-        EXTRA_BUFFER_FLAG_RESIZABLE_BAR =
-            BIT(3) | EXTRA_BUFFER_FLAG_DEVICE_LOCAL | EXTRA_BUFFER_FLAG_HOST,  // NOTE: Implies memory that can be used by both CPU and GPU!
+        EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT = BIT(0),  // Should express buffer device address?
+        EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT =
+            BIT(1) | EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT,  // NOTE: Implies both device memory and buffer device address(GPU virtual address)
+        EXTRA_BUFFER_FLAG_HOST_BIT          = BIT(2),    // Implies host(CPU) memory
+        EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT = BIT(3) | EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT |
+                                              EXTRA_BUFFER_FLAG_HOST_BIT,  // NOTE: Implies memory that can be used by both CPU and GPU!
     };
 
     using ResourceStateFlags = u32;
-    enum EResourceState : ResourceStateFlags
+    enum EResourceStateBits : ResourceStateFlags
     {
-        RESOURCE_STATE_UNDEFINED                          = 0,  // Init state
-        RESOURCE_STATE_VERTEX_BUFFER                      = BIT(0),
-        RESOURCE_STATE_INDEX_BUFFER                       = BIT(1),
-        RESOURCE_STATE_UNIFORM_BUFFER                     = BIT(2),
-        RESOURCE_STATE_VERTEX_SHADER_RESOURCE             = BIT(3),
-        RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE           = BIT(4),
-        RESOURCE_STATE_COMPUTE_SHADER_RESOURCE            = BIT(5),
-        RESOURCE_STATE_STORAGE_BUFFER                     = BIT(6),
-        RESOURCE_STATE_RENDER_TARGET                      = BIT(7),
-        RESOURCE_STATE_DEPTH_READ                         = BIT(8),
-        RESOURCE_STATE_DEPTH_WRITE                        = BIT(9),
-        RESOURCE_STATE_INDIRECT_ARGUMENT                  = BIT(10),
-        RESOURCE_STATE_COPY_SOURCE                        = BIT(11),
-        RESOURCE_STATE_COPY_DESTINATION                   = BIT(12),
-        RESOURCE_STATE_RESOLVE_SOURCE                     = BIT(13),
-        RESOURCE_STATE_RESOLVE_DESTINATION                = BIT(14),
-        RESOURCE_STATE_ACCELERATION_STRUCTURE             = BIT(15),
-        RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT = BIT(16),
-        RESOURCE_STATE_READ                               = BIT(17),
-        RESOURCE_STATE_WRITE                              = BIT(18),
+        RESOURCE_STATE_UNDEFINED                              = 0,
+        RESOURCE_STATE_VERTEX_BUFFER_BIT                      = BIT(0),
+        RESOURCE_STATE_INDEX_BUFFER_BIT                       = BIT(1),
+        RESOURCE_STATE_UNIFORM_BUFFER_BIT                     = BIT(2),
+        RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT             = BIT(3),
+        RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT           = BIT(4),
+        RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT            = BIT(5),
+        RESOURCE_STATE_STORAGE_BUFFER_BIT                     = BIT(6),
+        RESOURCE_STATE_RENDER_TARGET_BIT                      = BIT(7),
+        RESOURCE_STATE_DEPTH_READ_BIT                         = BIT(8),
+        RESOURCE_STATE_DEPTH_WRITE_BIT                        = BIT(9),
+        RESOURCE_STATE_INDIRECT_ARGUMENT_BIT                  = BIT(10),
+        RESOURCE_STATE_COPY_SOURCE_BIT                        = BIT(11),
+        RESOURCE_STATE_COPY_DESTINATION_BIT                   = BIT(12),
+        RESOURCE_STATE_RESOLVE_SOURCE_BIT                     = BIT(13),
+        RESOURCE_STATE_RESOLVE_DESTINATION_BIT                = BIT(14),
+        RESOURCE_STATE_ACCELERATION_STRUCTURE_BIT             = BIT(15),
+        RESOURCE_STATE_ACCELERATION_STRUCTURE_BUILD_INPUT_BIT = BIT(16),
+        RESOURCE_STATE_READ_BIT                               = BIT(17),
+        RESOURCE_STATE_WRITE_BIT                              = BIT(18),
     };
 
     enum class EAlphaMode : u8

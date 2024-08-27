@@ -26,6 +26,7 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto& GetViewMatrix() const noexcept { return m_ViewMatrix; }
         NODISCARD FORCEINLINE const auto GetZFar() const noexcept { return m_zFar; }
         NODISCARD FORCEINLINE const auto GetZNear() const noexcept { return m_zNear; }
+        NODISCARD FORCEINLINE const auto GetAspectRatio() const noexcept { return m_AR; }
 
         void OnResized(const glm::uvec2& dimensions) noexcept
         {

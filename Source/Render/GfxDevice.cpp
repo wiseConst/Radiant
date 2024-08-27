@@ -88,8 +88,6 @@ namespace Radiant
 
                 const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
 
-                // [NVIDIA] called without pageable device local memory.
-                // Use pageableDeviceLocalMemory from VK_EXT_pageable_device_local_memory when it is available.
                 if (std::find_if(deviceExtensions.cbegin(), deviceExtensions.cend(),
                                  [](const vk::ExtensionProperties& deviceExtension) {
                                      return strcmp(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, deviceExtension.extensionName) == 0;
@@ -101,6 +99,7 @@ namespace Radiant
                 {
                     requiredDeviceExtensions.emplace_back(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
                     requiredDeviceExtensions.emplace_back(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+                    m_bMemoryPrioritySupported = true;
                 }
 
                 for (const auto& rde : requiredDeviceExtensions)
@@ -118,30 +117,20 @@ namespace Radiant
                 const auto maxMSAASamples = m_GPUProperties.limits.sampledImageColorSampleCounts &
                                             m_GPUProperties.limits.sampledImageDepthSampleCounts &
                                             m_GPUProperties.limits.sampledImageStencilSampleCounts;
-                if ((maxMSAASamples & vk::SampleCountFlagBits::e64) == vk::SampleCountFlagBits::e64)
-                {
+                if (maxMSAASamples & vk::SampleCountFlagBits::e64)
                     m_MSAASamples = vk::SampleCountFlagBits::e64;
-                }
-                else if ((maxMSAASamples & vk::SampleCountFlagBits::e32) == vk::SampleCountFlagBits::e32)
-                {
+                else if (maxMSAASamples & vk::SampleCountFlagBits::e32)
                     m_MSAASamples = vk::SampleCountFlagBits::e32;
-                }
-                else if ((maxMSAASamples & vk::SampleCountFlagBits::e16) == vk::SampleCountFlagBits::e16)
-                {
+                else if (maxMSAASamples & vk::SampleCountFlagBits::e16)
                     m_MSAASamples = vk::SampleCountFlagBits::e16;
-                }
-                else if ((maxMSAASamples & vk::SampleCountFlagBits::e8) == vk::SampleCountFlagBits::e8)
-                {
+                else if (maxMSAASamples & vk::SampleCountFlagBits::e8)
                     m_MSAASamples = vk::SampleCountFlagBits::e8;
-                }
-                else if ((maxMSAASamples & vk::SampleCountFlagBits::e4) == vk::SampleCountFlagBits::e4)
-                {
+                else if (maxMSAASamples & vk::SampleCountFlagBits::e4)
                     m_MSAASamples = vk::SampleCountFlagBits::e4;
-                }
-                else if ((maxMSAASamples & vk::SampleCountFlagBits::e2) == vk::SampleCountFlagBits::e2)
-                {
+                else if (maxMSAASamples & vk::SampleCountFlagBits::e2)
                     m_MSAASamples = vk::SampleCountFlagBits::e2;
-                }
+
+                LOG_WARN("MSAA Samples: {}", vk::to_string(m_MSAASamples));
                 LOG_INFO("Chosen GPU: {}", gpuProperties.deviceName.data());
             }
 
@@ -167,7 +156,7 @@ namespace Radiant
             const auto queueFlags = qfProperties[i].queueFlags;
 
             constexpr auto generalQueueFlags = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer;
-            if (!m_GeneralQueue.QueueFamilyIndex.has_value() && (queueFlags & generalQueueFlags) == generalQueueFlags)
+            if (!m_GeneralQueue.QueueFamilyIndex.has_value() && queueFlags & generalQueueFlags)
             {
                 m_GeneralQueue.QueueFamilyIndex = i;
                 RDNT_ASSERT(qfProperties[i].timestampValidBits != 0, "Queue Family [{}] doesn't support timestamp queries!", i);
@@ -254,11 +243,13 @@ namespace Radiant
 
     void GfxDevice::InitVMA(const vk::UniqueInstance& instance) noexcept
     {
-        // TODO: Expand flags to VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT based on extension availability
         const VmaVulkanFunctions vulkanFunctions = {.vkGetInstanceProcAddr = instance.getDispatch().vkGetInstanceProcAddr,
                                                     .vkGetDeviceProcAddr   = m_Device.getDispatch().vkGetDeviceProcAddr};
-        const VmaAllocatorCreateInfo allocatorCI = {.flags = VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
-                                                             VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+
+        VmaAllocatorCreateFlags allocatorCF = VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        if (m_bMemoryPrioritySupported) allocatorCF |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
+
+        const VmaAllocatorCreateInfo allocatorCI = {.flags            = allocatorCF,
                                                     .physicalDevice   = m_PhysicalDevice,
                                                     .device           = *m_Device,
                                                     .pVulkanFunctions = &vulkanFunctions,
@@ -346,10 +337,8 @@ namespace Radiant
     void GfxDevice::AllocateBuffer(const ExtraBufferFlags extraBufferFlags, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
                                    VmaAllocation& allocation) const noexcept
     {
-        const bool bIsReBARRequired =
-            (extraBufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
-        const bool bIsDeviceLocal =
-            (extraBufferFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
+        const bool bIsReBARRequired = extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT;
+        const bool bIsDeviceLocal   = extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT;
 
         VmaAllocationCreateFlags allocationCreateFlags{0};
         if (bIsReBARRequired /* ReBAR means VRAM writeable by PCIe from CPU, so it's device local! */)

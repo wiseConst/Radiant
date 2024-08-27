@@ -19,12 +19,19 @@ namespace Radiant
       private:
         Unique<GfxPipeline> m_LightClustersBuildPipeline{nullptr};
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
+
         Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
         Unique<GfxPipeline> m_PBRPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};
+
         Unique<GfxPipeline> m_SSSPipeline{nullptr};
+
         Unique<GfxPipeline> m_SSAOPipeline{nullptr};
         Unique<GfxPipeline> m_SSAOBoxBlurPipeline{nullptr};
+
+        Unique<GfxPipeline> m_BloomDownsamplePipeline{nullptr};
+        Unique<GfxPipeline> m_BloomUpsampleBlurPipeline{nullptr};
+
         RenderGraphStatistics m_RenderGraphStats = {};
 
         Shaders::LightData m_LightData = {};

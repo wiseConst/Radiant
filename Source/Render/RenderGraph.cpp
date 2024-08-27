@@ -14,6 +14,7 @@ template <> struct ankerl::unordered_dense::hash<vk::MemoryBarrier2>
 
 namespace Radiant
 {
+
     namespace RenderGraphUtils
     {
 
@@ -38,13 +39,9 @@ namespace Radiant
         // Per-resource barriers should usually be used for queue ownership transfers and image layout transitions,
         // otherwise use global barriers.
 
-        constexpr auto IsAccessFlagPresentFunc = [](const vk::AccessFlags2& accessMask, const vk::AccessFlagBits2& accessFlag)
-        { return (accessMask & accessFlag) == accessFlag; };
-
-        NODISCARD static void FillBufferBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
-                                                        std::vector<vk::BufferMemoryBarrier2>& bufferMemoryBarriers,
-                                                        const Unique<GfxBuffer>& buffer, const ResourceStateFlags currentState,
-                                                        const ResourceStateFlags nextState) noexcept
+        static void FillBufferBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
+                                              std::vector<vk::BufferMemoryBarrier2>& bufferMemoryBarriers, const Unique<GfxBuffer>& buffer,
+                                              const ResourceStateFlags currentState, const ResourceStateFlags nextState) noexcept
         {
             // NOTE: BufferMemoryBarriers should be used only on queue ownership transfers.
             // auto bufferMemoryBarrier =
@@ -55,57 +52,48 @@ namespace Radiant
             vk::PipelineStageFlags2 dstStageMask{vk::PipelineStageFlagBits2::eNone};
             vk::AccessFlags2 dstAccessMask{vk::AccessFlagBits2::eNone};
 
-            if (currentState == EResourceState::RESOURCE_STATE_UNDEFINED) srcStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
+            if (currentState == EResourceStateBits::RESOURCE_STATE_UNDEFINED) srcStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
 
-            const bool bCurrentStateShaderResource =
-                (currentState &
-                 (EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE | EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE |
-                  EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)) ==
-                (EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE | EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE |
-                 EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
+            const bool bCurrentStateShaderResource = (currentState & (EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
+                                                                      EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT |
+                                                                      EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT));
 
-            if (bCurrentStateShaderResource && (currentState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+            if (bCurrentStateShaderResource && currentState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
             {
                 srcAccessMask |=
                     vk::AccessFlagBits2::eShaderRead;  // NOTE: This access implies both eShaderStorageRead & eShaderSampledRead
             }
             if (bCurrentStateShaderResource &&
-                (currentState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                (currentState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT) == EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
             {
                 srcAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
 
-            const bool bNextStateShaderResource =
-                (nextState &
-                 (EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE | EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE |
-                  EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)) ==
-                (EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE | EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE |
-                 EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE);
-
-            if (bNextStateShaderResource && (nextState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+            const bool bNextStateShaderResource = nextState & (EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
+                                                               EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT |
+                                                               EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+            if (bNextStateShaderResource && nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
             {
                 dstAccessMask |=
                     vk::AccessFlagBits2::eShaderRead;  // NOTE: This access implies both eShaderStorageRead & eShaderSampledRead
             }
-            if (bNextStateShaderResource && (nextState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+            if (bNextStateShaderResource && nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
 
             // CURRENT STATE
-            if ((currentState & EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT)
             {
                 srcStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT)
             {
                 srcStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_COPY_SOURCE) == EResourceState::RESOURCE_STATE_COPY_SOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 // NOTE: Src copy buffer likes eTransferRead, but not eShaderStorageRead & eShaderSampledRead.
                 srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
@@ -113,7 +101,7 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_COPY_DESTINATION) == EResourceState::RESOURCE_STATE_COPY_DESTINATION)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 // NOTE: Dst copy buffer likes eTransferWrite, but not eShaderStorageRead & eShaderSampledRead.
                 srcAccessMask ^= vk::AccessFlagBits2::eShaderWrite;
@@ -121,28 +109,27 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_INDEX_BUFFER) == EResourceState::RESOURCE_STATE_INDEX_BUFFER)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_INDEX_BUFFER_BIT)
             {
                 srcAccessMask |= vk::AccessFlagBits2::eIndexRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eIndexInput;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_VERTEX_BUFFER) == EResourceState::RESOURCE_STATE_VERTEX_BUFFER ||
-                (currentState & EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE) ==
-                    EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_VERTEX_BUFFER_BIT ||
+                currentState & EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT)
             {
                 srcAccessMask |= vk::AccessFlagBits2::eMemoryRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eVertexShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_UNIFORM_BUFFER) == EResourceState::RESOURCE_STATE_UNIFORM_BUFFER)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT)
             {
                 // NOTE: Uniform buffer likes eUniformRead, but not eShaderStorageRead & eShaderSampledRead.
                 srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 srcAccessMask |= vk::AccessFlagBits2::eUniformRead;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_INDIRECT_ARGUMENT) == EResourceState::RESOURCE_STATE_INDIRECT_ARGUMENT)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_INDIRECT_ARGUMENT_BIT)
             {
                 // NOTE: Indirect arg buffer likes eIndirectCommandRead, but not eShaderStorageRead & eShaderSampledRead.
                 srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
@@ -150,40 +137,38 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eDrawIndirect;
             }
 
-            if ((currentState & (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ)) ==
-                (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ))
+            if (currentState & EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT &&
+                currentState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
             {
                 srcAccessMask |= vk::AccessFlagBits2::eShaderRead;
             }
 
-            if ((currentState & (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE)) ==
-                (EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE))
+            if (currentState & EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT &&
+                currentState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
             {
                 srcAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
 
             // NEXT STATE
-            if ((nextState & EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT)
             {
                 dstStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_INDEX_BUFFER) == EResourceState::RESOURCE_STATE_INDEX_BUFFER)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_INDEX_BUFFER_BIT)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eIndexRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eIndexInput;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_VERTEX_BUFFER) == EResourceState::RESOURCE_STATE_VERTEX_BUFFER ||
-                (nextState & EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE) ==
-                    EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE)
+            if (nextState &
+                (EResourceStateBits::RESOURCE_STATE_VERTEX_BUFFER_BIT | EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT))
             {
                 dstAccessMask |= vk::AccessFlagBits2::eMemoryRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eVertexShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_COPY_SOURCE) == EResourceState::RESOURCE_STATE_COPY_SOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 // NOTE: Src copy buffer likes eTransferRead, but not eShaderStorageRead & eShaderSampledRead.
                 dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
@@ -191,7 +176,7 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_COPY_DESTINATION) == EResourceState::RESOURCE_STATE_COPY_DESTINATION)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 // NOTE: Dst copy buffer likes eTransferWrite, but not eShaderStorageRead & eShaderSampledRead.
                 dstAccessMask ^= vk::AccessFlagBits2::eShaderWrite;
@@ -199,14 +184,14 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_UNIFORM_BUFFER) == EResourceState::RESOURCE_STATE_UNIFORM_BUFFER)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT)
             {
                 // NOTE: Uniform buffer likes eUniformRead, but not eShaderStorageRead & eShaderSampledRead.
                 dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 dstAccessMask |= vk::AccessFlagBits2::eUniformRead;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_INDIRECT_ARGUMENT) == EResourceState::RESOURCE_STATE_INDIRECT_ARGUMENT)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_INDIRECT_ARGUMENT_BIT)
             {
                 // NOTE: Indirect arg buffer likes eIndirectCommandRead, but not eShaderStorageRead & eShaderSampledRead.
                 dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
@@ -214,41 +199,33 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eDrawIndirect;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT)
             {
                 dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             }
 
-            constexpr auto ssboReadState = EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_READ;
-            if ((nextState & ssboReadState) == ssboReadState)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT &&
+                nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eShaderRead;
             }
 
-            constexpr auto ssboWriteState = EResourceState::RESOURCE_STATE_STORAGE_BUFFER | EResourceState::RESOURCE_STATE_WRITE;
-            if ((nextState & ssboWriteState) == ssboWriteState)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT &&
+                nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
             {
                 dstAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
 
             // NOTE: Read-To-Read don't need any sync.
             const bool bIsAnyWriteOpPresent =
-                /* srcAccessMask */ IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eShaderWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eTransferWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eHostWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eMemoryWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eShaderStorageWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                /* dstAccessMask */ IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eShaderWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eTransferWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eHostWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eMemoryWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eShaderStorageWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
-
+                /*src*/ (srcAccessMask & vk::AccessFlagBits2::eShaderWrite) || (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eHostWrite) || (srcAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) || (srcAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
+                /*dst*/ (dstAccessMask & vk::AccessFlagBits2::eShaderWrite) || (dstAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eHostWrite) || (dstAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
             if (bIsAnyWriteOpPresent)
                 memoryBarriers.emplace(vk::MemoryBarrier2()
                                            .setSrcAccessMask(srcAccessMask)
@@ -257,12 +234,13 @@ namespace Radiant
                                            .setDstStageMask(dstStageMask));
         }
 
-        NODISCARD static void FillImageBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
-                                                       std::vector<vk::ImageMemoryBarrier2>& imageMemoryBarriers,
-                                                       const Unique<GfxTexture>& texture, const ResourceStateFlags currentState,
-                                                       const ResourceStateFlags nextState, vk::ImageLayout& outNextLayout) noexcept
+        static void FillImageBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
+                                             std::vector<vk::ImageMemoryBarrier2>& imageMemoryBarriers, const Unique<GfxTexture>& texture,
+                                             const ResourceStateFlags currentState, const ResourceStateFlags nextState,
+                                             vk::ImageLayout& outNextLayout, const u32 subresourceIndex) noexcept
         {
-            constexpr auto bestDepthStencilState = EResourceState::RESOURCE_STATE_DEPTH_READ | EResourceState::RESOURCE_STATE_DEPTH_WRITE;
+            constexpr auto bestDepthStencilState =
+                EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT | EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT;
 
             vk::AccessFlags2 srcAccessMask{vk::AccessFlagBits2::eNone};
             vk::PipelineStageFlags2 srcStageMask{vk::PipelineStageFlagBits2::eNone};
@@ -271,22 +249,21 @@ namespace Radiant
             vk::AccessFlags2 dstAccessMask{vk::AccessFlagBits2::eNone};
             vk::PipelineStageFlags2 dstStageMask{vk::PipelineStageFlagBits2::eNone};
 
-            if (currentState == EResourceState::RESOURCE_STATE_UNDEFINED) srcStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
+            if (currentState == EResourceStateBits::RESOURCE_STATE_UNDEFINED) srcStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
 
             // CURRENT STATE
-            if ((currentState & EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT)
             {
                 // NOTE: Tbh idk which way I should determine layout here but, my logic is that if you write to it, then it's eGeneral, but
                 // if you only read it's eShaderReadOnlyOptimal, simple as that.
-                if ((currentState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
                     oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                     // srcAccessMask |= vk::AccessFlagBits2::eShaderStorageRead;
                 }
 
-                if ((currentState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     oldLayout = vk::ImageLayout::eGeneral;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
@@ -295,16 +272,15 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT)
             {
-                if ((currentState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
                     oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                 }
 
-                if ((currentState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     oldLayout = vk::ImageLayout::eGeneral;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
@@ -313,23 +289,22 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT)
             {
                 oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                 srcAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eVertexShader;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_RENDER_TARGET) == EResourceState::RESOURCE_STATE_RENDER_TARGET)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT)
             {
                 oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
-                if ((currentState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
                     srcAccessMask |= vk::AccessFlagBits2::eColorAttachmentRead;
                 }
 
-                if ((currentState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (currentState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     srcAccessMask |= vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead;
                 }
@@ -337,28 +312,28 @@ namespace Radiant
                 srcStageMask |= vk::PipelineStageFlagBits2::eColorAttachmentOutput;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_DEPTH_READ) == EResourceState::RESOURCE_STATE_DEPTH_READ)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT)
             {
                 oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
                 srcAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_DEPTH_WRITE) == EResourceState::RESOURCE_STATE_DEPTH_WRITE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT)
             {
                 oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
                 srcAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_COPY_SOURCE) == EResourceState::RESOURCE_STATE_COPY_SOURCE)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 oldLayout = vk::ImageLayout::eTransferSrcOptimal;
                 srcAccessMask |= vk::AccessFlagBits2::eTransferRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((currentState & EResourceState::RESOURCE_STATE_COPY_DESTINATION) == EResourceState::RESOURCE_STATE_COPY_DESTINATION)
+            if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 oldLayout = vk::ImageLayout::eTransferDstOptimal;
                 srcAccessMask |= vk::AccessFlagBits2::eTransferWrite;
@@ -366,14 +341,13 @@ namespace Radiant
             }
 
             // NEXT STATE
-            if ((nextState & EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT)
             {
-                if ((nextState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
-                    if ((currentState & EResourceState::RESOURCE_STATE_RENDER_TARGET) == EResourceState::RESOURCE_STATE_RENDER_TARGET ||
-                        (currentState & EResourceState::RESOURCE_STATE_DEPTH_READ) == EResourceState::RESOURCE_STATE_DEPTH_READ ||
-                        (currentState & EResourceState::RESOURCE_STATE_DEPTH_WRITE) == EResourceState::RESOURCE_STATE_DEPTH_WRITE)
+                    if (currentState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT ||
+                        currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT ||
+                        currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT)
                     {
                         outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                         dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
@@ -382,7 +356,7 @@ namespace Radiant
                     //   dstAccessMask |= vk::AccessFlagBits2::eShaderStorageRead;
                 }
 
-                if ((nextState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     outNextLayout = vk::ImageLayout::eGeneral;
                     dstAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
@@ -398,16 +372,15 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT)
             {
-                if ((nextState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
                     outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                     dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                 }
 
-                if ((nextState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     outNextLayout = vk::ImageLayout::eGeneral;
                     dstAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
@@ -416,7 +389,7 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_DEPTH_READ) == EResourceState::RESOURCE_STATE_DEPTH_READ)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT)
             {
                 outNextLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
                 dstAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentRead;
@@ -430,7 +403,7 @@ namespace Radiant
                 }
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_DEPTH_WRITE) == EResourceState::RESOURCE_STATE_DEPTH_WRITE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT)
             {
                 outNextLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
                 dstAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentRead;
@@ -444,15 +417,15 @@ namespace Radiant
                 }
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_RENDER_TARGET) == EResourceState::RESOURCE_STATE_RENDER_TARGET)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT)
             {
                 outNextLayout = vk::ImageLayout::eColorAttachmentOptimal;
-                if ((nextState & EResourceState::RESOURCE_STATE_READ) == EResourceState::RESOURCE_STATE_READ)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
                 {
                     dstAccessMask |= vk::AccessFlagBits2::eColorAttachmentRead;
                 }
 
-                if ((nextState & EResourceState::RESOURCE_STATE_WRITE) == EResourceState::RESOURCE_STATE_WRITE)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
                 {
                     dstAccessMask |= vk::AccessFlagBits2::eColorAttachmentWrite;
                 }
@@ -460,22 +433,21 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eColorAttachmentOutput;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE) ==
-                EResourceState::RESOURCE_STATE_VERTEX_SHADER_RESOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT)
             {
                 outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                 dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eVertexShader;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_COPY_SOURCE) == EResourceState::RESOURCE_STATE_COPY_SOURCE)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 outNextLayout = vk::ImageLayout::eTransferSrcOptimal;
                 dstAccessMask |= vk::AccessFlagBits2::eTransferRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
-            if ((nextState & EResourceState::RESOURCE_STATE_COPY_DESTINATION) == EResourceState::RESOURCE_STATE_COPY_DESTINATION)
+            if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 outNextLayout = vk::ImageLayout::eTransferDstOptimal;
                 dstAccessMask |= vk::AccessFlagBits2::eTransferWrite;
@@ -487,21 +459,14 @@ namespace Radiant
 
             // NOTE: Read-To-Read don't need any sync.
             const bool bIsAnyWriteOpPresent =
-                /* srcAccessMask */ IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eShaderWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eTransferWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eHostWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eMemoryWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eShaderStorageWrite) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                IsAccessFlagPresentFunc(srcAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                /* dstAccessMask */ IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eShaderWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eTransferWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eHostWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eMemoryWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eShaderStorageWrite) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                IsAccessFlagPresentFunc(dstAccessMask, vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
-
+                /*src*/ (srcAccessMask & vk::AccessFlagBits2::eShaderWrite) || (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eHostWrite) || (srcAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) || (srcAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
+                /*dst*/ (dstAccessMask & vk::AccessFlagBits2::eShaderWrite) || (dstAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eHostWrite) || (dstAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
             // NOTE: Read-To-Read don't need any sync, but we can't skip image transitions!
             if (oldLayout == outNextLayout)
             {
@@ -514,33 +479,18 @@ namespace Radiant
             }
             else
             {
-                auto imageMemoryBarrier = vk::ImageMemoryBarrier2()
-                                              .setImage(*texture)
-                                              .setSrcAccessMask(srcAccessMask)
-                                              .setSrcStageMask(srcStageMask)
-                                              .setOldLayout(oldLayout)
-                                              .setDstAccessMask(dstAccessMask)
-                                              .setDstStageMask(dstStageMask)
-                                              .setNewLayout(outNextLayout);
-                if (texture->IsDepthFormat(texture->GetDescription().Format))
-                {
-                    imageMemoryBarrier.setSubresourceRange(vk::ImageSubresourceRange()
-                                                               .setBaseArrayLayer(0)
-                                                               .setLayerCount(1)
-                                                               .setAspectMask(vk::ImageAspectFlagBits::eDepth)
-                                                               .setBaseMipLevel(0)
-                                                               .setLevelCount(1));
-                }
-                else
-                {
-                    imageMemoryBarrier.setSubresourceRange(vk::ImageSubresourceRange()
-                                                               .setBaseArrayLayer(0)
-                                                               .setLayerCount(1)
-                                                               .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                               .setBaseMipLevel(0)
-                                                               .setLevelCount(1));
-                }
-                imageMemoryBarriers.emplace_back(imageMemoryBarrier);
+                auto& imageMemoryBarrier =
+                    imageMemoryBarriers.emplace_back(srcStageMask, srcAccessMask, dstStageMask, dstAccessMask, oldLayout, outNextLayout,
+                                                     vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *texture);
+
+                imageMemoryBarrier.setSubresourceRange(vk::ImageSubresourceRange()
+                                                           .setBaseArrayLayer(0)
+                                                           .setLayerCount(1)
+                                                           .setAspectMask(texture->IsDepthFormat(texture->GetDescription().Format)
+                                                                              ? vk::ImageAspectFlagBits::eDepth
+                                                                              : vk::ImageAspectFlagBits::eColor)
+                                                           .setBaseMipLevel(subresourceIndex)
+                                                           .setLevelCount(1));
             }
         }
 
@@ -584,9 +534,9 @@ namespace Radiant
                 if (writePass->m_ID == readPass->m_ID) continue;
 
                 bool bAnyDependencyFound = false;
-                for (const auto& outTexture : writePass->m_TextureWrites)
+                for (const auto& subresourceID : writePass->m_TextureWrites)
                 {
-                    bAnyDependencyFound = std::find(readPass->m_TextureReads.cbegin(), readPass->m_TextureReads.cend(), outTexture) !=
+                    bAnyDependencyFound = std::find(readPass->m_TextureReads.cbegin(), readPass->m_TextureReads.cend(), subresourceID) !=
                                           readPass->m_TextureReads.cend();
 
                     if (bAnyDependencyFound) break;
@@ -597,9 +547,9 @@ namespace Radiant
                     continue;
                 }
 
-                for (const auto& outBuffer : writePass->m_BufferWrites)
+                for (const auto& subresourceID : writePass->m_BufferWrites)
                 {
-                    bAnyDependencyFound = std::find(readPass->m_BufferReads.cbegin(), readPass->m_BufferReads.cend(), outBuffer) !=
+                    bAnyDependencyFound = std::find(readPass->m_BufferReads.cbegin(), readPass->m_BufferReads.cend(), subresourceID) !=
                                           readPass->m_BufferReads.cend();
 
                     if (bAnyDependencyFound) break;
@@ -687,15 +637,13 @@ namespace Radiant
             if constexpr (s_bUseResourceMemoryAliasing)
             {
                 vk::MemoryPropertyFlags memoryPropertyFlags{};
-                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) ==
-                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL)
+                if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)
                     memoryPropertyFlags |= vk::MemoryPropertyFlagBits::eDeviceLocal;
 
-                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST)
+                if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
                     memoryPropertyFlags |= vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
 
-                if ((bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
-                    EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR)
+                if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
                     memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible |
                                           vk::MemoryPropertyFlagBits::eHostCoherent;
 
@@ -771,9 +719,11 @@ namespace Radiant
         std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
                   [](const auto* lhs, const auto* rhs) { return lhs->m_PassType < rhs->m_PassType; });
 
-        auto& frameData = gfxContext->GetCurrentFrameData();
+        TransitionResourceStates(gfxContext);
 
-        auto& cmd = frameData.GeneralCommandBuffer;
+        auto& frameData = gfxContext->GetCurrentFrameData();
+        auto& cmd       = frameData.GeneralCommandBuffer;
+
         for (auto& currentPass : m_Passes)
         {
 #if RDNT_DEBUG
@@ -794,9 +744,11 @@ namespace Radiant
             cpuTask.Name      = currentPass->m_Name;
             cpuTask.Color     = Colors::ColorArray[currentPass->m_ID % Colors::ColorArray.size()];
 
-            std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
-            std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
-            UnorderedSet<vk::MemoryBarrier2> memoryBarriers;
+            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+            {
+                RDNT_ASSERT(currentPass->m_Viewport.has_value(), "Viewport is invalid!");
+                RDNT_ASSERT(currentPass->m_Scissor.has_value(), "Scissor is invalid!");
+            }
 
             // TODO: Fill stencil
             auto stencilAttachmentInfo = vk::RenderingAttachmentInfo();
@@ -804,117 +756,73 @@ namespace Radiant
             std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
             u32 layerCount{1};
 
-            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
-                RDNT_ASSERT(currentPass->m_Viewport.has_value(), "Viewport is invalid!");
-
-            for (const auto& resourceID : currentPass->m_BufferReads)
+            for (const auto& subresourceID : currentPass->m_TextureReads)
             {
-                auto& RGbuffer = m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[resourceID]);
-                auto& buffer   = RGbuffer->Get();
-
-                const auto currentState = RGbuffer->GetState();
-                const auto nextState    = currentPass->m_ResourceIDToResourceState[resourceID];
-
-                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
-                RGbuffer->SetState(nextState);
-            }
-
-            for (const auto& resourceID : currentPass->m_BufferWrites)
-            {
-                auto& RGbuffer = m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[resourceID]);
-                auto& buffer   = RGbuffer->Get();
-
-                const auto currentState = RGbuffer->GetState();
-                const auto nextState    = currentPass->m_ResourceIDToResourceState[resourceID];
-
-                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
-                RGbuffer->SetState(nextState);
-            }
-
-            for (const auto& resourceID : currentPass->m_TextureReads)
-            {
-                auto& RGtexture = m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[resourceID]);
-                auto& texture   = RGtexture->Get();
-
-                const auto currentState = RGtexture->GetState();
-                const auto nextState    = currentPass->m_ResourceIDToResourceState[resourceID];
-
-                vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
-                RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
-                                                           nextLayout);
-                RGtexture->SetState(nextState);
+                auto& RGtexture =
+                    m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
+                auto& texture = RGtexture->Get();
 
                 if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
                 {
+                    const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
+
                     // NOTE: Since vulkan allows writing to storage texture from fragment shader we should take that into account
                     // NOTE: In case we use attachment as read only, other not supported!
-                    const bool bIsRasterUsage =
-                        (nextState & EResourceState::RESOURCE_STATE_RENDER_TARGET) == EResourceState::RESOURCE_STATE_RENDER_TARGET ||
-                        (nextState & EResourceState::RESOURCE_STATE_DEPTH_READ) == EResourceState::RESOURCE_STATE_DEPTH_READ ||
-                        (nextState & EResourceState::RESOURCE_STATE_DEPTH_WRITE) == EResourceState::RESOURCE_STATE_DEPTH_WRITE;
-                    if (!bIsRasterUsage) continue;
-
-                    layerCount = std::max(layerCount, texture->GetDescription().LayerCount);
-                    if (texture->IsDepthFormat(texture->GetDescription().Format))
-                    {
-                        depthAttachmentInfo = texture->GetRenderingAttachmentInfo(nextLayout, {}, vk::AttachmentLoadOp::eLoad,
-                                                                                  vk::AttachmentStoreOp::eDontCare);
-                    }
-                    else
-                    {
-                        colorAttachmentInfos.emplace_back() = texture->GetRenderingAttachmentInfo(
-                            nextLayout, {}, vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eDontCare);
-                    }
-                }
-            }
-
-            for (const auto& resourceID : currentPass->m_TextureWrites)
-            {
-                auto& RGtexture = m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[resourceID]);
-                auto& texture   = RGtexture->Get();
-
-                const auto currentState = RGtexture->GetState();
-                const auto nextState    = currentPass->m_ResourceIDToResourceState[resourceID];
-                vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
-                RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
-                                                           nextLayout);
-                RGtexture->SetState(nextState);
-
-                if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
-                {
-                    // NOTE: Since vulkan allows writing to storage texture from fragment shader we should take that into account
-                    const bool bIsRasterUsage =
-                        (nextState & EResourceState::RESOURCE_STATE_RENDER_TARGET) == EResourceState::RESOURCE_STATE_RENDER_TARGET ||
-                        (nextState & EResourceState::RESOURCE_STATE_DEPTH_READ) == EResourceState::RESOURCE_STATE_DEPTH_READ ||
-                        (nextState & EResourceState::RESOURCE_STATE_DEPTH_WRITE) == EResourceState::RESOURCE_STATE_DEPTH_WRITE;
+                    const bool bIsRasterUsage = (nextState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT) ||
+                                                (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT) ||
+                                                (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT);
                     if (!bIsRasterUsage) continue;
 
                     layerCount = std::max(layerCount, texture->GetDescription().LayerCount);
                     if (texture->IsDepthFormat(texture->GetDescription().Format))
                     {
                         depthAttachmentInfo = texture->GetRenderingAttachmentInfo(
-                            nextLayout, vk::ClearValue().setDepthStencil(*currentPass->m_DepthStencilInfo->ClearValue),
-                            currentPass->m_DepthStencilInfo->DepthLoadOp, currentPass->m_DepthStencilInfo->DepthStoreOp);
+                            vk::ImageLayout::eDepthStencilAttachmentOptimal, {}, vk::AttachmentLoadOp::eLoad,
+                            vk::AttachmentStoreOp::eDontCare, subresourceID.SubresourceIndex);
+                    }
+                    else
+                    {
+                        colorAttachmentInfos.emplace_back() =
+                            texture->GetRenderingAttachmentInfo(vk::ImageLayout::eColorAttachmentOptimal, {}, vk::AttachmentLoadOp::eLoad,
+                                                                vk::AttachmentStoreOp::eDontCare, subresourceID.SubresourceIndex);
+                    }
+                }
+            }
+
+            for (const auto& subresourceID : currentPass->m_TextureWrites)
+            {
+                auto& RGtexture =
+                    m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
+                auto& texture = RGtexture->Get();
+
+                if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+                {
+                    const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
+
+                    // NOTE: Since vulkan allows writing to storage texture from fragment shader we should take that into account
+                    // NOTE: In case we use attachment as read only, other not supported!
+                    const bool bIsRasterUsage = (nextState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT) ||
+                                                (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT) ||
+                                                (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT);
+                    if (!bIsRasterUsage) continue;
+
+                    layerCount = std::max(layerCount, texture->GetDescription().LayerCount);
+                    if (texture->IsDepthFormat(texture->GetDescription().Format))
+                    {
+                        depthAttachmentInfo = texture->GetRenderingAttachmentInfo(
+                            vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                            vk::ClearValue().setDepthStencil(*currentPass->m_DepthStencilInfo->ClearValue),
+                            currentPass->m_DepthStencilInfo->DepthLoadOp, currentPass->m_DepthStencilInfo->DepthStoreOp,
+                            subresourceID.SubresourceIndex);
                     }
                     else
                     {
                         auto& currentRTInfo                 = currentPass->m_RenderTargetInfos[colorAttachmentInfos.size()];
                         colorAttachmentInfos.emplace_back() = texture->GetRenderingAttachmentInfo(
-                            nextLayout, vk::ClearValue().setColor(*currentRTInfo.ClearValue), currentRTInfo.LoadOp, currentRTInfo.StoreOp);
+                            vk::ImageLayout::eColorAttachmentOptimal, vk::ClearValue().setColor(*currentRTInfo.ClearValue),
+                            currentRTInfo.LoadOp, currentRTInfo.StoreOp, subresourceID.SubresourceIndex);
                     }
                 }
-            }
-
-            std::vector<vk::MemoryBarrier2> memoryBarrierVector{memoryBarriers.begin(), memoryBarriers.end()};
-            if (!memoryBarrierVector.empty() || !bufferMemoryBarriers.empty() || !imageMemoryBarriers.empty())
-            {
-                cmd.pipelineBarrier2(vk::DependencyInfo()
-                                         .setMemoryBarriers(memoryBarrierVector)
-                                         .setBufferMemoryBarriers(bufferMemoryBarriers)
-                                         .setImageMemoryBarriers(imageMemoryBarriers));
-
-                ++m_RenderGraph.m_Stats.BarrierBatchCount;
-                m_RenderGraph.m_Stats.BarrierCount += memoryBarrierVector.size() + bufferMemoryBarriers.size() + imageMemoryBarriers.size();
             }
 
             if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
@@ -933,15 +841,9 @@ namespace Radiant
             RenderGraphResourceScheduler scheduler(m_RenderGraph, *currentPass);
             currentPass->Execute(scheduler, cmd);
 
-            switch (currentPass->m_PassType)
-            {
-                case ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS:
-                {
-                    if (currentPass->m_DepthStencilInfo.has_value() || !currentPass->m_RenderTargetInfos.empty()) cmd.endRendering();
-
-                    break;
-                }
-            }
+            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
+                (currentPass->m_DepthStencilInfo.has_value() || !currentPass->m_RenderTargetInfos.empty()))
+                cmd.endRendering();
 
             cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(frameData.FrameStartTime);
             cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *frameData.TimestampsQueryPool,
@@ -950,6 +852,87 @@ namespace Radiant
 #if RDNT_DEBUG
             cmd.endDebugUtilsLabelEXT();
 #endif
+        }
+    }
+
+    void RenderGraph::DependencyLevel::TransitionResourceStates(const Unique<GfxContext>& gfxContext) noexcept
+    {
+        auto& frameData = gfxContext->GetCurrentFrameData();
+        auto& cmd       = frameData.GeneralCommandBuffer;
+
+        std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
+        std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
+        UnorderedSet<vk::MemoryBarrier2> memoryBarriers;
+
+        for (auto& currentPass : m_Passes)
+        {
+            for (const auto& subresourceID : currentPass->m_BufferReads)
+            {
+                auto& RGbuffer =
+                    m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[subresourceID.ResourceID]);
+                auto& buffer = RGbuffer->Get();
+
+                const auto currentState = RGbuffer->GetState();
+                const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
+
+                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
+                RGbuffer->SetState(nextState);
+            }
+
+            for (const auto& subresourceID : currentPass->m_BufferWrites)
+            {
+                auto& RGbuffer =
+                    m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[subresourceID.ResourceID]);
+                auto& buffer = RGbuffer->Get();
+
+                const auto currentState = RGbuffer->GetState();
+                const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
+
+                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
+                RGbuffer->SetState(nextState);
+            }
+
+            for (const auto& subresourceID : currentPass->m_TextureReads)
+            {
+                auto& RGtexture =
+                    m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
+                auto& texture = RGtexture->Get();
+
+                const auto currentState = RGtexture->GetState(subresourceID.SubresourceIndex);
+                const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
+
+                vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
+                RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
+                                                           nextLayout, subresourceID.SubresourceIndex);
+                RGtexture->SetState(nextState, subresourceID.SubresourceIndex);
+            }
+
+            for (const auto& subresourceID : currentPass->m_TextureWrites)
+            {
+                auto& RGtexture =
+                    m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
+                auto& texture = RGtexture->Get();
+
+                const auto currentState = RGtexture->GetState(subresourceID.SubresourceIndex);
+                const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
+
+                vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
+                RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
+                                                           nextLayout, subresourceID.SubresourceIndex);
+                RGtexture->SetState(nextState, subresourceID.SubresourceIndex);
+            }
+        }
+
+        std::vector<vk::MemoryBarrier2> memoryBarrierVector{memoryBarriers.begin(), memoryBarriers.end()};
+        if (!memoryBarrierVector.empty() || !bufferMemoryBarriers.empty() || !imageMemoryBarriers.empty())
+        {
+            cmd.pipelineBarrier2(vk::DependencyInfo()
+                                     .setMemoryBarriers(memoryBarrierVector)
+                                     .setBufferMemoryBarriers(bufferMemoryBarriers)
+                                     .setImageMemoryBarriers(imageMemoryBarriers));
+
+            ++m_RenderGraph.m_Stats.BarrierBatchCount;
+            m_RenderGraph.m_Stats.BarrierCount += memoryBarrierVector.size() + bufferMemoryBarriers.size() + imageMemoryBarriers.size();
         }
     }
 
@@ -990,17 +973,19 @@ namespace Radiant
 
     void RenderGraphResourceScheduler::CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept
     {
-        const auto resourceID                          = m_RenderGraph.CreateResourceID(name);
-        m_RenderGraph.m_BufferCreates[name]            = bufferDesc;
-        m_Pass.m_ResourceIDToResourceState[resourceID] = EResourceState::RESOURCE_STATE_UNDEFINED;
+        const auto resourceID                             = m_RenderGraph.CreateResourceID(name);
+        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0);
+        m_RenderGraph.m_BufferCreates[name]               = bufferDesc;
+        m_Pass.m_ResourceIDToResourceState[subresourceID] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
     }
 
     NODISCARD RGResourceID RenderGraphResourceScheduler::ReadBuffer(const std::string& name,
                                                                     const ResourceStateFlags resourceState) noexcept
     {
-        const auto resourceID = m_RenderGraph.GetResourceID(name);
-        m_Pass.m_BufferReads.emplace_back(resourceID);
-        m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_READ;
+        const auto resourceID    = m_RenderGraph.GetResourceID(name);
+        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0);
+        m_Pass.m_BufferReads.emplace_back(subresourceID);
+        m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_READ_BIT;
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
@@ -1008,78 +993,141 @@ namespace Radiant
     NODISCARD RGResourceID RenderGraphResourceScheduler::WriteBuffer(const std::string& name,
                                                                      const ResourceStateFlags resourceState) noexcept
     {
-        const auto resourceID = m_RenderGraph.GetResourceID(name);
-        m_Pass.m_BufferWrites.emplace_back(resourceID);
-        m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_WRITE;
+        const auto resourceID    = m_RenderGraph.GetResourceID(name);
+        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0);
+        m_Pass.m_BufferWrites.emplace_back(subresourceID);
+        m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_WRITE_BIT;
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
-    NODISCARD void RenderGraphResourceScheduler::WriteDepthStencil(const std::string& name, const vk::AttachmentLoadOp depthLoadOp,
-                                                                   const vk::AttachmentStoreOp depthStoreOp,
-                                                                   const vk::ClearDepthStencilValue& clearValue,
-                                                                   const vk::AttachmentLoadOp stencilLoadOp,
-                                                                   const vk::AttachmentStoreOp stencilStoreOp) noexcept
+    void RenderGraphResourceScheduler::WriteDepthStencil(const std::string& name, const MipSet& mipSet,
+                                                         const vk::AttachmentLoadOp depthLoadOp, const vk::AttachmentStoreOp depthStoreOp,
+                                                         const vk::ClearDepthStencilValue& clearValue,
+                                                         const vk::AttachmentLoadOp stencilLoadOp,
+                                                         const vk::AttachmentStoreOp stencilStoreOp,
+                                                         const std::string& newAliasName) noexcept
     {
-        const auto resourceID = WriteTexture(name, EResourceState::RESOURCE_STATE_DEPTH_READ | EResourceState::RESOURCE_STATE_DEPTH_WRITE);
+        const auto resourceID = WriteTexture(
+            name, mipSet, EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT | EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT,
+            newAliasName);
         m_Pass.m_DepthStencilInfo = {.ClearValue     = clearValue,
                                      .DepthLoadOp    = depthLoadOp,
                                      .DepthStoreOp   = depthStoreOp,
                                      .StencilLoadOp  = stencilLoadOp,
                                      .StencilStoreOp = stencilStoreOp};
-
         (void)resourceID;
     }
 
-    NODISCARD void RenderGraphResourceScheduler::WriteRenderTarget(const std::string& name, const vk::AttachmentLoadOp loadOp,
-                                                                   const vk::AttachmentStoreOp storeOp,
-                                                                   const vk::ClearColorValue& clearValue) noexcept
+    void RenderGraphResourceScheduler::WriteRenderTarget(const std::string& name, const MipSet& mipSet, const vk::AttachmentLoadOp loadOp,
+                                                         const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue,
+                                                         const std::string& newAliasName) noexcept
     {
-        const auto resourceID = WriteTexture(name, EResourceState::RESOURCE_STATE_RENDER_TARGET);
+        const auto resourceID = WriteTexture(name, mipSet, EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT, newAliasName);
         m_Pass.m_RenderTargetInfos.emplace_back(clearValue, loadOp, storeOp);
-
         (void)resourceID;
     }
 
-    NODISCARD RGResourceID RenderGraphResourceScheduler::ReadTexture(const std::string& name,
+    NODISCARD RGResourceID RenderGraphResourceScheduler::ReadTexture(const std::string& name, const MipSet& mipSet,
                                                                      const ResourceStateFlags resourceState) noexcept
     {
         const auto resourceID = m_RenderGraph.GetResourceID(name);
-        m_Pass.m_TextureReads.emplace_back(resourceID);
-        m_Pass.m_ResourceIDToResourceState[resourceID] |= resourceState | EResourceState::RESOURCE_STATE_READ;
+
+        u32 mipLevelCount{1};
+        u32 baseMipLevel{0};
+        if (mipSet.Combination.has_value())
+        {
+            const auto& mipVariant = *mipSet.Combination;
+
+            if (const auto* mipLevel = std::get_if<u32>(&mipVariant))
+            {
+                baseMipLevel = *mipLevel;
+                if (baseMipLevel == std::numeric_limits<u32>::max())  // Last mip case
+                    baseMipLevel = m_RenderGraph.GetTextureMipCount(name) - 1;
+            }
+            else if (const auto* mipRange = std::get_if<MipRange>(&mipVariant))
+            {
+                baseMipLevel = mipRange->first;
+                if (mipRange->second.has_value())
+                    mipLevelCount = *mipRange->second - baseMipLevel + 1;
+                else
+                    mipLevelCount = m_RenderGraph.GetTextureMipCount(name) - baseMipLevel + 1;
+            }
+            else
+                RDNT_ASSERT(false, "Unknown MipVariant!");
+        }
+
+        for (u32 p = baseMipLevel; p < baseMipLevel + mipLevelCount; ++p)
+        {
+            const auto subresourceID = RenderGraphSubresourceID(name, resourceID, p);
+            m_Pass.m_TextureReads.emplace_back(subresourceID);
+            m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_READ_BIT;
+        }
+
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
-    NODISCARD RGResourceID RenderGraphResourceScheduler::WriteTexture(const std::string& name,
-                                                                      const ResourceStateFlags resourceState) noexcept
+    NODISCARD RGResourceID RenderGraphResourceScheduler::WriteTexture(const std::string& name, const MipSet& mipSet,
+                                                                      const ResourceStateFlags resourceState,
+                                                                      const std::string& newAliasName) noexcept
     {
         const auto resourceID = m_RenderGraph.GetResourceID(name);
-        m_Pass.m_TextureWrites.emplace_back(resourceID);
-        m_Pass.m_ResourceIDToResourceState[resourceID] |=
-            resourceState | EResourceState::RESOURCE_STATE_WRITE | EResourceState::RESOURCE_STATE_READ;
+        if (newAliasName != s_DEFAULT_STRING)
+        {
+            RDNT_ASSERT(!m_RenderGraph.m_ResourceAliasMap.contains(newAliasName), "Alias to Resource[{}] already exists!", name);
+            m_RenderGraph.m_ResourceAliasMap[newAliasName] = name;
+        }
+
+        u32 mipLevelCount{1};
+        u32 baseMipLevel{0};
+        if (mipSet.Combination.has_value())
+        {
+            const auto& mipVariant = *mipSet.Combination;
+
+            if (const auto* mipLevel = std::get_if<u32>(&mipVariant))
+            {
+                baseMipLevel = *mipLevel;
+                if (baseMipLevel == std::numeric_limits<u32>::max())  // Last mip case
+                    baseMipLevel = m_RenderGraph.GetTextureMipCount(name) - 1;
+            }
+            else if (const auto* mipRange = std::get_if<MipRange>(&mipVariant))
+            {
+                baseMipLevel = mipRange->first;
+                if (mipRange->second.has_value())
+                    mipLevelCount = *mipRange->second - baseMipLevel + 1;
+                else
+                    mipLevelCount = m_RenderGraph.GetTextureMipCount(name) - baseMipLevel + 1;
+            }
+            else
+                RDNT_ASSERT(false, "Unknown MipVariant!");
+        }
+
+        for (u32 p = baseMipLevel; p < baseMipLevel + mipLevelCount; ++p)
+        {
+            const auto subresourceID = RenderGraphSubresourceID(newAliasName != s_DEFAULT_STRING ? newAliasName : name, resourceID, p);
+            m_Pass.m_TextureWrites.emplace_back(subresourceID);
+            m_Pass.m_ResourceIDToResourceState[subresourceID] |=
+                resourceState | EResourceStateBits::RESOURCE_STATE_WRITE_BIT | EResourceStateBits::RESOURCE_STATE_READ_BIT;
+        }
+
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
         return resourceID;
     }
 
     void RenderGraphResourceScheduler::CreateTexture(const std::string& name, const GfxTextureDescription& textureDesc) noexcept
     {
-        const auto resourceID                          = m_RenderGraph.CreateResourceID(name);
-        m_RenderGraph.m_TextureCreates[name]           = textureDesc;
-        m_Pass.m_ResourceIDToResourceState[resourceID] = EResourceState::RESOURCE_STATE_UNDEFINED;
-    }
-
-    void RenderGraphResourceScheduler::SetViewportScissors(const vk::Viewport& viewport, const vk::Rect2D& scissor) noexcept
-    {
-        m_Pass.m_Viewport = viewport;
-        m_Pass.m_Scissor  = scissor;
+        const auto resourceID                             = m_RenderGraph.CreateResourceID(name);
+        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0);
+        m_RenderGraph.m_TextureCreates[name]              = textureDesc;
+        m_Pass.m_ResourceIDToResourceState[subresourceID] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
     }
 
     NODISCARD RGTextureHandle RenderGraphResourcePool::CreateTexture(const GfxTextureDescription& textureDesc,
                                                                      const std::string& textureName,
                                                                      const RGResourceID& resourceID) noexcept
     {
-        const auto setTextureDebugNameFunc = [&](const std::string& textureName, const vk::Image& image)
+        const auto SetTextureDebugNameFunc = [&](const std::string& textureName, const vk::Image& image)
         { m_Device->SetDebugName(textureName, image); };
 
         RGTextureHandle handleID{0};
@@ -1096,14 +1144,14 @@ namespace Radiant
             auto& gfxTextureHandle = RGTexture->Get();
             if (gfxTextureHandle->Resize(textureDesc.Dimensions)) m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
 
-            setTextureDebugNameFunc(textureName, *gfxTextureHandle);
+            SetTextureDebugNameFunc(textureName, *gfxTextureHandle);
             return handleID;
         }
 
         handleID        = m_Textures.size();
         auto& RGTexture = m_Textures.emplace_back(MakeUnique<RenderGraphResourceTexture>(MakeUnique<GfxTexture>(m_Device, textureDesc)),
                                                   m_GlobalFrameNumber);
-        setTextureDebugNameFunc(textureName, *(RGTexture.Handle->Get()));
+        SetTextureDebugNameFunc(textureName, *(RGTexture.Handle->Get()));
         m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
         return handleID;
     }
@@ -1111,117 +1159,51 @@ namespace Radiant
     NODISCARD RGBufferHandle RenderGraphResourcePool::CreateBuffer(const GfxBufferDescription& bufferDesc, const std::string& bufferName,
                                                                    const RGResourceID& resourceID) noexcept
     {
-        const auto setBufferDebugNameFunc = [&](const std::string& bufferName, const vk::Buffer& buffer)
+        const auto SetBufferDebugNameFunc = [&](const std::string& bufferName, const vk::Buffer& buffer)
         { m_Device->SetDebugName(bufferName, buffer); };
 
-        RGBufferHandle handleID = {};
+        const auto CreateBufferFunc = [&](GfxBufferVector& bufferVector,
+                                          RenderGraphResourcePool::ResourceMemoryAliaser& rma) -> RGBufferHandle
+        {
+            RGBufferHandle handleID{0};
+            for (auto& [RGBuffer, lastUsedFrame] : bufferVector)
+            {
+                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
+                {
+                    ++handleID.ID;
+                    continue;
+                }
+
+                handleID.BufferFlags  = bufferDesc.ExtraFlags;
+                lastUsedFrame         = m_GlobalFrameNumber;
+                auto& gfxBufferHandle = RGBuffer->Get();
+
+                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
+                    rma.m_ResourcesNeededMemoryRebind.emplace(resourceID);
+
+                SetBufferDebugNameFunc(bufferName, *gfxBufferHandle);
+                return handleID;
+            }
+
+            handleID       = RenderGraphBufferHandle{.ID = bufferVector.size(), .BufferFlags = bufferDesc.ExtraFlags};
+            auto& RGBuffer = bufferVector.emplace_back(MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)),
+                                                       m_GlobalFrameNumber);
+            SetBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
+            rma.m_ResourcesNeededMemoryRebind.emplace(resourceID);
+            return handleID;
+        };
 
         // NOTE: Handling rebar first cuz it contains device and host bits!
-        const bool bIsReBARPresent = (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR) ==
-                                     EExtraBufferFlag::EXTRA_BUFFER_FLAG_RESIZABLE_BAR;
-        if (bIsReBARPresent)
-        {
-            for (auto& [RGBuffer, lastUsedFrame] : m_ReBARBuffers[m_CurrentFrameIndex])
-            {
-                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
-                {
-                    ++handleID.ID;
-                    continue;
-                }
+        if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
+            return CreateBufferFunc(m_ReBARBuffers[m_CurrentFrameIndex], m_ReBARRMA[m_CurrentFrameIndex]);
 
-                handleID.BufferFlags  = bufferDesc.ExtraFlags;
-                lastUsedFrame         = m_GlobalFrameNumber;
-                auto& gfxBufferHandle = RGBuffer->Get();
+        if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
+            return CreateBufferFunc(m_HostBuffers[m_CurrentFrameIndex], m_HostRMA[m_CurrentFrameIndex]);
 
-                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
-                    m_ReBARRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
-
-                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
-                return handleID;
-            }
-
-            handleID = RenderGraphBufferHandle{.ID = m_ReBARBuffers[m_CurrentFrameIndex].size(), .BufferFlags = bufferDesc.ExtraFlags};
-            auto& RGBuffer = m_ReBARBuffers[m_CurrentFrameIndex].emplace_back(
-                MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
-            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
-            m_ReBARRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
-            return handleID;
-        }
-
-        const bool bIsHostVisible =
-            (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST;
-
-        handleID = {};
-        if (bIsHostVisible)
-        {
-            for (auto& [RGBuffer, lastUsedFrame] : m_HostBuffers[m_CurrentFrameIndex])
-            {
-                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
-                {
-                    ++handleID.ID;
-                    continue;
-                }
-
-                handleID.BufferFlags  = bufferDesc.ExtraFlags;
-                lastUsedFrame         = m_GlobalFrameNumber;
-                auto& gfxBufferHandle = RGBuffer->Get();
-
-                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
-                    m_HostRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
-
-                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
-                return handleID;
-            }
-
-            handleID       = RenderGraphBufferHandle{.ID = m_HostBuffers[m_CurrentFrameIndex].size(), .BufferFlags = bufferDesc.ExtraFlags};
-            auto& RGBuffer = m_HostBuffers[m_CurrentFrameIndex].emplace_back(
-                MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
-            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
-            m_HostRMA[m_CurrentFrameIndex].m_ResourcesNeededMemoryRebind.emplace(resourceID);
-            return handleID;
-        }
-
-        const bool bIsDeviceLocal =
-            (bufferDesc.ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_DEVICE_LOCAL;
-
-        handleID = {};
-        if (bIsDeviceLocal)
-        {
-            for (auto& [RGBuffer, lastUsedFrame] : m_DeviceBuffers)
-            {
-                if (lastUsedFrame == m_GlobalFrameNumber || RGBuffer->Get()->GetDescription() != bufferDesc)
-                {
-                    ++handleID.ID;
-                    continue;
-                }
-
-                handleID.BufferFlags  = bufferDesc.ExtraFlags;
-                lastUsedFrame         = m_GlobalFrameNumber;
-                auto& gfxBufferHandle = RGBuffer->Get();
-
-                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
-                    m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
-
-                setBufferDebugNameFunc(bufferName, *gfxBufferHandle);
-                return handleID;
-            }
-
-            handleID       = RenderGraphBufferHandle{.ID = m_DeviceBuffers.size(), .BufferFlags = bufferDesc.ExtraFlags};
-            auto& RGBuffer = m_DeviceBuffers.emplace_back(
-                MakeUnique<RenderGraphResourceBuffer>(MakeUnique<GfxBuffer>(m_Device, bufferDesc)), m_GlobalFrameNumber);
-            setBufferDebugNameFunc(bufferName, *(RGBuffer.Handle->Get()));
-            m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
-            return handleID;
-        }
+        if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)
+            return CreateBufferFunc(m_DeviceBuffers, m_DeviceRMA);
 
         RDNT_ASSERT(false, "{}: nothing to return!");
-    }
-
-    void RenderGraphResourcePool::BindResourcesToMemoryRegions() noexcept
-    {
-        m_DeviceRMA.BindResourcesToMemoryRegions();
-        m_ReBARRMA[m_CurrentFrameIndex].BindResourcesToMemoryRegions();
-        m_HostRMA[m_CurrentFrameIndex].BindResourcesToMemoryRegions();
     }
 
     void RenderGraphResourcePool::ResourceMemoryAliaser::BindResourcesToMemoryRegions() noexcept
@@ -1365,8 +1347,7 @@ namespace Radiant
             }
         }
         m_ResourcesNeededMemoryRebind.clear();
-
-        LOG_TRACE("Resource aliasing done!");
+        LOG_TRACE("Resource Aliasing Done!");
     }
 
 }  // namespace Radiant

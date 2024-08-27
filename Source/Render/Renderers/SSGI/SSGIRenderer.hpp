@@ -16,6 +16,7 @@ namespace Radiant
 
       private:
         Unique<GfxPipeline> m_CirclePipeline{nullptr};
+        Unique<GfxPipeline> m_FullScreenClearPassPipeline{nullptr};
     };
 
 }  // namespace Radiant

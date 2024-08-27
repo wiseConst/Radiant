@@ -116,7 +116,8 @@ namespace Radiant
                                              .setLevelCount(m_Description.bGenerateMips ? mipLevelCount : 1)));
 
             {
-                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                auto executionContext =
+                    GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
                 executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
@@ -153,9 +154,10 @@ namespace Radiant
                                                     m_MipChain[baseMipLevel].BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
             }
 
-            if ((m_Description.UsageFlags & vk::ImageUsageFlagBits::eStorage) == vk::ImageUsageFlagBits::eStorage)
+            if (m_Description.UsageFlags & vk::ImageUsageFlagBits::eStorage)
             {
-                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL);
+                auto executionContext =
+                    GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
                 executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
@@ -200,10 +202,8 @@ namespace Radiant
         RDNT_ASSERT(m_Description.bGenerateMips, "bGenerateMips is not specified!");
 
         const auto formatProps = m_Device->GetPhysicalDevice().getFormatProperties(m_Description.Format);
-        RDNT_ASSERT((formatProps.optimalTilingFeatures & (vk::FormatFeatureFlagBits::eSampledImageFilterLinear |
-                                                          vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst)) ==
-                        (vk::FormatFeatureFlagBits::eSampledImageFilterLinear | vk::FormatFeatureFlagBits::eBlitSrc |
-                         vk::FormatFeatureFlagBits::eBlitDst),
+        RDNT_ASSERT(formatProps.optimalTilingFeatures & (vk::FormatFeatureFlagBits::eSampledImageFilterLinear |
+                                                         vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst),
                     "Texture image format doesn't support linear blitting!");
 
         const auto aspectMask = IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;

@@ -16,15 +16,10 @@ namespace Radiant
             : Capacity(capacity), ElementSize(elementSize), UsageFlags(usageFlags), ExtraFlags(extraFlags),
               bControlledByRenderGraph(bControlledByRenderGraph)
         {
-            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_ADDRESSABLE)
-            {
+            if (ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT)
                 UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
-            }
 
-            if ((ExtraFlags & EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST) == EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST)
-            {
-                UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
-            }
+            if (ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT) UsageFlags |= vk::BufferUsageFlagBits::eTransferSrc;
         }
         constexpr GfxBufferDescription() noexcept =
             default;  // NOTE: NEVER USE IT, IT'S NOT DELETED ONLY FOR COMPATIBILITY WITH maps/other containers!
@@ -60,8 +55,6 @@ namespace Radiant
         operator vk::Buffer&() noexcept { return m_Handle; }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
-        NODISCARD FORCEINLINE const auto& GetMemorySize() const noexcept { return m_MemorySize; }
-
         NODISCARD FORCEINLINE const vk::DeviceAddress& GetBDA() const noexcept
         {
             RDNT_ASSERT(m_BDA.has_value(), "BDA is invalid!");
@@ -99,7 +92,6 @@ namespace Radiant
 
         vk::Buffer m_Handle{nullptr};
         VmaAllocation m_Allocation{};
-        vk::DeviceSize m_MemorySize{0};
         std::optional<vk::DeviceAddress> m_BDA{std::nullopt};
         void* m_Mapped{nullptr};
 

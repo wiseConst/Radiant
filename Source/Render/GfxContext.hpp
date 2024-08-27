@@ -125,7 +125,7 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto GetSwapchainImageCount() const noexcept { return m_SwapchainImages.size(); }
 
         NODISCARD ImmediateExecuteContext
-        CreateImmediateExecuteContext(const ECommandBufferType commandBufferType,
+        CreateImmediateExecuteContext(const ECommandBufferTypeBits commandBufferType,
                                       const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             const auto& logicalDevice = m_Device->GetLogicalDevice();
@@ -134,7 +134,7 @@ namespace Radiant
             ImmediateExecuteContext context = {};
             switch (commandBufferType)
             {
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
                 {
                     context.Queue = m_Device->GetGeneralQueue().Handle;
                     context.CommandPool =
@@ -143,7 +143,7 @@ namespace Radiant
                                                                    .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
                     break;
                 }
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
                 {
                     context.Queue = m_Device->GetComputeQueue().Handle;
                     context.CommandPool =
@@ -153,7 +153,7 @@ namespace Radiant
 
                     break;
                 }
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
                 {
                     context.Queue = m_Device->GetTransferQueue().Handle;
                     context.CommandPool =
@@ -176,13 +176,13 @@ namespace Radiant
         }
 
         NODISCARD std::tuple<vk::UniqueCommandBuffer, vk::Queue> AllocateSingleUseCommandBufferWithQueue(
-            const ECommandBufferType commandBufferType,
+            const ECommandBufferTypeBits commandBufferType,
             const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             std::scoped_lock lock(m_Mtx);
             switch (commandBufferType)
             {
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_GENERAL:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(
@@ -193,7 +193,7 @@ namespace Radiant
                                           .back()),
                             m_Device->GetGeneralQueue().Handle};
                 }
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(
@@ -204,7 +204,7 @@ namespace Radiant
                                           .back()),
                             m_Device->GetComputeQueue().Handle};
                 }
-                case ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER:
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(

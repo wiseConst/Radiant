@@ -23,7 +23,7 @@ namespace Radiant
         };
 
 #define LIGHT_CLUSTERS_BUILD_WG_SIZE 4
-#define LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE 256
+#define LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE 32
 
     }  // namespace Shaders
 

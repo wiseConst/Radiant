@@ -100,13 +100,14 @@ namespace Radiant
         void GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept;
         bool Resize(const glm::uvec3& dimensions) noexcept;
 
-        NODISCARD FORCEINLINE u32 GetBindlessImageID(const u8 mipLevel = 0) const noexcept
+        FORCEINLINE u32 GetMipChainSize() const noexcept { return m_MipChain.size(); }
+        NODISCARD FORCEINLINE u32 GetBindlessImageID(const u32 mipLevel = 0) const noexcept
         {
             RDNT_ASSERT(mipLevel < m_MipChain.size() && m_MipChain[mipLevel].BindlessImageID.has_value(),
                         "Invalid mip level or BindlessImageID!");
             return *m_MipChain[mipLevel].BindlessImageID;
         }
-        NODISCARD FORCEINLINE u32 GetBindlessTextureID(const u8 mipLevel = 0) const noexcept
+        NODISCARD FORCEINLINE u32 GetBindlessTextureID(const u32 mipLevel = 0) const noexcept
         {
             RDNT_ASSERT(mipLevel < m_MipChain.size() && m_MipChain[mipLevel].BindlessTextureID.has_value(),
                         "Invalid mip level or BindlessTextureID!");
@@ -114,12 +115,11 @@ namespace Radiant
         }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
-        NODISCARD FORCEINLINE const auto& GetMemorySize() const noexcept { return m_MemorySize; }
         NODISCARD FORCEINLINE vk::RenderingAttachmentInfo GetRenderingAttachmentInfo(const vk::ImageLayout imageLayout,
                                                                                      const vk::ClearValue& clearValue,
                                                                                      const vk::AttachmentLoadOp loadOp,
                                                                                      const vk::AttachmentStoreOp storeOp,
-                                                                                     const u8 mipLevel = 0) const noexcept
+                                                                                     const u32 mipLevel = 0) const noexcept
         {
             return vk::RenderingAttachmentInfo()
                 .setImageView(*m_MipChain[mipLevel].ImageView)
@@ -134,7 +134,6 @@ namespace Radiant
         const Unique<GfxDevice>& m_Device;
         GfxTextureDescription m_Description{};
         vk::Image m_Image{};
-        vk::DeviceSize m_MemorySize{0};
 
         struct MipInfo
         {

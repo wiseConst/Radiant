@@ -33,7 +33,7 @@ namespace Radiant
                     "GfxPipelineStateCache: Pipeline holds invalid options!");
         if (LastBoundPipeline == pipeline) return;
 
-        vk::PipelineBindPoint pipelineBindPoint = {};
+        vk::PipelineBindPoint pipelineBindPoint{vk::PipelineBindPoint::eGraphics};
         if (std::holds_alternative<GfxGraphicsPipelineOptions>(pipeline->GetDescription().PipelineOptions))
             pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
         else if (std::holds_alternative<GfxComputePipelineOptions>(pipeline->GetDescription().PipelineOptions))
@@ -41,7 +41,7 @@ namespace Radiant
         else if (std::holds_alternative<GfxRayTracingPipelineOptions>(pipeline->GetDescription().PipelineOptions))
             pipelineBindPoint = vk::PipelineBindPoint::eRayTracingKHR;
         else
-            RDNT_ASSERT(false, "This shouldn't happen!");
+            RDNT_ASSERT(false, "Pipeline holds no options?!");
 
         cmd.bindPipeline(pipelineBindPoint, *pipeline);
         LastBoundPipeline = pipeline;
@@ -371,6 +371,7 @@ namespace Radiant
                                            .setOffset(0)
                                            .setSize(/* guaranteed by the spec min bytes size of maxPushConstantsSize */ 128)
                                            .setStageFlags(vk::ShaderStageFlagBits::eAll)));
+        m_Device->SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", (const vk::PipelineLayout&)*m_PipelineLayout);
 
         constexpr std::array<vk::DescriptorPoolSize, 3> poolSizes{
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES).setType(vk::DescriptorType::eStorageImage),
@@ -420,16 +421,16 @@ namespace Radiant
             m_DefaultWhiteTexture =
                 MakeUnique<GfxTexture>(m_Device, GfxTextureDescription(vk::ImageType::e2D, {1, 1, 1}, vk::Format::eR8G8B8A8Unorm,
                                                                        vk::ImageUsageFlagBits::eTransferDst));
-
             m_Device->SetDebugName("RDNT_DEFAULT_WHITE_TEX", (const vk::Image&)*m_DefaultWhiteTexture);
 
             auto stagingBuffer = MakeUnique<GfxBuffer>(m_Device, GfxBufferDescription(sizeof(whiteTextureData), sizeof(whiteTextureData),
                                                                                       vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                      EExtraBufferFlag::EXTRA_BUFFER_FLAG_HOST));
+                                                                                      EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
 
             stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
 
-            const auto [cmd, queue] = AllocateSingleUseCommandBufferWithQueue(ECommandBufferType::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER);
+            const auto [cmd, queue] =
+                AllocateSingleUseCommandBufferWithQueue(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT);
             cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
             cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
@@ -490,7 +491,7 @@ namespace Radiant
             availableSurfaceFormats[0].format == vk::Format::eUndefined ? vk::Format::eB8G8R8A8Unorm : availableSurfaceFormats[0].format;
         const vk::SurfaceCapabilitiesKHR availableSurfaceCapabilities = m_Device->GetPhysicalDevice().getSurfaceCapabilitiesKHR(*m_Surface);
         constexpr auto requestedImageUsageFlags = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst;
-        RDNT_ASSERT((availableSurfaceCapabilities.supportedUsageFlags & requestedImageUsageFlags) == requestedImageUsageFlags,
+        RDNT_ASSERT(availableSurfaceCapabilities.supportedUsageFlags & requestedImageUsageFlags,
                     "Swapchain's supportedUsageFlags != requestedImageUsageFlags.");
 
         // If the surface size is defined, the swap chain size must match

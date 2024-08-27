@@ -1,6 +1,5 @@
 // circle.slang
 
-
 struct VSOutput
 {
     float3 localPos;

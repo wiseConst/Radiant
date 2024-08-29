@@ -1,6 +1,9 @@
 #include <pch.h>
 #include "RenderGraph.hpp"
 
+// NOTE: Only for RenderGraphResourcePool::UI_ShowResourceUsage()
+#include <imgui.h>
+
 template <> struct ankerl::unordered_dense::hash<vk::MemoryBarrier2>
 {
     using is_avalanching = void;
@@ -44,8 +47,7 @@ namespace Radiant
                                               const ResourceStateFlags currentState, const ResourceStateFlags nextState) noexcept
         {
             // NOTE: BufferMemoryBarriers should be used only on queue ownership transfers.
-            // auto bufferMemoryBarrier =
-            // vk::BufferMemoryBarrier2().setBuffer(*buffer).setOffset(0).setSize(buffer->GetDescription().Capacity);
+            static constexpr bool s_bUseBufferMemoryBarriers = false;
 
             vk::PipelineStageFlags2 srcStageMask{vk::PipelineStageFlagBits2::eNone};
             vk::AccessFlags2 srcAccessMask{vk::AccessFlagBits2::eNone};
@@ -226,12 +228,24 @@ namespace Radiant
                 (dstAccessMask & vk::AccessFlagBits2::eHostWrite) || (dstAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
                 (dstAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
                 (dstAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
-            if (bIsAnyWriteOpPresent)
+
+            if (!bIsAnyWriteOpPresent) return;
+
+            if (!s_bUseBufferMemoryBarriers)
                 memoryBarriers.emplace(vk::MemoryBarrier2()
                                            .setSrcAccessMask(srcAccessMask)
                                            .setSrcStageMask(srcStageMask)
                                            .setDstAccessMask(dstAccessMask)
                                            .setDstStageMask(dstStageMask));
+            else
+                bufferMemoryBarriers.emplace_back()
+                    .setBuffer(*buffer)
+                    .setOffset(0)
+                    .setSize(buffer->GetDescription().Capacity)
+                    .setSrcAccessMask(srcAccessMask)
+                    .setSrcStageMask(srcStageMask)
+                    .setDstAccessMask(dstAccessMask)
+                    .setDstStageMask(dstStageMask);
         }
 
         static void FillImageBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
@@ -643,10 +657,6 @@ namespace Radiant
                 if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
                     memoryPropertyFlags |= vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
 
-                if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
-                    memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible |
-                                          vk::MemoryPropertyFlagBits::eHostCoherent;
-
                 auto& gfxBufferHandle = m_ResourcePool->GetBuffer(m_ResourceIDToBufferHandle[resourceID])->Get();
                 m_ResourcePool->FillResourceInfo(
                     resourceHandle, resourceID, bufferName,
@@ -715,10 +725,6 @@ namespace Radiant
 
     void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept
     {
-        // Sort passes by type to not drain the pipeline fully.
-        std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
-                  [](const auto* lhs, const auto* rhs) { return lhs->m_PassType < rhs->m_PassType; });
-
         TransitionResourceStates(gfxContext);
 
         auto& frameData = gfxContext->GetCurrentFrameData();
@@ -1123,6 +1129,60 @@ namespace Radiant
         m_Pass.m_ResourceIDToResourceState[subresourceID] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
     }
 
+    void RenderGraphResourcePool::UI_ShowResourceUsage() const noexcept
+    {
+        if (ImGui::TreeNodeEx("RenderGraphResourcePool Statistics", ImGuiTreeNodeFlags_Framed))
+        {
+            if constexpr (!s_bUseResourceMemoryAliasing)
+            {
+                ImGui::Text("s_bUseResourceMemoryAliasing is false!");
+                ImGui::TreePop();
+                return;
+            }
+
+            const auto DrawMemoryAliaserStatisticsFunc = [](const std::string& rmaName, const auto& rma)
+            {
+                if (ImGui::TreeNodeEx(rmaName.data(), ImGuiTreeNodeFlags_Framed))
+                {
+                    ImGui::Text("Memory Buckets: %u", rma.m_MemoryBuckets.size());
+                    ImGui::Separator();
+                    for (u32 memoryBucketIndex{}; memoryBucketIndex < rma.m_MemoryBuckets.size(); ++memoryBucketIndex)
+                    {
+                        const auto& currentMemoryBucket = rma.m_MemoryBuckets[memoryBucketIndex];
+                        const auto memoryBucketName     = "ResourceBucket[" + std::to_string(memoryBucketIndex) + "], Size: " +
+                                                      std::to_string(currentMemoryBucket.MemoryRequirements.size / 1024.f / 1024.f) + " MB";
+                        if (ImGui::TreeNodeEx(memoryBucketName.data(), ImGuiTreeNodeFlags_Framed))
+                        {
+                            for (u32 rowIndex{}; rowIndex < currentMemoryBucket.StorageOfRows.size(); ++rowIndex)
+                            {
+                                const auto& currentRow     = currentMemoryBucket.StorageOfRows[rowIndex];
+                                const auto resourceRowName = "Resource Row: " + std::to_string(rowIndex);
+                                ImGui::SeparatorText(resourceRowName.data());
+                                for (u32 resourceIndex{}; resourceIndex < currentRow.size(); ++resourceIndex)
+                                {
+                                    const auto& currentResource = currentRow[resourceIndex];
+                                    ImGui::Text("Resource[ %s ], ResourceID[ %llu ], Offset[ %llu ], Size[ %0.4f ] MB.",
+                                                currentResource.DebugName.data(), currentResource.ID, currentResource.Offset,
+                                                currentResource.MemoryRequirements.size / 1024.f / 1024.f);
+                                }
+                            }
+
+                            ImGui::TreePop();
+                        }
+                    }
+
+                    ImGui::TreePop();
+                }
+            };
+
+            DrawMemoryAliaserStatisticsFunc("Device Resource Memory Aliaser", m_DeviceRMA);
+            DrawMemoryAliaserStatisticsFunc("ReBAR Resource Memory Aliaser", m_ReBARRMA[m_CurrentFrameIndex]);
+            DrawMemoryAliaserStatisticsFunc("Host Resource Memory Aliaser", m_HostRMA[m_CurrentFrameIndex]);
+
+            ImGui::TreePop();
+        }
+    }
+
     NODISCARD RGTextureHandle RenderGraphResourcePool::CreateTexture(const GfxTextureDescription& textureDesc,
                                                                      const std::string& textureName,
                                                                      const RGResourceID& resourceID) noexcept
@@ -1194,7 +1254,7 @@ namespace Radiant
         };
 
         // NOTE: Handling rebar first cuz it contains device and host bits!
-        if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
+        if (bufferDesc.ExtraFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
             return CreateBufferFunc(m_ReBARBuffers[m_CurrentFrameIndex], m_ReBARRMA[m_CurrentFrameIndex]);
 
         if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
@@ -1249,11 +1309,27 @@ namespace Radiant
             {
                 // NOTES:
                 // 1) First row's resource in bucket fully occupies it!
-                // 2) Memory type should be the same! (but it's already the same since I splitted RMA by memory types)
+                // 2) Memory type should be the same! (but it's already the same since I splitted RMA by memory types,
+                // that's why I commented second check)
                 if (DoEffectiveLifetimeConflict(m_ResourceLifetimeMap[memoryBucket.StorageOfRows[0][0].ID],
                                                 m_ResourceLifetimeMap[resourceToBeAssigned.ID]) /*||
                     resourceToBeAssigned.MemoryPropertyFlags != memoryBucket.StorageOfRows[0][0].MemoryPropertyFlags*/)
                     continue;
+
+                // TODO: Needs better algorithm cuz we skip potential free space!
+                // NOTE: Store last highest offset and kind of compare it, idk, use your brain idiot
+                bool bDoResourcesInRowOverlap{false};
+                for (auto& row : memoryBucket.StorageOfRows)
+                {
+                    for (const auto& resourceInRow : row)
+                    {
+                        bDoResourcesInRowOverlap = DoEffectiveLifetimeConflict(m_ResourceLifetimeMap[resourceInRow.ID],
+                                                                               m_ResourceLifetimeMap[resourceToBeAssigned.ID]);
+                        if (bDoResourcesInRowOverlap) break;
+                    }
+                    if (bDoResourcesInRowOverlap) break;
+                }
+                if (bDoResourcesInRowOverlap) continue;
 
                 for (auto& row : memoryBucket.StorageOfRows)
                 {

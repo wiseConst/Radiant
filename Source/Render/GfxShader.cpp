@@ -75,7 +75,6 @@ namespace Radiant
         std::vector<slang::CompilerOptionEntry> compileOptions = {};
         compileOptions.emplace_back(slang::CompilerOptionName::Capability,
                                     slang::CompilerOptionValue{.intValue0 = slangGlobalSession->findCapability("spirv_1_6")});
-        compileOptions.emplace_back(slang::CompilerOptionName::GLSLForceScalarLayout, slang::CompilerOptionValue{.intValue0 = 1});
         compileOptions.emplace_back(slang::CompilerOptionName::DisableWarning,
                                     slang::CompilerOptionValue{.kind         = slang::CompilerOptionValueKind::String,
                                                                .stringValue0 = "39001"});  // NOTE: vulkan bindings aliasing
@@ -87,11 +86,11 @@ namespace Radiant
         {
             compileOptions.emplace_back(slang::CompilerOptionName::Optimization,
                                         slang::CompilerOptionValue{.intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE});
-            // compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
-            //                             slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
-            // compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
-            //                             slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});
-            // compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
+            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
+            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
+            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
+            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});
+            //compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
         }
         else
         {
@@ -154,7 +153,7 @@ namespace Radiant
             m_ModuleMap.emplace(SlangUtils::SlangShaderStageToVulkan(reflectedEntryPoint->getStage()),
                                 m_Device->GetLogicalDevice()->createShaderModuleUnique(
                                     vk::ShaderModuleCreateInfo()
-                                        .setPCode(static_cast<const uint32_t*>(spirvCode->getBufferPointer()))
+                                        .setPCode(static_cast<const u32*>(spirvCode->getBufferPointer()))
                                         .setCodeSize(spirvCode->getBufferSize())));
         }
     }

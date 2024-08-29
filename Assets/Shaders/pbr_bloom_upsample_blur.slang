@@ -34,7 +34,7 @@ float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     const float3 c = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv + float2(x, y)).rgb;
 
     const float3 d = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv + float2(-x, 0)).rgb;
-    const float4 e = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv).rgba;
+    const float3 e = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv).rgb;
     const float3 f = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv + float2(x, 0)).rgb;
 
     const float3 g = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(fsInput.uv + float2(-x, -y)).rgb;
@@ -45,10 +45,10 @@ float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     //  1   | 1 2 1 |
     // -- * | 2 4 2 |
     // 16   | 1 2 1 |
-    float4 finalColor = e * 4;
-    finalColor.rgb += (b + d + f + h) * 2;
-    finalColor.rgb += (a + c + g + i);
-    finalColor.rgb *= 0.0625f;
+    float3 finalColor = e * 4;
+    finalColor += (b + d + f + h) * 2;
+    finalColor += (a + c + g + i);
+    finalColor *= 0.0625f;
 
-    return finalColor;
+    return float4(finalColor, 1.0f);
 }

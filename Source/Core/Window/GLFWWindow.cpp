@@ -10,7 +10,7 @@ namespace Radiant
     namespace GLFWUtils
     {
         static bool s_bIsGLFWInit = false;
-        static std::atomic<uint32_t> s_GLFWActiveWindowCount{0};
+        static std::atomic<u32> s_GLFWActiveWindowCount{0};
         static void InitGLFW() noexcept
         {
             if (s_bIsGLFWInit) return;
@@ -21,7 +21,7 @@ namespace Radiant
                 return;
             }
 
-            glfwSetErrorCallback([](int32_t error, const char* message) { LOG_ERROR("GLFW error[{}]: {}\n", error, message); });
+            glfwSetErrorCallback([](i32 error, const char* message) { LOG_ERROR("GLFW error[{}]: {}\n", error, message); });
 
             RDNT_ASSERT(glfwVulkanSupported() == GLFW_TRUE, "GLFW: Vulkan is not supported!");
 
@@ -69,19 +69,25 @@ namespace Radiant
         glfwSetWindowTitle(m_Handle, title.data());
     }
 
-    bool GLFWWindow::IsMouseButtonPressed(const int32_t glfwKey) const noexcept
+    bool GLFWWindow::IsMouseButtonPressed(const i32 glfwKey) const noexcept
     {
         RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
         return glfwGetMouseButton(m_Handle, glfwKey) == GLFW_PRESS;
     }
 
-    bool GLFWWindow::IsKeyPressed(const int32_t glfwKey) const noexcept
+    bool GLFWWindow::IsMouseButtonReleased(const i32 glfwKey) const noexcept
+    {
+        RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
+        return glfwGetMouseButton(m_Handle, glfwKey) == GLFW_RELEASE;
+    }
+
+    bool GLFWWindow::IsKeyPressed(const i32 glfwKey) const noexcept
     {
         RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
         return glfwGetKey(m_Handle, glfwKey) == GLFW_PRESS;
     }
 
-    bool GLFWWindow::IsKeyReleased(const int32_t glfwKey) const noexcept
+    bool GLFWWindow::IsKeyReleased(const i32 glfwKey) const noexcept
     {
         RDNT_ASSERT(glfwKey < GLFW_KEY_LAST, "Unknown glfw key!");
         return glfwGetKey(m_Handle, glfwKey) == GLFW_RELEASE;

@@ -28,7 +28,7 @@ namespace Radiant
             return imageData;
         }
 
-        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height, i32& channels,
+        void* LoadImage(const void* rawImageData, const u64 rawImageDataSize, i32& width, i32& height, i32& channels,
                         const i32 requestedChannels) noexcept
         {
             RDNT_ASSERT(rawImageData && rawImageDataSize > 0, "Invalid raw image data or size!");
@@ -82,11 +82,8 @@ namespace Radiant
             m_Image = m_Device->GetLogicalDevice()->createImage(imageCI);
             return;
         }
-        else
-        {
-            m_Device->AllocateTexture(imageCI, (VkImage&)m_Image, m_Allocation);
-        }
 
+        m_Device->AllocateTexture(imageCI, (VkImage&)m_Image, m_Allocation);
         CreateMipChainAndSubmitToBindlessPool();
     }
 
@@ -215,7 +212,7 @@ namespace Radiant
                                                                                 .setAspectMask(aspectMask));
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
-        uint32_t mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
+        u32 mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
         for (u32 baseMipLevel{1}; baseMipLevel < mipLevelCount; ++baseMipLevel)
         {
             imageMemoryBarrier.subresourceRange.baseMipLevel = baseMipLevel - 1;
@@ -238,20 +235,20 @@ namespace Radiant
                                                          .setBaseArrayLayer(0)
                                                          .setMipLevel(baseMipLevel);
 
-            cmd.blitImage2(vk::BlitImageInfo2()
-                               .setFilter(vk::Filter::eLinear)
-                               .setSrcImage(m_Image)
-                               .setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
-                               .setDstImage(m_Image)
-                               .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
-                               .setRegions(vk::ImageBlit2()
-                                               .setSrcSubresource(previousMipSubresourceLayers)
-                                               .setSrcOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(mipWidth),
-                                                                                            static_cast<int32_t>(mipHeight), 1)})
-                                               .setDstSubresource(currentMipSubresourceLayers)
-                                               .setDstOffsets({vk::Offset3D(),
-                                                               vk::Offset3D(static_cast<int32_t>(mipWidth > 1 ? mipWidth / 2 : 1),
-                                                                            static_cast<int32_t>(mipHeight > 1 ? mipHeight / 2 : 1), 1)})));
+            cmd.blitImage2(
+                vk::BlitImageInfo2()
+                    .setFilter(vk::Filter::eLinear)
+                    .setSrcImage(m_Image)
+                    .setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
+                    .setDstImage(m_Image)
+                    .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
+                    .setRegions(
+                        vk::ImageBlit2()
+                            .setSrcSubresource(previousMipSubresourceLayers)
+                            .setSrcOffsets({vk::Offset3D(), vk::Offset3D(static_cast<i32>(mipWidth), static_cast<i32>(mipHeight), 1)})
+                            .setDstSubresource(currentMipSubresourceLayers)
+                            .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<i32>(mipWidth > 1 ? mipWidth / 2 : 1),
+                                                                         static_cast<i32>(mipHeight > 1 ? mipHeight / 2 : 1), 1)})));
 
             imageMemoryBarrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
             imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferRead;

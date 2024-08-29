@@ -27,7 +27,7 @@ namespace Radiant
 
         u64 Capacity{};
         u64 ElementSize{};
-        vk::BufferUsageFlags UsageFlags;
+        vk::BufferUsageFlags UsageFlags{};
         ExtraBufferFlags ExtraFlags{};
         bool bControlledByRenderGraph{false};
 
@@ -61,7 +61,7 @@ namespace Radiant
             return m_BDA.value();
         }
 
-        void SetData(const void* data, const std::size_t dataSize) noexcept
+        void SetData(const void* data, const u64 dataSize) noexcept
         {
             if (!m_Mapped) return;
 
@@ -91,7 +91,7 @@ namespace Radiant
         GfxBufferDescription m_Description{};
 
         vk::Buffer m_Handle{nullptr};
-        VmaAllocation m_Allocation{};
+        VmaAllocation m_Allocation{VK_NULL_HANDLE};
         std::optional<vk::DeviceAddress> m_BDA{std::nullopt};
         void* m_Mapped{nullptr};
 

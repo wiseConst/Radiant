@@ -16,8 +16,10 @@ namespace Radiant
 
 #endif
 
+#define MAX_POINT_LIGHT_COUNT 256
+
 // NOTE: AMD iGPU doesn't support storagePushConstant8/16, but I wanna preserve them on my NV dGPU so I can fastly transfer quantized data.
-#define RENDER_FORCE_IGPU 1
+#define RENDER_FORCE_IGPU 0
 
     struct VertexPosition
     {
@@ -92,7 +94,6 @@ namespace Radiant
             float4(1.0f, 1.0f, 1.0f, 1.0f)   // White
         };
 
-#define MAX_POINT_LIGHT_COUNT 512
         struct LightData
         {
             DirectionalLight Sun;
@@ -232,8 +233,8 @@ namespace Radiant
         // Converts a color from linear light gamma to sRGB gamma
         float4 Linear2sRGB(const float4 linearRGB)
         {
-            const bool3 cutoff  = linearRGB.rgb < float3(0.0031308);
-            const float3 higher = float3(1.055) * pow(linearRGB.rgb, float3(1.0 / 2.4)) - float3(0.055);
+            const bool3 cutoff  = linearRGB.rgb < float3(0.0031308f);
+            const float3 higher = float3(1.055) * pow(linearRGB.rgb, float3(0.4166666f)) - float3(0.055);
             const float3 lower  = linearRGB.rgb * float3(12.92);
 
             return float4(lerp(higher, lower, (float3)cutoff), linearRGB.a);
@@ -243,8 +244,8 @@ namespace Radiant
         float4 sRGB2Linear(const float4 sRGB)
         {
             const bool3 cutoff  = sRGB.rgb < float3(0.04045);
-            const float3 higher = pow((sRGB.rgb + float3(0.055)) / float3(1.055), float3(2.4));
-            const float3 lower  = sRGB.rgb / float3(12.92);
+            const float3 higher = pow((sRGB.rgb + float3(0.055)) * float3(0.9478673f), float3(2.4));
+            const float3 lower  = sRGB.rgb * float3(0.0773994f);
 
             return float4(lerp(higher, lower, (float3)cutoff), sRGB.a);
         }

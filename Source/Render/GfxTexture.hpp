@@ -15,7 +15,7 @@ namespace Radiant
         void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels,
                         const i32 requestedChannels = 4) noexcept;
 
-        void* LoadImage(const void* rawImageData, const std::size_t rawImageDataSize, i32& width, i32& height, i32& channels,
+        void* LoadImage(const void* rawImageData, const u64 rawImageDataSize, i32& width, i32& height, i32& channels,
                         const i32 requestedChannels = 4) noexcept;
 
         void UnloadImage(void* imageData) noexcept;
@@ -130,10 +130,10 @@ namespace Radiant
         }
 
       private:
-        std::size_t m_UUID{0};
+        u64 m_UUID{0};
         const Unique<GfxDevice>& m_Device;
         GfxTextureDescription m_Description{};
-        vk::Image m_Image{};
+        vk::Image m_Image{nullptr};
 
         struct MipInfo
         {
@@ -142,7 +142,7 @@ namespace Radiant
             std::optional<u32> BindlessTextureID{std::nullopt};
         };
         std::vector<MipInfo> m_MipChain{};
-        VmaAllocation m_Allocation{};
+        VmaAllocation m_Allocation{VK_NULL_HANDLE};
 
         constexpr GfxTexture() noexcept = delete;
         void Invalidate() noexcept;

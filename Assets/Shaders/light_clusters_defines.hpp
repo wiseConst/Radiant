@@ -1,6 +1,7 @@
 // light_clusters_defines.hpp
 
 #ifdef __cplusplus
+#pragma once
 
 namespace Radiant
 {

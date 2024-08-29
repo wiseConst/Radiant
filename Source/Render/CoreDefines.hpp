@@ -5,9 +5,11 @@
 
 namespace Radiant
 {
-    static constexpr bool s_bUseResourceMemoryAliasing = false;
-    static constexpr bool s_bForceGfxValidation        = true;
     static constexpr u8 s_BufferedFrameCount           = 2;
+    static constexpr bool s_bUseResourceMemoryAliasing = true;
+    static constexpr bool s_bForceGfxValidation        = true;
+    static constexpr bool s_bRequireRayTracing         = false;
+    static constexpr bool s_bRequireMeshShading        = false;
 
     enum class ECommandBufferTypeBits : u8
     {

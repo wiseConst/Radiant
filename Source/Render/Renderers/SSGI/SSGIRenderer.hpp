@@ -2,6 +2,8 @@
 
 #include <Render/Renderers/Renderer.hpp>
 
+#include <radiance_cascades_defines.hpp>
+
 namespace Radiant
 {
 
@@ -15,8 +17,11 @@ namespace Radiant
         void RenderFrame() noexcept final override;
 
       private:
-        Unique<GfxPipeline> m_CirclePipeline{nullptr};
+        Unique<GfxPipeline> m_Point2DPipeline{nullptr};
         Unique<GfxPipeline> m_FullScreenClearPassPipeline{nullptr};
+
+        std::vector<Point2D> m_Points;
+        f32 m_PointRadius{5.0f};
     };
 
 }  // namespace Radiant

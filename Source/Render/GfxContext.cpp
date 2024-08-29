@@ -417,7 +417,7 @@ namespace Radiant
 
         // Creating default white texture 1x1.
         {
-            constexpr uint32_t whiteTextureData = 0xFFFFFFFF;
+            constexpr u32 whiteTextureData = 0xFFFFFFFF;
             m_DefaultWhiteTexture =
                 MakeUnique<GfxTexture>(m_Device, GfxTextureDescription(vk::ImageType::e2D, {1, 1, 1}, vk::Format::eR8G8B8A8Unorm,
                                                                        vk::ImageUsageFlagBits::eTransferDst));

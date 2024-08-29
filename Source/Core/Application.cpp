@@ -20,7 +20,7 @@ namespace Radiant
         m_MainWindow = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
 
         m_Renderer = MakeUnique<CombinedRenderer>();
-        //  m_Renderer = MakeUnique<ParticleRenderer>();
+        //   m_Renderer = MakeUnique<ParticleRenderer>();
         // m_Renderer = MakeUnique<SSGIRenderer>();
     }
 
@@ -32,7 +32,7 @@ namespace Radiant
         m_bIsRunning = true;
 
         auto lastTime = Timer::Now();
-        uint32_t frameCount{0};
+        u32 frameCount{0};
         f32 accumulatedDeltaTime{0.f};
 
         while (m_bIsRunning)

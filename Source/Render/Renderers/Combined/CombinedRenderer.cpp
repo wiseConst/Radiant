@@ -181,7 +181,7 @@ namespace Radiant
         m_LightData.Sun.Intensity   = 1.0f;
         m_LightData.Sun.Color       = Shaders::PackUnorm4x8(glm::vec4(1.0f));
         m_LightData.PointLightCount = MAX_POINT_LIGHT_COUNT;
-        constexpr float radius      = 2.5f;
+        constexpr f32 radius        = 2.5f;
         for (auto& pl : m_LightData.PointLights)
         {
             pl.sphere.Origin = glm::linearRand(s_MinPointLightPos, s_MaxPointLightPos);
@@ -203,7 +203,6 @@ namespace Radiant
         {
             // m_DepthPrePassPipeline->HotReload();
             m_PBRPipeline->HotReload();
-            m_FinalPassPipeline->HotReload();
             m_FinalPassPipeline->HotReload();
             m_LightClustersBuildPipeline->HotReload();
             m_LightClustersAssignmentPipeline->HotReload();
@@ -281,9 +280,8 @@ namespace Radiant
                                         GfxTextureDescription(vk::ImageType::e2D,
                                                               glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
                                                               vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment));
-
                 scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                            vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f));
+                                            vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0));
 
                 depthPrePassData.CameraBuffer =
                     scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT);
@@ -368,9 +366,9 @@ namespace Radiant
                 pc.Clusters          = (AABB*)lightClusterSB->GetBDA();
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
-                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE),
-                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE),
-                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z / (float)LIGHT_CLUSTERS_BUILD_WG_SIZE));
+                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE));
             });
 
         struct LightClustersAssignmentPassData
@@ -426,7 +424,7 @@ namespace Radiant
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
 
-                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (float)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
+                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
             });
 
 #if 0
@@ -495,7 +493,7 @@ namespace Radiant
                                                               vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
 
                 scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setf3232({1.0f, 1.0f, 1.0f, 1.0f}));
                 ssaoPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, MipSet::FirstMip(),
                                                                   EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
                 ssaoPassData.CameraBuffer =
@@ -540,7 +538,7 @@ namespace Radiant
                                                               vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
 
                 scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setf3232({1.0f, 1.0f, 1.0f, 1.0f}));
 
                 ssaoBoxBlurPassData.SSAOTexture = scheduler.ReadTexture(ResourceNames::SSAOTexture, MipSet::FirstMip(),
                                                                         EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
@@ -675,11 +673,10 @@ namespace Radiant
                 }
             });
 
-#if 1
-        static constexpr u32 s_BloomMipCount{4};
+        static constexpr u32 s_BloomMipCount{6};
         struct BloomMipChainData
         {
-            glm::uvec2 Size{1};
+            glm::vec2 Size{1.0f};
         };
         std::vector<BloomMipChainData> bloomMipChain(s_BloomMipCount);
 
@@ -688,19 +685,20 @@ namespace Radiant
         {
             RGResourceID SrcTexture;
         };
-
         std::vector<BloomDownsamplePassData> bdPassDatas(s_BloomMipCount);
-        glm::uvec2 currentDownsampleDimensions(m_ViewportExtent.width, m_ViewportExtent.height);
         for (u32 i{}; i < s_BloomMipCount - 1; ++i)
         {
-            currentDownsampleDimensions /= 2;
-            currentDownsampleDimensions = glm::max(currentDownsampleDimensions, 1u);
-            bloomMipChain[i].Size       = currentDownsampleDimensions;
+            if (i == 0)
+                bloomMipChain[i].Size = {m_ViewportExtent.width, m_ViewportExtent.height};
+            else
+                bloomMipChain[i].Size = bloomMipChain[i - 1].Size;
 
-            const auto currentViewportExtent = vk::Extent2D(currentDownsampleDimensions.x, currentDownsampleDimensions.y);
+            bloomMipChain[i].Size = glm::ceil(bloomMipChain[i].Size / 2.0f);
+            bloomMipChain[i].Size = glm::max(bloomMipChain[i].Size, 1.0f);
+
+            const auto currentViewportExtent = vk::Extent2D(bloomMipChain[i].Size.x, bloomMipChain[i].Size.y);
             const std::string passName       = "BloomDownsample" + std::to_string(i);
             const std::string textureName    = "BloomDownsampleTexture";
-            //    LOG_INFO("{},write to tex:{}", passName, i);
 
             m_RenderGraph->AddPass(
                 passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
@@ -718,22 +716,18 @@ namespace Radiant
                                                       .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
                                                       .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
                                                   1, vk::SampleCountFlagBits::e1, /* bExposeMips */ true));
-                        scheduler.WriteRenderTarget(textureName, MipSet::Explicit(i + 1), vk::AttachmentLoadOp::eClear,
-                                                    vk::AttachmentStoreOp::eStore,
-                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
 
                         bdPassDatas[i].SrcTexture = scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
                                                                           EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
                     }
                     else
                     {
-                        scheduler.WriteRenderTarget(textureName, MipSet::Explicit(i + 1), vk::AttachmentLoadOp::eClear,
-                                                    vk::AttachmentStoreOp::eStore,
-                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
-
                         bdPassDatas[i].SrcTexture = scheduler.ReadTexture(textureName, MipSet::Explicit(i),
                                                                           EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
                     }
+
+                    scheduler.WriteRenderTarget(textureName, MipSet::Explicit(i + 1), vk::AttachmentLoadOp::eClear,
+                                                vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 0.0f}));
 
                     scheduler.SetViewportScissors(vk::Viewport()
                                                       .setMinDepth(0.0f)
@@ -744,17 +738,21 @@ namespace Radiant
                 },
                 [&, i](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
                 {
-                    /*auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
                     pipelineStateCache.Bind(cmd, m_BloomDownsamplePipeline.get());
-                    */     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_BloomDownsamplePipeline);
 
                     struct PushConstantBlock
                     {
-                        uint32_t SrcTextureID;
+                        u32 SrcTextureID;
                         glm::vec2 SrcTexelSize;  // rcp(SrcTextureResolution)
+                        u32 MipLevel;
                     } pc            = {};
                     pc.SrcTextureID = scheduler.GetTexture(bdPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
-                    pc.SrcTexelSize = 1.0f / (glm::vec2)bloomMipChain[i].Size;
+                    pc.MipLevel     = i;
+                    if (i == 0)
+                        pc.SrcTexelSize = 1.0f / glm::vec2(m_ViewportExtent.width, m_ViewportExtent.height);
+                    else
+                        pc.SrcTexelSize = 1.0f / (glm::vec2)bloomMipChain[i].Size;
 
                     cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
                     cmd.draw(3, 1, 0, 0);
@@ -769,21 +767,22 @@ namespace Radiant
         std::vector<BloomUpsampleBlurPassData> bubPassDatas(s_BloomMipCount);
         for (i32 i = s_BloomMipCount - 1; i > 0; --i)
         {
-            const auto& nextMip = bloomMipChain[i - 1];
+            const glm::uvec2 nextMipSize =
+                glm::min(bloomMipChain[i - 1].Size * 2.0f, glm::vec2(m_ViewportExtent.width, m_ViewportExtent.height));
 
-            const auto currentViewportExtent = vk::Extent2D(nextMip.Size.x * 2, nextMip.Size.y * 2);
+            const auto currentViewportExtent = vk::Extent2D(nextMipSize.x, nextMipSize.y);
             const std::string passName       = "BloomUpsampleBlur" + std::to_string(i - 1);
             const std::string textureName    = "BloomUpsampleBlurTexture" + std::to_string(i - 1);
-            //   LOG_INFO("{},write to tex:{}", passName, i - 1);
+
             m_RenderGraph->AddPass(
                 passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
                 [&](RenderGraphResourceScheduler& scheduler)
                 {
                     const std::string prevTextureName =
                         (i == s_BloomMipCount - 1 ? "BloomDownsampleTexture" : "BloomUpsampleBlurTexture" + std::to_string(i));
-                    scheduler.WriteRenderTarget(prevTextureName, MipSet::Explicit(i - 1),
-                                                i - 1 == 0 ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-                                                vk::AttachmentStoreOp::eStore, {}, textureName);
+                    const auto loadOp = i - 1 == 0 ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
+                    scheduler.WriteRenderTarget(prevTextureName, MipSet::Explicit(i - 1), loadOp, vk::AttachmentStoreOp::eStore,
+                                                vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 0.0f}), textureName);
 
                     bubPassDatas[i].SrcTexture = scheduler.ReadTexture(prevTextureName, MipSet::Explicit(i),
                                                                        EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
@@ -796,24 +795,21 @@ namespace Radiant
                 },
                 [&, i](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
                 {
-                    /*auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
                     pipelineStateCache.Bind(cmd, m_BloomUpsampleBlurPipeline.get());
-                    */cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *m_BloomUpsampleBlurPipeline);
 
                     struct PushConstantBlock
                     {
-                        uint32_t SrcTextureID;
+                        u32 SrcTextureID;
                         glm::vec2 SampleFilterRadius;  // NOTE: Make sure aspect ratio is taken into account!
                     } pc                  = {};
                     pc.SrcTextureID       = scheduler.GetTexture(bubPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
-                    pc.SampleFilterRadius = glm::vec2(0.005f);
-                    pc.SampleFilterRadius.y *= m_MainCamera->GetAspectRatio();
+                    pc.SampleFilterRadius = glm::vec2(0.003f) * glm::vec2(1, m_MainCamera->GetAspectRatio());
 
                     cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
                     cmd.draw(3, 1, 0, 0);
                 });
         }
-#endif
 
         struct FinalPassData
         {
@@ -830,7 +826,7 @@ namespace Radiant
                                           vk::Format::eA2B10G10R10UnormPack32,
                                           vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc));
                 scheduler.WriteRenderTarget(ResourceNames::FinalPassTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}));
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 0.0f}));
 
                 finalPassData.BloomTexture    = scheduler.ReadTexture("BloomUpsampleBlurTexture0", MipSet::FirstMip(),
                                                                       EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
@@ -885,18 +881,20 @@ namespace Radiant
                         ImGui::Text("Barrier Batch Count: %u", m_RenderGraphStats.BarrierBatchCount);
                         ImGui::Text("Barrier Count: %u", m_RenderGraphStats.BarrierCount);
 
+                        m_RenderGraphResourcePool->UI_ShowResourceUsage();
+
                         ImGui::TreePop();
                     }
 
                     ImGui::Separator();
                     ImGui::Text("Camera Position: %s", glm::to_string(m_MainCamera->GetShaderData().Position).data());
-                    ImGui::Separator();
 
-                    ImGui::DragFloat3("Sun Direction", (f32*)&m_LightData.Sun.Direction, 0.05f, -1.0f, 1.0f);
-                    ImGui::DragFloat("Sun Intensity", &m_LightData.Sun.Intensity, 0.05f, 0.0f, 5.0f);
+                    ImGui::SeparatorText("Sun Parameters");
+                    ImGui::DragFloat3("Direction", (f32*)&m_LightData.Sun.Direction, 0.05f, -1.0f, 1.0f);
+                    ImGui::DragFloat("Intensity", &m_LightData.Sun.Intensity, 0.05f, 0.0f, 5.0f);
 
                     glm::vec3 sunColor{Shaders::UnpackUnorm4x8(m_LightData.Sun.Color)};
-                    if (ImGui::DragFloat3("Sun Radiance", (f32*)&sunColor, 0.05f, 0.0f, 1.0f))
+                    if (ImGui::DragFloat3("Radiance", (f32*)&sunColor, 0.05f, 0.0f, 1.0f))
                         m_LightData.Sun.Color = Shaders::PackUnorm4x8(glm::vec4(sunColor, 1.0f));
                 }
                 ImGui::End();

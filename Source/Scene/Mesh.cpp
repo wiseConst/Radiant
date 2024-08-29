@@ -140,7 +140,7 @@ namespace Radiant
                 textureMap[defaultWhiteTextureName] = gfxContext->GetDefaultWhiteTexture();
                 return defaultWhiteTextureName;
             }
-            int32_t width{1}, height{1}, channels{4};
+            i32 width{1}, height{1}, channels{4};
 
             ImmediateExecuteContext executionContext = {};
             std::string textureName{s_DEFAULT_STRING};
@@ -182,7 +182,7 @@ namespace Radiant
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
-                        const auto imageSize = static_cast<std::size_t>(width * height * channels);
+                        const auto imageSize = static_cast<u64>(width * height * channels);
                         auto stagingBuffer =
                             MakeUnique<GfxBuffer>(gfxContext->GetDevice(), GfxBufferDescription(imageSize, /* placeholder */ 1,
                                                                                                 vk::BufferUsageFlagBits::eTransferSrc,
@@ -347,7 +347,7 @@ namespace Radiant
 
         // NOTE: textureIndex -> name, since multiple materials can reference the same textures but with different samplers, so
         // there's no need to load same texture N times.
-        UnorderedMap<std::size_t, std::string> textureNameLUT{};
+        UnorderedMap<u64, std::string> textureNameLUT{};
         textureNameLUT.reserve(asset->textures.size());
         TextureMap.reserve(asset->textures.size());
         // Parallel texture loading.
@@ -355,7 +355,7 @@ namespace Radiant
             std::vector<std::future<std::string>> textureFutures;
             std::mutex loaderMutex          = {};
             const auto textureLoadBeginTime = Timer::Now();
-            for (std::size_t textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
+            for (u64 textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
             {
                 textureFutures.emplace_back(Application::Get().GetThreadPool()->Submit(
                     [&, textureIndex]() noexcept
@@ -365,7 +365,7 @@ namespace Radiant
                     }));
             }
 
-            for (std::size_t textureIndex{}; textureIndex < textureFutures.size(); ++textureIndex)
+            for (u64 textureIndex{}; textureIndex < textureFutures.size(); ++textureIndex)
             {
                 auto textureName             = textureFutures[textureIndex].get();
                 textureNameLUT[textureIndex] = textureName;
@@ -498,7 +498,7 @@ namespace Radiant
                     vertexAttributes.resize(vertexAttributes.size() + posAccessor.count);
 
                     fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), posAccessor,
-                                                                  [&](const glm::vec3& v, const std::size_t index)
+                                                                  [&](const glm::vec3& v, const u64 index)
                                                                   { vertexPositions[initialVertexIndex + index].Position = v; });
                 }
 
@@ -508,7 +508,7 @@ namespace Radiant
                     if (const auto* colorsAttribute = primitve.findAttribute("COLOR_0"); colorsAttribute != primitve.attributes.end())
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
-                                                                      [&](const glm::vec4& vertexColor, const std::size_t index) {
+                                                                      [&](const glm::vec4& vertexColor, const u64 index) {
                                                                           vertexAttributes[initialVertexIndex + index].Color =
                                                                               Shaders::PackUnorm4x8(vertexColor);
                                                                       });
@@ -518,7 +518,7 @@ namespace Radiant
                     if (const auto* normalsAttribute = primitve.findAttribute("NORMAL"); normalsAttribute != primitve.attributes.end())
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), asset->accessors[normalsAttribute->accessorIndex],
-                                                                      [&](const glm::vec3& n, const std::size_t index) {
+                                                                      [&](const glm::vec3& n, const u64 index) {
                                                                           vertexAttributes[initialVertexIndex + index].Normal =
                                                                               glm::packHalf(Shaders::EncodeOct(n));
                                                                       });
@@ -528,7 +528,7 @@ namespace Radiant
                     if (const auto* tangentAttribute = primitve.findAttribute("TANGENT"); tangentAttribute != primitve.attributes.end())
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[tangentAttribute->accessorIndex],
-                                                                      [&](const glm::vec4& t, const std::size_t index)
+                                                                      [&](const glm::vec4& t, const u64 index)
                                                                       {
                                                                           vertexAttributes[initialVertexIndex + index].TSign = t.w;
                                                                           vertexAttributes[initialVertexIndex + index].Tangent =
@@ -540,7 +540,7 @@ namespace Radiant
                     if (const auto* uvAttribute = primitve.findAttribute("TEXCOORD_0"); uvAttribute != primitve.attributes.end())
                     {
                         fastgltf::iterateAccessorWithIndex<glm::vec2>(asset.get(), asset->accessors[uvAttribute->accessorIndex],
-                                                                      [&](const glm::vec2& uv, const std::size_t index) {
+                                                                      [&](const glm::vec2& uv, const u64 index) {
                                                                           vertexAttributes[initialVertexIndex + index].UV =
                                                                               glm::packHalf(uv);
                                                                       });

@@ -1,0 +1,1 @@
+// bloom_upsample_blur_compute.slang

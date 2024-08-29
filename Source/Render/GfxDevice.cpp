@@ -18,6 +18,22 @@ namespace Radiant
             VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,  // To neglect viewport state definition on pipeline creation
         };
 
+        if constexpr (s_bRequireMeshShading) requiredDeviceExtensions.emplace_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+        if constexpr (s_bRequireRayTracing)
+        {
+            requiredDeviceExtensions.emplace_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);  // To build acceleration structures
+            requiredDeviceExtensions.emplace_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);    // To use vkCmdTraceRaysKHR
+            requiredDeviceExtensions.emplace_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);               // To trace rays in every shader I want
+
+            // Required by acceleration structure,
+            // allows the driver to run some expensive CPU-based Vulkan API calls
+            // asynchronously(such as a Vulkan API call that builds an acceleration
+            // structure on a CPU instead of a GPU) — much like launching a thread in
+            // C++ to perform a task asynchronously, then waiting for it to complete.
+            requiredDeviceExtensions.emplace_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        }
+
         auto vkFeatures13 = vk::PhysicalDeviceVulkan13Features()
                                 .setDynamicRendering(vk::True)
                                 .setSynchronization2(vk::True)
@@ -48,6 +64,7 @@ namespace Radiant
         paravozik  = &vkFeatures12.pNext;
 
         auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features()
+                                .setShaderDrawParameters(vk::True)
 #if !RENDER_FORCE_IGPU
                                 .setStoragePushConstant16(vk::True)
 #endif
@@ -57,12 +74,41 @@ namespace Radiant
         *paravozik = &vkFeatures11;
         paravozik  = &vkFeatures11.pNext;
 
-        constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures = vk::PhysicalDeviceFeatures()
-                                                                          .setShaderInt16(vk::True)
-                                                                          .setShaderInt64(vk::True)
-                                                                          .setFillModeNonSolid(vk::True)
-                                                                          .setSamplerAnisotropy(vk::True)
-                                                                          .setPipelineStatisticsQuery(vk::True);
+        auto rayTracingPipelineFeaturesKHR    = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR().setRayTracingPipeline(vk::True);
+        auto accelerationStructureFeaturesKHR = vk::PhysicalDeviceAccelerationStructureFeaturesKHR().setAccelerationStructure(vk::True);
+        auto rayQueryFeaturesKHR              = vk::PhysicalDeviceRayQueryFeaturesKHR().setRayQuery(vk::True);
+        if constexpr (s_bRequireRayTracing)
+        {
+            *paravozik = &rayTracingPipelineFeaturesKHR;
+            paravozik  = &rayTracingPipelineFeaturesKHR.pNext;
+
+            *paravozik = &accelerationStructureFeaturesKHR;
+            paravozik  = &accelerationStructureFeaturesKHR.pNext;
+
+            *paravozik = &rayQueryFeaturesKHR;
+            paravozik  = &rayQueryFeaturesKHR.pNext;
+        }
+
+        auto meshShaderFeaturesEXT =
+            vk::PhysicalDeviceMeshShaderFeaturesEXT().setMeshShader(vk::True).setMeshShaderQueries(vk::True).setTaskShader(vk::True);
+        if constexpr (s_bRequireMeshShading)
+        {
+            *paravozik = &meshShaderFeaturesEXT;
+            paravozik  = &meshShaderFeaturesEXT.pNext;
+        }
+
+        constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures =
+            vk::PhysicalDeviceFeatures()
+                .setShaderInt16(vk::True)
+                .setShaderInt64(vk::True)
+                .setFillModeNonSolid(vk::True)
+                .setMultiDrawIndirect(vk::True)
+                .setSamplerAnisotropy(vk::True)
+                .setPipelineStatisticsQuery(vk::True)
+                .setGeometryShader(vk::True)
+                // TODO: Integrate AMD Compressonator .setTextureCompressionBC(vk::True)
+                .setShaderStorageImageArrayDynamicIndexing(vk::True)
+                .setShaderSampledImageArrayDynamicIndexing(vk::True);
         SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, requiredDeviceFeatures, &vkFeatures13);
 
         InitVMA(instance);
@@ -86,16 +132,15 @@ namespace Radiant
                 RDNT_ASSERT(gpuProperties.limits.timestampPeriod != 0, "{} doesn't support timestamp queries!",
                             gpuProperties.deviceName.data());
 
-                const auto deviceExtensions = gpu.enumerateDeviceExtensionProperties();
-
-                if (std::find_if(deviceExtensions.cbegin(), deviceExtensions.cend(),
+                const auto supportedDeviceExtensions = gpu.enumerateDeviceExtensionProperties();
+                if (std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
                                  [](const vk::ExtensionProperties& deviceExtension) {
                                      return strcmp(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, deviceExtension.extensionName) == 0;
-                                 }) != deviceExtensions.cend() &&
-                    std::find_if(deviceExtensions.cbegin(), deviceExtensions.cend(),
+                                 }) != supportedDeviceExtensions.cend() &&
+                    std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
                                  [](const vk::ExtensionProperties& deviceExtension) {
                                      return strcmp(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, deviceExtension.extensionName) == 0;
-                                 }) != deviceExtensions.cend())
+                                 }) != supportedDeviceExtensions.cend())
                 {
                     requiredDeviceExtensions.emplace_back(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
                     requiredDeviceExtensions.emplace_back(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
@@ -104,10 +149,10 @@ namespace Radiant
 
                 for (const auto& rde : requiredDeviceExtensions)
                 {
-                    const bool bExtensionFound = std::find_if(deviceExtensions.cbegin(), deviceExtensions.cend(),
+                    const bool bExtensionFound = std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
                                                               [&rde](const vk::ExtensionProperties& deviceExtension) {
                                                                   return strcmp(rde, deviceExtension.extensionName) == 0;
-                                                              }) != deviceExtensions.end();
+                                                              }) != supportedDeviceExtensions.end();
 
                     RDNT_ASSERT(bExtensionFound, "Device extension: {} not supported!", rde);
                 }
@@ -294,7 +339,8 @@ namespace Radiant
     void GfxDevice::AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,
                                    const vk::MemoryPropertyFlags preferredFlags) noexcept
     {
-        const VmaAllocationCreateInfo allocationCI = {/*.usage          = VMA_MEMORY_USAGE_AUTO,*/
+        const VmaAllocationCreateInfo allocationCI = {.flags = VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT,
+                                                      /*.usage          = VMA_MEMORY_USAGE_AUTO,*/
                                                       .preferredFlags = (VkMemoryPropertyFlags)preferredFlags};
 
         RDNT_ASSERT(vmaAllocateMemory(m_Allocator, (const VkMemoryRequirements*)&finalMemoryRequirements, &allocationCI, &allocation,
@@ -316,7 +362,8 @@ namespace Radiant
     void GfxDevice::AllocateTexture(const vk::ImageCreateInfo& imageCI, VkImage& image, VmaAllocation& allocation) const noexcept
     {
         const VmaAllocationCreateInfo allocationCI = {/*.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,*/ .usage =
-                                                          VMA_MEMORY_USAGE_GPU_ONLY};
+                                                          VMA_MEMORY_USAGE_GPU_ONLY,
+                                                      .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
 
         const VkImageCreateInfo& oldVkImageCI = imageCI;
         RDNT_ASSERT(vmaCreateImage(m_Allocator, &oldVkImageCI, &allocationCI, &image, &allocation, nullptr) == VK_SUCCESS,
@@ -337,24 +384,25 @@ namespace Radiant
     void GfxDevice::AllocateBuffer(const ExtraBufferFlags extraBufferFlags, const vk::BufferCreateInfo& bufferCI, VkBuffer& buffer,
                                    VmaAllocation& allocation) const noexcept
     {
-        const bool bIsReBARRequired = extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT;
+        const bool bIsReBARRequired = extraBufferFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT;
         const bool bIsDeviceLocal   = extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT;
 
+        VkMemoryPropertyFlags requiredFlags{0};
         VmaAllocationCreateFlags allocationCreateFlags{0};
         if (bIsReBARRequired /* ReBAR means VRAM writeable by PCIe from CPU, so it's device local! */)
         {
+            requiredFlags =
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
             allocationCreateFlags |=
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
         }
-        else if (!bIsDeviceLocal)
-        {
+        else if (bIsDeviceLocal)
+            requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        else
             allocationCreateFlags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-        }
 
         const VmaAllocationCreateInfo allocationCI = {
-            .flags         = allocationCreateFlags,
-            .usage         = VMA_MEMORY_USAGE_AUTO,
-            .requiredFlags = bIsDeviceLocal && !bIsReBARRequired ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : VkMemoryPropertyFlags{0}};
+            .flags = allocationCreateFlags, .usage = VMA_MEMORY_USAGE_AUTO, .requiredFlags = requiredFlags};
 
         const VkBufferCreateInfo& oldVkBufferCI = bufferCI;
         RDNT_ASSERT(vmaCreateBuffer(m_Allocator, &oldVkBufferCI, &allocationCI, &buffer, &allocation, nullptr) == VK_SUCCESS,

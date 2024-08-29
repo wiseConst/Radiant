@@ -155,10 +155,10 @@ namespace Radiant
                                 .setSrcSubresource(backbufferImageSubresourceLayers)
                                 .setDstSubresource(backbufferImageSubresourceLayers)
                                 .setSrcOffsets({vk::Offset3D(),
-                                                vk::Offset3D(static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.x),
-                                                             static_cast<int32_t>(backBufferSrcTexture->GetDescription().Dimensions.y), 1)})
-                                .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<int32_t>(viewportExtent.width),
-                                                                             static_cast<int32_t>(viewportExtent.height), 1)})));
+                                                vk::Offset3D(static_cast<i32>(backBufferSrcTexture->GetDescription().Dimensions.x),
+                                                             static_cast<i32>(backBufferSrcTexture->GetDescription().Dimensions.y), 1)})
+                                .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<i32>(viewportExtent.width),
+                                                                             static_cast<i32>(viewportExtent.height), 1)})));
 
                 cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()

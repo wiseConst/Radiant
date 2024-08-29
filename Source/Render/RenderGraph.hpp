@@ -207,6 +207,9 @@ namespace Radiant
             }
         }
 
+        // NOTE: Usable only when s_bUseResourceMemoryAliasing is true.
+        void UI_ShowResourceUsage() const noexcept;
+
         void Tick() noexcept
         {
             ++m_GlobalFrameNumber;
@@ -271,7 +274,7 @@ namespace Radiant
                         "Invalid buffer flags!");
 
             // NOTE: Handling rebar first cuz it contains device and host bits!
-            if (handleID.BufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
+            if (handleID.BufferFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
             {
                 RDNT_ASSERT(handleID.ID < m_ReBARBuffers[m_CurrentFrameIndex].size(), "ReBAR: CPU+GPU BufferHandle is invalid!");
                 return m_ReBARBuffers[m_CurrentFrameIndex][handleID.ID].Handle;
@@ -332,7 +335,7 @@ namespace Radiant
             else if (const auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resourceHandle))
             {
                 // NOTE: Handling rebar first cuz it contains device and host bits!
-                if (rgBufferHandle->BufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
+                if (rgBufferHandle->BufferFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
                     m_ReBARRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, id, debugName, memoryRequirements,
                                                                      memoryPropertyFlags);
                 else if (rgBufferHandle->BufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
@@ -515,8 +518,8 @@ namespace Radiant
         }
 
       private:
-        u32 m_ID{0};
         ERenderGraphPassType m_PassType{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
+        u32 m_ID{0};
         u32 m_DependencyLevelIndex{0};
         std::string m_Name{s_DEFAULT_STRING};
 

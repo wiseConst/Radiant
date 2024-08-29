@@ -10,7 +10,7 @@ namespace Radiant
 
     struct CommandLineArguments
     {
-        uint32_t Argc{0};
+        u32 Argc{0};
         char** Argv{nullptr};
     };
 
@@ -19,7 +19,7 @@ namespace Radiant
         std::string Name{s_DEFAULT_STRING};
         CommandLineArguments CmdArgs{};
         glm::uvec2 WindowExtent{1280, 720};
-        uint32_t FPSLimit{60};
+        u32 FPSLimit{60};
     };
 
     class Application final

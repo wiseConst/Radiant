@@ -14,6 +14,7 @@ template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphSubresource
 
 namespace Radiant
 {
+    // NOTE: Huge thanks to Pavlo Muratov for giga chad article!
     // https://levelup.gitconnected.com/organizing-gpu-work-with-directed-acyclic-graphs-f3fd5f2c2af3
     // https://levelup.gitconnected.com/gpu-memory-aliasing-45933681a15e
     // https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/resource_aliasing.html
@@ -251,6 +252,10 @@ namespace Radiant
             BufferTickFunc(m_DeviceBuffers, m_GlobalFrameNumber);
             BufferTickFunc(m_HostBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
             BufferTickFunc(m_ReBARBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
+
+            m_DeviceRMA.m_ResourceInfoMap.clear();
+            m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.clear();
+            m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.clear();
         }
 
         NODISCARD RGTextureHandle CreateTexture(const GfxTextureDescription& textureDesc, const std::string& textureName,
@@ -312,7 +317,7 @@ namespace Radiant
                     end                         = std::max(end, topsortPassIndex);
                 }
 
-                const auto el = EffectiveLifetime{.Begin = begin, .End = end};
+                const auto el = RenderGraphResourceEffectiveLifetime{.Begin = begin, .End = end};
                 if (m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
                     m_ReBARRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
                 else if (m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
@@ -324,9 +329,8 @@ namespace Radiant
             }
         }
 
-        void FillResourceInfo(const std::variant<RGTextureHandle, RGBufferHandle>& resourceHandle, const RGResourceID& id,
-                              const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
-                              const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
+        void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& id, const std::string& debugName,
+                              const vk::MemoryRequirements& memoryRequirements, const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
         {
             if (const auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resourceHandle))
             {
@@ -376,17 +380,6 @@ namespace Radiant
         };
         std::vector<PooledTexture> m_Textures;
 
-        // NOTE: Now it represents pass IDs, but each of this in future will represent pass or dependency level(if multiple queues)
-        struct EffectiveLifetime
-        {
-            u32 Begin{0};
-            u32 End{0};
-        };
-        FORCEINLINE static bool DoEffectiveLifetimeConflict(const EffectiveLifetime& lhs, const EffectiveLifetime& rhs) noexcept
-        {
-            return lhs.Begin <= rhs.End && rhs.Begin <= lhs.End;
-        }
-
         struct ResourceBucket
         {
             vk::MemoryPropertyFlags MemoryPropertyFlags{};
@@ -395,7 +388,7 @@ namespace Radiant
 
             struct OverlappedResource
             {
-                std::variant<RGTextureHandle, RGBufferHandle> ResourceHandle{};
+                RGResourceHandleVariant ResourceHandle{};
                 RGResourceID ID{};
                 u32 Offset{};
                 std::string DebugName{s_DEFAULT_STRING};
@@ -403,23 +396,35 @@ namespace Radiant
                 vk::MemoryPropertyFlags MemoryPropertyFlags{};
             };
 
-            std::vector<std::vector<OverlappedResource>> StorageOfRows;
+            std::vector<OverlappedResource> AlreadyAliasedResources;
         };
 
         struct RenderGraphResourceInfo
         {
-            std::variant<RGTextureHandle, RGBufferHandle> ResourceHandle{};  // to decide which rma should it go
-            std::string DebugName{s_DEFAULT_STRING};                         // to simply set debug name and other shit
-            vk::MemoryRequirements MemoryRequirements{};                     // to properly choose memory things
-            vk::MemoryPropertyFlags MemoryPropertyFlags{};                   // to properly choose memory bucket based on memory type
+            RGResourceHandleVariant ResourceHandle{};       // To decide which RMA should it go.
+            std::string DebugName{s_DEFAULT_STRING};        // To simply set debug name and other shit.
+            vk::MemoryRequirements MemoryRequirements{};    // To properly choose memory allocation size of bucket it'll be assigned to.
+            vk::MemoryPropertyFlags MemoryPropertyFlags{};  // To properly choose memory bucket based on memory type.
+        };
+
+        // NOTE: Now it represents pass IDs, but each of this in future will represent pass or dependency level(if multiple queues)
+        struct RenderGraphResourceEffectiveLifetime
+        {
+            u32 Begin{0};
+            u32 End{0};
         };
 
         struct ResourceMemoryAliaser
         {
-            void FillResourceInfo(const std::variant<RGTextureHandle, RGBufferHandle>& resourceHandle, const RGResourceID& resourceID,
+            ResourceMemoryAliaser(RenderGraphResourcePool* resourcePool) noexcept : m_ResourcePoolPtr(resourcePool) {}
+            ResourceMemoryAliaser() noexcept  = default;  // NOTE: Shouldn't be used!
+            ~ResourceMemoryAliaser() noexcept = default;
+
+            void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID,
                                   const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
                                   const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
             {
+                // TODO: Remove it? Since m_ResourceInfoMap now getting filled every frame.
                 // NOTE: Huge check if we need trigger memory reallocation.
                 if (m_ResourceInfoMap.contains(resourceID) && !m_ResourcesNeededMemoryRebind.contains(resourceID))
                 {
@@ -452,7 +457,9 @@ namespace Radiant
                                                  .MemoryRequirements  = memoryRequirements,
                                                  .MemoryPropertyFlags = memoryPropertyFlags};
             }
+
             void BindResourcesToMemoryRegions() noexcept;
+
             void CleanMemoryBuckets() noexcept
             {
                 RDNT_ASSERT(m_ResourcePoolPtr, "ResourcePoolPtr isn't valid!");
@@ -466,13 +473,15 @@ namespace Radiant
                 m_MemoryBuckets.clear();
             }
 
-            ResourceMemoryAliaser(RenderGraphResourcePool* resourcePool) noexcept : m_ResourcePoolPtr(resourcePool) {}
-            ResourceMemoryAliaser() noexcept  = default;  // NOTE: Shouldn't be used!
-            ~ResourceMemoryAliaser() noexcept = default;
+            FORCEINLINE bool DoEffectiveLifetimesIntersect(const RenderGraphResourceEffectiveLifetime& lhs,
+                                                           const RenderGraphResourceEffectiveLifetime& rhs) noexcept
+            {
+                return lhs.Begin <= rhs.End && rhs.Begin <= lhs.End;
+            }
 
             RenderGraphResourcePool* m_ResourcePoolPtr{nullptr};
             UnorderedMap<RGResourceID, RenderGraphResourceInfo> m_ResourceInfoMap;
-            UnorderedMap<RGResourceID, EffectiveLifetime> m_ResourceLifetimeMap;
+            UnorderedMap<RGResourceID, RenderGraphResourceEffectiveLifetime> m_ResourceLifetimeMap;
             UnorderedSet<RGResourceID> m_ResourcesNeededMemoryRebind;
             std::vector<ResourceBucket> m_MemoryBuckets;
         };

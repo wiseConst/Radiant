@@ -20,6 +20,7 @@ namespace Radiant
         Unique<GfxPipeline> m_LightClustersBuildPipeline{nullptr};
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
 
+        Unique<GfxPipeline> m_CSMPipeline{nullptr};
         Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
         Unique<GfxPipeline> m_PBRPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};
@@ -31,6 +32,9 @@ namespace Radiant
 
         Unique<GfxPipeline> m_BloomDownsamplePipeline{nullptr};
         Unique<GfxPipeline> m_BloomUpsampleBlurPipeline{nullptr};
+
+        Unique<GfxPipeline> m_BloomDownsamplePipelineOptimized{nullptr};
+        Unique<GfxPipeline> m_BloomUpsampleBlurPipelineOptimized{nullptr};
 
         RenderGraphStatistics m_RenderGraphStats = {};
 

@@ -51,7 +51,7 @@ namespace Radiant
         }
         ~GfxBuffer() noexcept { Destroy(); }
 
-        void RenderGraph_Finalize(VmaAllocation& allocation) noexcept;
+        void RG_Finalize(VmaAllocation& allocation) noexcept;
         operator vk::Buffer&() noexcept { return m_Handle; }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }

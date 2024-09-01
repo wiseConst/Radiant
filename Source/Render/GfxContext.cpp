@@ -110,11 +110,18 @@ namespace Radiant
             return false;
         }
 
+        auto& cpuTask     = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].CPUProfilerData.emplace_back();
+        cpuTask.StartTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
+        cpuTask.Name      = "WaitForFence";
+        cpuTask.Color     = Colors::ColorArray[1];
+
         auto& currentFrameData = m_FrameData[m_CurrentFrameIndex];
         RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*currentFrameData.RenderFinishedFence, vk::True, UINT64_MAX) ==
                         vk::Result::eSuccess,
                     "{}", __FUNCTION__);
         m_Device->GetLogicalDevice()->resetFences(*currentFrameData.RenderFinishedFence);
+
+        cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
 
         // NOTE: Reset all states only after every GPU op finished!
         m_Device->PollDeletionQueues();

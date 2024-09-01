@@ -315,8 +315,8 @@ namespace Radiant
             vk::PipelineCacheHeaderVersionOne pipelineCacheHeader{};
             std::memcpy(&pipelineCacheHeader, pipelineCacheBlob.data(), sizeof(pipelineCacheHeader));
 
-            bool bPipelineCacheValid{true};
-            if (!pipelineCacheBlob.empty())
+            bool bPipelineCacheValid{!pipelineCacheBlob.empty()};
+            if (bPipelineCacheValid)
             {
                 bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.vendorID == pipelineCacheHeader.vendorID);
                 bPipelineCacheValid = bPipelineCacheValid && (m_GPUProperties.deviceID == pipelineCacheHeader.deviceID);
@@ -326,10 +326,8 @@ namespace Radiant
             }
 
             LOG_INFO("Found pipeline cache {}!", bPipelineCacheValid ? "valid" : "invalid");
-
-            // NOTE: Currently on my AMD iGPU loading pipeline caches throws exception from (bcryptprimitives.dll)
-            if (bPipelineCacheValid && !RENDER_FORCE_IGPU)
-                pipelineCacheCI.setInitialDataSize(pipelineCacheBlob.size() * pipelineCacheBlob[0])
+            if (bPipelineCacheValid)
+                pipelineCacheCI.setInitialDataSize(pipelineCacheBlob.size() * sizeof(pipelineCacheBlob[0]))
                     .setPInitialData(pipelineCacheBlob.data());
         }
 

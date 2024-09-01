@@ -79,7 +79,7 @@ namespace Radiant
         }
         ~GfxTexture() noexcept { Destroy(); }
 
-        void RenderGraph_Finalize() noexcept;
+        void RG_Finalize() noexcept;
         operator vk::Image&() noexcept { return m_Image; }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept

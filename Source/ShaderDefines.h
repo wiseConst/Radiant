@@ -148,6 +148,7 @@ namespace Radiant
 #ifndef __cplusplus
 
         [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_F1[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_F3[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_F4[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] Sampler2D Texture_Heap[s_MAX_BINDLESS_TEXTURES];
         [vk::binding(s_BINDLESS_SAMPLER_BINDING, 0)] SamplerState Sampler_Heap[s_MAX_BINDLESS_SAMPLERS];

@@ -47,11 +47,12 @@ struct PushConstantBlock
 
 static const float g_SampleRadius = 0.5f;
 static const float g_SampleBias = 0.0285f;
+static const uint g_SSAOStrength = 3;
 
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
-    const uint2 rotationUV = uint2(fsInput.uv * u_PC.CameraData->FullResolution * 0.25f) % 4;
+    const uint2 rotationUV = uint2(fsInput.uv * u_PC.CameraData->FullResolution) % 4;
     const float3 noise = normalize(g_RotationVectors[rotationUV.y * 4 + rotationUV.x] * 2.0f - 1.0f);
     
     const float3 viewPos = Shaders::ScreenSpaceToView(fsInput.uv, Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(fsInput.uv).r, u_PC.CameraData->InvProjectionMatrix).xyz;
@@ -77,5 +78,6 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
         ao += step(sample.z + g_SampleBias, sampledDepth) * rangeCheck;
     }
     ao /= (float)g_SampleCount;
-    return saturate(1.0f - ao);
+    // return saturate(1.0f - ao);
+    return pow(ao, g_SSAOStrength);
 }

@@ -17,7 +17,6 @@ namespace Radiant
 #define BIT(x) (1 << (x))
 #define FALLTHROUGH [[fallthrough]]
 
-// NOTE: In case you want to suppress the compiler warnings.
 #define MAYBE_UNUSED [[maybe_unused]]
 
     static const std::string s_DEFAULT_STRING{"NONE"};

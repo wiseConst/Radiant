@@ -46,8 +46,8 @@ namespace Radiant
         RENDER_GRAPH_PASS_TYPE_COMPUTE,
         RENDER_GRAPH_PASS_TYPE_TRANSFER,
         RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+
         // TODO: Multiple queue submission
-        RENDER_GRAPH_PASS_TYPE_RAY_TRACING,
         RENDER_GRAPH_PASS_TYPE_ASYNC_COMPUTE,
         RENDER_GRAPH_PASS_TYPE_DEDICATED_TRANSFER,
     };
@@ -62,8 +62,9 @@ namespace Radiant
         ExtraBufferFlags BufferFlags{EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT};
     };
 
-    using RGTextureHandle = u64;
-    using RGBufferHandle  = RenderGraphBufferHandle;
+    using RGTextureHandle         = u64;
+    using RGBufferHandle          = RenderGraphBufferHandle;
+    using RGResourceHandleVariant = std::variant<RGTextureHandle, RGBufferHandle>;
 
     // RenderGraph
     using RGResourceID = u64;  // Unique resource ID

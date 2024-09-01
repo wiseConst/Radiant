@@ -189,7 +189,7 @@ namespace Radiant
         }
     }
 
-    void GfxTexture::RenderGraph_Finalize() noexcept
+    void GfxTexture::RG_Finalize() noexcept
     {
         CreateMipChainAndSubmitToBindlessPool();
     }
@@ -298,13 +298,9 @@ namespace Radiant
                 }
 
                 if (bControlledByRenderGraph)
-                {
                     GfxContext::Get().GetDevice()->GetLogicalDevice()->destroyImage(movedImage);
-                }
                 else
-                {
                     GfxContext::Get().GetDevice()->DeallocateTexture((VkImage&)movedImage, (VmaAllocation&)movedAllocation);
-                }
             });
     }
 

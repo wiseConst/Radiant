@@ -24,24 +24,29 @@ namespace Radiant
     class GfxBuffer;
 
     // NOTE: Small optimization for CPU usage to issue less VK-API calls.
-    struct GfxPipelineStateCache
+    struct GfxPipelineStateCache final
     {
-        GfxPipeline* LastBoundPipeline{nullptr};
-        GfxBuffer* LastBoundIndexBuffer{nullptr};
+        GfxPipelineStateCache() noexcept  = default;
+        ~GfxPipelineStateCache() noexcept = default;
 
         void Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept;
         void Bind(const vk::CommandBuffer& cmd, GfxBuffer* indexBuffer, const vk::DeviceSize offset = 0,
                   const vk::IndexType indexType = vk::IndexType::eUint32) noexcept;
 
-        std::optional<vk::CullModeFlags> CullMode{std::nullopt};
-        std::optional<vk::FrontFace> FrontFace{std::nullopt};
-        std::optional<vk::PrimitiveTopology> PrimitiveTopology{std::nullopt};
-        std::optional<vk::PolygonMode> PolygonMode{std::nullopt};
-
         void Set(const vk::CommandBuffer& cmd, const vk::CullModeFlags cullMode) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::PrimitiveTopology primitiveTopology) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::FrontFace frontFace) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept;
+        void Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept;
+
+      private:
+        GfxPipeline* LastBoundPipeline{nullptr};
+        GfxBuffer* LastBoundIndexBuffer{nullptr};
+
+        std::optional<vk::CullModeFlags> CullMode{std::nullopt};
+        std::optional<vk::FrontFace> FrontFace{std::nullopt};
+        std::optional<vk::PrimitiveTopology> PrimitiveTopology{std::nullopt};
+        std::optional<vk::PolygonMode> PolygonMode{std::nullopt};
 
         std::optional<vk::StencilOp> Back{std::nullopt};
         std::optional<vk::StencilOp> Front{std::nullopt};
@@ -50,23 +55,21 @@ namespace Radiant
         bool bDepthClamp{false};
         bool bDepthTest{false};
         bool bDepthWrite{false};
-
         std::optional<vk::CompareOp> DepthCompareOp{std::nullopt};
-        void Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept;
 
         glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
     };
 
     // TODO: Make use of it in multiple queues or subsequent submits.
-    class SyncPoint final
+    struct GfxSyncPoint final
     {
       public:
-        SyncPoint(const Unique<GfxDevice>& gfxDevice, const vk::Semaphore& timelineSemaphore, const u64& timelineValue,
-                  const vk::PipelineStageFlags2& pipelineStages) noexcept
+        GfxSyncPoint(const Unique<GfxDevice>& gfxDevice, const vk::Semaphore& timelineSemaphore, const u64& timelineValue,
+                     const vk::PipelineStageFlags2& pipelineStages) noexcept
             : m_Device(gfxDevice), m_TimelimeSemaphore(timelineSemaphore), m_TimelineValue(timelineValue), m_PipelineStages(pipelineStages)
         {
         }
-        ~SyncPoint() noexcept = default;
+        ~GfxSyncPoint() noexcept = default;
 
         FORCEINLINE void Wait() const noexcept
         {
@@ -88,11 +91,11 @@ namespace Radiant
         u64 m_TimelineValue{0};
         vk::PipelineStageFlags2 m_PipelineStages{vk::PipelineStageFlagBits2::eNone};
 
-        constexpr SyncPoint() noexcept = delete;
+        constexpr GfxSyncPoint() noexcept = delete;
     };
 
     // NOTE: Currently used only for parallel texture loading.
-    struct ImmediateExecuteContext
+    struct GfxImmediateExecuteContext
     {
         vk::UniqueCommandPool CommandPool{};
         vk::CommandBuffer CommandBuffer{};
@@ -124,14 +127,14 @@ namespace Radiant
         }
         NODISCARD FORCEINLINE const auto GetSwapchainImageCount() const noexcept { return m_SwapchainImages.size(); }
 
-        NODISCARD ImmediateExecuteContext
+        NODISCARD GfxImmediateExecuteContext
         CreateImmediateExecuteContext(const ECommandBufferTypeBits commandBufferType,
                                       const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             const auto& logicalDevice = m_Device->GetLogicalDevice();
             std::scoped_lock lock(m_Mtx);
 
-            ImmediateExecuteContext context = {};
+            GfxImmediateExecuteContext context = {};
             switch (commandBufferType)
             {
                 case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
@@ -293,7 +296,7 @@ namespace Radiant
         // Bindless resources part3
         std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
-        Unique<GfxDevice> m_Device{};
+        Unique<GfxDevice> m_Device{nullptr};
         Shared<GfxTexture> m_DefaultWhiteTexture{nullptr};
 
         struct FrameData

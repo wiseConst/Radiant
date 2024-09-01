@@ -5,7 +5,7 @@
 
 struct PushConstantBlock
 {
-    uint32_t SSAOTextureID;
+    uint SSAOTextureID;
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
@@ -14,7 +14,7 @@ static const int32_t g_BlurSize = 2;
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
-    uint32_t width = 1, height = 1;
+    uint width = 1, height = 1;
     Shaders::Texture_Heap[u_PC.SSAOTextureID].GetDimensions(width, height);
     const float2 rcpTexDim = 1.0f / float2(width, height);
 

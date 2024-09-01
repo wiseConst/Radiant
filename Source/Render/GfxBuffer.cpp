@@ -5,7 +5,7 @@
 
 namespace Radiant
 {
-    void GfxBuffer::RenderGraph_Finalize(VmaAllocation& allocation) noexcept
+    void GfxBuffer::RG_Finalize(VmaAllocation& allocation) noexcept
     {
         if (m_Description.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT)
             m_BDA = m_Device->GetLogicalDevice()->getBufferAddress(vk::BufferDeviceAddressInfo().setBuffer(m_Handle));

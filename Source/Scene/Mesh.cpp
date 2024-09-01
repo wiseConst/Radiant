@@ -142,7 +142,7 @@ namespace Radiant
             }
             i32 width{1}, height{1}, channels{4};
 
-            ImmediateExecuteContext executionContext = {};
+            GfxImmediateExecuteContext executionContext = {};
             std::string textureName{s_DEFAULT_STRING};
             Shared<GfxTexture> loadedTexture{nullptr};
             std::visit(

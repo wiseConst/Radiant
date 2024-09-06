@@ -16,6 +16,10 @@ namespace Radiant
         std::vector<const char*> requiredDeviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,                 // For rendering into OS-window
             VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,  // To neglect viewport state definition on pipeline creation
+            VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,             // Provides query for current memory usage and budget.
+#if RDNT_DEBUG
+            VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,  // debugPrintEXT shaders
+#endif
         };
 
         if constexpr (s_bRequireMeshShading) requiredDeviceExtensions.emplace_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
@@ -113,6 +117,7 @@ namespace Radiant
 
         InitVMA(instance);
         LoadPipelineCache();
+        CreateBindlessSystem();
     }
 
     void GfxDevice::SelectGPUAndCreateDeviceThings(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface,
@@ -332,6 +337,73 @@ namespace Radiant
         }
 
         m_PipelineCache = m_Device->createPipelineCacheUnique(pipelineCacheCI);
+    }
+
+    void GfxDevice::CreateBindlessSystem() noexcept
+    {
+        constexpr std::array<vk::DescriptorSetLayoutBinding, 3> bindings{vk::DescriptorSetLayoutBinding()
+                                                                             .setBinding(Shaders::s_BINDLESS_IMAGE_BINDING)
+                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES)
+                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                                                                             .setDescriptorType(vk::DescriptorType::eStorageImage),
+                                                                         vk::DescriptorSetLayoutBinding()
+                                                                             .setBinding(Shaders::s_BINDLESS_TEXTURE_BINDING)
+                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
+                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                                                                             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler),
+                                                                         vk::DescriptorSetLayoutBinding()
+                                                                             .setBinding(Shaders::s_BINDLESS_SAMPLER_BINDING)
+                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS)
+                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                                                                             .setDescriptorType(vk::DescriptorType::eSampler)};
+
+        constexpr std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
+            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
+            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
+            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount};
+        const auto megaSetLayoutExtendedInfo = vk::DescriptorSetLayoutBindingFlagsCreateInfo().setBindingFlags(bindingFlags);
+
+        m_DescriptorSetLayout =
+            m_Device->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo()
+                                                          .setBindings(bindings)
+                                                          .setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool)
+                                                          .setPNext(&megaSetLayoutExtendedInfo));
+        SetDebugName("RDNT_BINDLESS_DESCRIPTOR_LAYOUT", (const vk::DescriptorSetLayout&)*m_DescriptorSetLayout);
+
+        m_PipelineLayout = m_Device->createPipelineLayoutUnique(
+            vk::PipelineLayoutCreateInfo()
+                .setSetLayouts(*m_DescriptorSetLayout)
+                .setPushConstantRanges(vk::PushConstantRange()
+                                           .setOffset(0)
+                                           .setSize(/* guaranteed by the spec min bytes size of maxPushConstantsSize */ 128)
+                                           .setStageFlags(vk::ShaderStageFlagBits::eAll)));
+        SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", (const vk::PipelineLayout&)*m_PipelineLayout);
+
+        constexpr std::array<vk::DescriptorPoolSize, 3> poolSizes{
+            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES).setType(vk::DescriptorType::eStorageImage),
+            vk::DescriptorPoolSize()
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
+                .setType(vk::DescriptorType::eCombinedImageSampler),
+            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
+        for (u8 i{}; i < s_BufferedFrameCount; ++i)
+        {
+            m_BindlessResourcesPerFrame[i].DescriptorPool =
+                m_Device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo()
+                                                         .setMaxSets(1)
+                                                         .setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind)
+                                                         .setPoolSizes(poolSizes));
+            const auto descriptorPoolName = "RDNT_BINDLESS_DESCRIPTOR_POOL_FRAME_" + std::to_string(i);
+            SetDebugName(descriptorPoolName.data(), (const vk::DescriptorPool&)*m_BindlessResourcesPerFrame[i].DescriptorPool);
+
+            m_BindlessResourcesPerFrame[i].DescriptorSet =
+                m_Device
+                    ->allocateDescriptorSets(vk::DescriptorSetAllocateInfo()
+                                                 .setDescriptorPool(*m_BindlessResourcesPerFrame[i].DescriptorPool)
+                                                 .setSetLayouts(*m_DescriptorSetLayout))
+                    .back();
+            const auto descriptorSetName = "RDNT_BINDLESS_DESCRIPTOR_SET_FRAME_" + std::to_string(i);
+            SetDebugName(descriptorSetName.data(), m_BindlessResourcesPerFrame[i].DescriptorSet);
+        }
     }
 
     void GfxDevice::AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,

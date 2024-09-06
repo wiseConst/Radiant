@@ -683,10 +683,12 @@ namespace Radiant
         const auto& frameData = m_GfxContext->GetCurrentFrameData();
         frameData.GeneralCommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-        frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_GfxContext->GetBindlessPipelineLayout(), 0,
-                                                          frameData.DescriptorSet, {});
-        frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *m_GfxContext->GetBindlessPipelineLayout(), 0,
-                                                          frameData.DescriptorSet, {});
+        const auto& pipelineLayout    = *m_GfxContext->GetDevice()->GetBindlessPipelineLayout();
+        const auto& bindlessResources = m_GfxContext->GetDevice()->GetCurrentFrameBindlessResources();
+        frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0,
+                                                          bindlessResources.DescriptorSet, {});
+        frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout, 0,
+                                                          bindlessResources.DescriptorSet, {});
 
         // NOTE: Firstly reserve enough space for timestamps
         if (frameData.TimestampsCapacity < m_Passes.size() * 2)
@@ -1131,7 +1133,6 @@ namespace Radiant
 
     void RenderGraphResourcePool::UI_ShowResourceUsage() const noexcept
     {
-
         if (ImGui::TreeNodeEx("RenderGraphResourcePool Statistics", ImGuiTreeNodeFlags_Framed))
         {
             if constexpr (!s_bUseResourceMemoryAliasing)
@@ -1272,8 +1273,39 @@ namespace Radiant
 
     void RenderGraphResourcePool::ResourceMemoryAliaser::BindResourcesToMemoryRegions() noexcept
     {
-        if (m_ResourceInfoMap.empty() || m_ResourcesNeededMemoryRebind.empty()) return;
+        // TODO: Instead of checking if we even need clear, store set/map of resource properties(memory requirements/flags)
+        // by render graph resource ID.
+        // NOTE: Clear resources if they aren't being created anymore, but being stored.
+        bool bNeedMemoryDefragmentation = false;
+        {
+            u64 resourcesInBuckets = 0;
+            for (const auto& bucket : m_MemoryBuckets)
+            {
+                resourcesInBuckets += bucket.AlreadyAliasedResources.size();
+                if (resourcesInBuckets > m_ResourceInfoMap.size())
+                {
+                    bNeedMemoryDefragmentation = true;
+                    break;
+                }
+
+                for (const auto& aliasedResource : bucket.AlreadyAliasedResources)
+                {
+                    if (m_ResourceInfoMap.contains(aliasedResource.ID) &&
+                        aliasedResource.MemoryPropertyFlags == m_ResourceInfoMap[aliasedResource.ID].MemoryPropertyFlags &&
+                        aliasedResource.MemoryRequirements == m_ResourceInfoMap[aliasedResource.ID].MemoryRequirements)
+                        continue;
+
+                    bNeedMemoryDefragmentation = true;
+                    break;
+                }
+
+                if (bNeedMemoryDefragmentation) break;
+            }
+            bNeedMemoryDefragmentation = bNeedMemoryDefragmentation || (resourcesInBuckets != m_ResourceInfoMap.size());
+        }
+        if (!bNeedMemoryDefragmentation && m_ResourcesNeededMemoryRebind.empty()) return;
         CleanMemoryBuckets();
+        RDNT_ASSERT(!m_ResourceInfoMap.empty(), "Resource Info Map is invalid!");
 
         struct RenderGraphResourceUnaliased
         {
@@ -1284,15 +1316,34 @@ namespace Radiant
             vk::MemoryPropertyFlags MemoryPropertyFlags{};
         };
 
-        // NOTE: Populate resources, sort them in ascending order and then start aliasing from the highest memory usage resource.
+        // NOTE: Firstly invalidate resources cuz their allocation might be deleted, thne populate resources,
+        // sort them in ascending order and start aliasing from the highest memory usage resource.
         std::vector<RenderGraphResourceUnaliased> unaliasedResources;
         for (const auto& [resourceID, resourceInfo] : m_ResourceInfoMap)
         {
-            unaliasedResources.emplace_back(resourceInfo.ResourceHandle, resourceID, resourceInfo.DebugName,
-                                            resourceInfo.MemoryRequirements, resourceInfo.MemoryPropertyFlags);
+            auto memoryRequirements = resourceInfo.MemoryRequirements;
+            if (bNeedMemoryDefragmentation || !m_ResourcesNeededMemoryRebind.contains(resourceID))
+            {
+                if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resourceInfo.ResourceHandle))
+                {
+                    auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
+                    gfxTextureHandle->Invalidate();
+                    memoryRequirements = GfxContext::Get().GetDevice()->GetLogicalDevice()->getImageMemoryRequirements(*gfxTextureHandle);
+                }
+                else if (auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resourceInfo.ResourceHandle))
+                {
+                    auto& gfxBufferHandle = m_ResourcePoolPtr->GetBuffer(*rgBufferHandle)->Get();
+                    gfxBufferHandle->Invalidate();
+                    memoryRequirements = GfxContext::Get().GetDevice()->GetLogicalDevice()->getBufferMemoryRequirements(*gfxBufferHandle);
+                }
+            }
+
+            unaliasedResources.emplace_back(resourceInfo.ResourceHandle, resourceID, resourceInfo.DebugName, memoryRequirements,
+                                            resourceInfo.MemoryPropertyFlags);
         }
         std::sort(std::execution::par, unaliasedResources.begin(), unaliasedResources.end(),
                   [](const auto& lhs, const auto& rhs) { return lhs.MemoryRequirements.size < rhs.MemoryRequirements.size; });
+        m_ResourcesNeededMemoryRebind.clear();
 
         while (!unaliasedResources.empty())
         {
@@ -1337,7 +1388,7 @@ namespace Radiant
                 std::sort(std::execution::par, nonAliasableMemoryOffsets.begin(), nonAliasableMemoryOffsets.end(),
                           [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
 
-                std::optional<u64> foundByteOffset{std::nullopt};
+                std::optional<std::pair</* OffsetBytes */ u64, /* SizeBytes */ u64>> foundMemoryRegion{std::nullopt};
                 i64 overlapCounter{0};
                 for (u64 i{}; i < nonAliasableMemoryOffsets.size() - 1; ++i)
                 {
@@ -1347,21 +1398,26 @@ namespace Radiant
 
                     const bool bReachedAliasableRegion = overlapCounter == 0 && currentType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_END &&
                                                          nextType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_START;
-                    const bool bRegionValid = (nextOffset - currentOffset) > 0;
 
-                    const bool bCanFitInsideAllocation = currentOffset + resourceToBeAssigned.MemoryRequirements.size <=
+                    const u64 alignedOffset = Math::AlignUp(
+                        currentOffset, resourceToBeAssigned.MemoryRequirements.alignment);  // vkBind*Memory requires aligned location
+                    const u64 memoryRegionSize = nextOffset - alignedOffset;
+                    const bool bRegionValid    = memoryRegionSize > 0;
+
+                    const bool bCanFitInsideAllocation = alignedOffset + resourceToBeAssigned.MemoryRequirements.size <=
                                                          memoryBucket.AlreadyAliasedResources.front().MemoryRequirements.size;
                     if (!bRegionValid || !bReachedAliasableRegion || !bCanFitInsideAllocation) continue;
 
-                    foundByteOffset = currentOffset;
-                    break;
+                    if (!foundMemoryRegion.has_value() ||
+                        memoryRegionSize <= (*foundMemoryRegion).second && resourceToBeAssigned.MemoryRequirements.size < memoryRegionSize)
+                        foundMemoryRegion = {alignedOffset, memoryRegionSize};
                 }
 
-                if (foundByteOffset.has_value())
+                if (foundMemoryRegion.has_value())
                 {
                     memoryBucket.AlreadyAliasedResources.emplace_back(
-                        resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, *foundByteOffset, resourceToBeAssigned.DebugName,
-                        resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
+                        resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, (*foundMemoryRegion).first,
+                        resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
                     bResourceAssigned = true;
 
                     break;
@@ -1398,11 +1454,8 @@ namespace Radiant
 
             m_ResourcePoolPtr->m_Device->AllocateMemory(memoryBucket.Allocation, memoryBucket.MemoryRequirements,
                                                         memoryBucket.MemoryPropertyFlags);
-
             for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
             {
-                if (!m_ResourcesNeededMemoryRebind.contains(aliasedResource.ID)) continue;
-
                 if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&aliasedResource.ResourceHandle))
                 {
                     auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
@@ -1418,9 +1471,6 @@ namespace Radiant
                 }
             }
         }
-
-        m_ResourceInfoMap.clear();
-        m_ResourcesNeededMemoryRebind.clear();
     }
 
 }  // namespace Radiant

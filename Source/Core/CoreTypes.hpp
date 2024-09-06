@@ -32,6 +32,12 @@ namespace Radiant
     using f32 = std::float_t;
     using f64 = std::double_t;
 
+    union FloatBits
+    {
+        f32 f;
+        u32 ui;
+    };
+
     template <class Key, class T, class Hash = ankerl::unordered_dense::hash<Key>, class KeyEqual = std::equal_to<Key>>
     using UnorderedMap = ankerl::unordered_dense::map<Key, T, Hash, KeyEqual>;
 

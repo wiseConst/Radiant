@@ -1,6 +1,6 @@
 // screen_space_shadows.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.h"
 
 static const uint32_t g_sss_max_steps        = 16;    // Max ray steps, affects quality and performance.
 static const float    g_sss_max_ray_distance = 0.1f;  // Max shadow length, longer shadows are less accurate.

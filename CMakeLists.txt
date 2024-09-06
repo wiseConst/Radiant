@@ -16,9 +16,8 @@ set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 if (MSVC)
     # This will enable INTERPROCEDURAL_OPTIMIZATION for all targets created after this line. Those created before are not affected.
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-    
     set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
-   
+
     # Multithreaded project compilation using MSVC
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
 endif()
@@ -69,6 +68,25 @@ endif()
 
 # ============= ThirdParty =============
 
+# AMD compressonator(currently WINDOWS only)
+set(AMD_COMPRESSONATOR_VERSION 4.5.52)
+set(AMD_COMPRESSONATOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Compressonator_${AMD_COMPRESSONATOR_VERSION}")
+target_include_directories(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/include)
+
+if (WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/lib/Compressonator_MT_DLL.lib)
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
+    )
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
+    )
+endif()
+
 # graphviz
 set(GRAPHVIZ_VERSION 12.1.0)
 set(GRAPHVIZ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/graphviz)
@@ -89,7 +107,7 @@ if (NOT EXISTS ${GRAPHVIZ_ROOT})
 endif()
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.9.1)
+set(SLANG_VERSION 2024.10.2)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")
@@ -108,7 +126,7 @@ if (NOT EXISTS ${SLANG_ROOT})
 endif()
 target_include_directories(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/include)
 
- if (WIN32)
+if (WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/lib/slang.lib)
 endif()
 

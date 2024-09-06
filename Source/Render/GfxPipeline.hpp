@@ -62,9 +62,8 @@ namespace Radiant
     class GfxPipeline final : private Uncopyable, private Unmovable
     {
       public:
-        GfxPipeline(const Unique<GfxDevice>& device, const vk::UniquePipelineLayout& bindlessPipelineLayout,
-                    const GfxPipelineDescription& pipelineDesc) noexcept
-            : m_Device(device), m_BindlessPipelineLayout(bindlessPipelineLayout), m_Description(pipelineDesc)
+        GfxPipeline(const Unique<GfxDevice>& device, const GfxPipelineDescription& pipelineDesc) noexcept
+            : m_Device(device), m_Description(pipelineDesc)
         {
             if (auto* gpo = std::get_if<GfxGraphicsPipelineOptions>(&m_Description.PipelineOptions); gpo)
             {
@@ -82,7 +81,6 @@ namespace Radiant
 
       private:
         const Unique<GfxDevice>& m_Device;
-        const vk::UniquePipelineLayout& m_BindlessPipelineLayout;
 
         GfxPipelineDescription m_Description{};
         mutable vk::UniquePipeline m_Handle{};

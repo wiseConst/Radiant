@@ -34,7 +34,7 @@ namespace Radiant
                                                          .bDepthWrite{true},
                                                          .DepthCompareOp{vk::CompareOp::eLessOrEqual}};
             const GfxPipelineDescription pipelineDesc = {.DebugName = "Point2DPipeline", .PipelineOptions = gpo, .Shader = point2dShader};
-            m_Point2DPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+            m_Point2DPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(),  pipelineDesc);
         }
 
         {
@@ -48,7 +48,7 @@ namespace Radiant
                                                    .PolygonMode{vk::PolygonMode::eFill}};
             GfxPipelineDescription pipelineDesc = {.DebugName = "FullScreenClearPass", .PipelineOptions = gpo, .Shader = testShader};
             m_FullScreenClearPassPipeline =
-                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), m_GfxContext->GetBindlessPipelineLayout(), pipelineDesc);
+                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(),  pipelineDesc);
         }
     }
 
@@ -133,7 +133,8 @@ namespace Radiant
                 pc.Points         = (const Point2D*)point2dUBO->GetBDA();
                 pc.FullResolution = m_MainCamera->GetShaderData().FullResolution;
 
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, pc);
+                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                                                     0, pc);
                 cmd.draw(3, m_Points.size(), 0, 0);
             });
 
@@ -176,7 +177,7 @@ namespace Radiant
                 pc.MainPassTextureID = scheduler.GetTexture(finalPassData.MainPassTexture)->GetBindlessTextureID();
                 pc.BloomTextureID    = scheduler.GetTexture(finalPassData.BloomTexture)->GetBindlessTextureID();*/
 
-                //    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll, 0,
+                //    cmd.pushConstants<PushConstantBlock>(* vk::ShaderStageFlagBits::eAll, 0,
                 //    pc);
                 cmd.draw(3, 1, 0, 0);
             });

@@ -79,8 +79,13 @@ namespace Radiant
         }
         ~GfxTexture() noexcept { Destroy(); }
 
+        void Invalidate() noexcept;
         void RG_Finalize() noexcept;
-        operator vk::Image&() noexcept { return m_Image; }
+        operator vk::Image&() noexcept
+        {
+            RDNT_ASSERT(m_Image.has_value(), "Image is invalid!");
+            return *m_Image;
+        }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept
         {
@@ -133,7 +138,7 @@ namespace Radiant
         u64 m_UUID{0};
         const Unique<GfxDevice>& m_Device;
         GfxTextureDescription m_Description{};
-        vk::Image m_Image{nullptr};
+        std::optional<vk::Image> m_Image{std::nullopt};
 
         struct MipInfo
         {
@@ -145,7 +150,6 @@ namespace Radiant
         VmaAllocation m_Allocation{VK_NULL_HANDLE};
 
         constexpr GfxTexture() noexcept = delete;
-        void Invalidate() noexcept;
         void CreateMipChainAndSubmitToBindlessPool() noexcept;
         void Destroy() noexcept;
     };

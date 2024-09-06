@@ -1,7 +1,7 @@
 // PBR.slang
 
 #include "../../Source/ShaderDefines.h"
-#include "light_clusters_defines.hpp"
+#include "clustered_shading/light_clusters_defines.hpp"
 
 struct FragmentStageInput
 { 
@@ -53,39 +53,9 @@ VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
     float3 T = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
     T = normalize(T - dot(T, output.FSInput.Normal) * output.FSInput.Normal);
     output.FSInput.Tangent = T;
-
-    output.FSInput.Bitangent = float(u_PC.VtxAttributes[vertexID].TSign) * cross(output.FSInput.Normal, T);
+    output.FSInput.Bitangent = u_PC.VtxAttributes[vertexID].TSign * cross(output.FSInput.Normal, T);
 
     return output;
-}
-
-// Microfacet distribution aligned to halfway vector
-float EvaluateDistributionGGX(const float NdotH, const float roughness)
-{
-    const float a = roughness * roughness;
-    const float a2 = a * a;
-    const float denom = (NdotH * NdotH * (a2 - 1.0f) + 1.0f);
-    
-    return a2 / (Shaders::s_PI * denom * denom);
-}
-
-float GeometrySchlickGGX(float NdotV, const float roughness)
-{
-    const float k = (roughness + 1.0f) * (roughness + 1.0f) / 8;
-    return NdotV / (NdotV * (1.0f - k) + k);
-}
-
-// geom obstruction && geom shadowing
-float EvaluateGeometrySmith(const float NdotV, const float NdotL, const float roughness)
-{
-    return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
-}
-
-// FresnelSchlick, evaluating ratio of base reflectivity looking perpendicularly towards surface
-float3 EvaluateFresnel(const float HdotV, const float3 F0)
-{
-    static constexpr float F90 = 1.0f;
-    return F0 + (F90 - F0) * pow(1.0f - HdotV, 5.0f);
 }
 
 float3 EvaluateNormalMap(const float3 T, const float3 B, const float3 N, const float2 uv, const Shaders::GLTFMaterial *materialData)
@@ -109,12 +79,12 @@ float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 a
     const float NdotL = max(dot(N, L), 0.0f);
     const float HdotV = max(dot(H, V), 0.0f);
 
-    const float3 F = EvaluateFresnel(HdotV, F0); // kS
-    const float3 DFG = EvaluateDistributionGGX(NdotH, metallicRoughness.y) * F * EvaluateGeometrySmith(NdotV, NdotL, metallicRoughness.y);
+    const float3 F = Shaders::EvaluateFresnel(HdotV, F0); // kS
+    const float3 DFG = Shaders::EvaluateDistributionGGX(NdotH, metallicRoughness.y) * Shaders::EvaluateGeometrySmith(NdotV, NdotL, metallicRoughness.y) * F;
     const float denom = max(4 * NdotV * NdotL, Shaders::s_KINDA_SMALL_NUMBER);
     const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
 
-    return (kD * albedo / Shaders::s_PI + DFG / denom) * lightColor * NdotL;
+    return NdotL * lightColor * (Shaders::s_RcpPI * kD * albedo + DFG / denom);
 }
 
 #define VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION 0
@@ -140,10 +110,35 @@ float4 Heatmap(uint lightCount)
 }
 #endif
 
-uint GetLightClusterIndex(const float2 fullResolution, const uint3 lightClusterSubdivisions, const uint slice, const float2 fragCoord)
+void ProcessSinglePointLight(const uint pointLightIndex, inout float3 irradiance, const float3 fragPosWS, const float3 F0, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 N)
+{
+    PointLight pl = u_PC.LightData->PointLights[pointLightIndex];
+    const float lightToFragDistance = length(pl.sphere.Origin - fragPosWS);
+    const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
+    const float3 L = normalize(pl.sphere.Origin - fragPosWS);
+    irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedo, metallicRoughness, V, L, N);
+}
+
+void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const float3 fragPosWS, const float3 F0, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 N)
+{
+    // Read range of words of visibility bits
+    for (uint bitmaskIndex = 0; bitmaskIndex < LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE; ++bitmaskIndex)
+    {
+        uint currentBitmask = u_PC.LightClusterList[froxelIndex].PointLightBitmasks[bitmaskIndex];
+        while (currentBitmask != 0)
+        {
+            const uint lightBitIndex = firstbitlow(currentBitmask);
+            const uint lightIndex = bitmaskIndex * LIGHT_CLUSTERS_WORD_SIZE + lightBitIndex;
+            ProcessSinglePointLight(lightIndex, irradiance, fragPosWS, F0, albedo, metallicRoughness, V, N);
+            currentBitmask ^= (1u << lightBitIndex); // Remove(xor) processed light
+        }
+    }
+}
+
+uint GetLightClusterIndex(const float2 fullResolution, const uint3 lightClusterSubdivisions, const float3 invLightClusterSubdivisions, const uint slice, const float2 fragCoord)
 {
     // Locating which cluster this fragment is part of.
-    const float2 froxelSize = fullResolution / (float2)lightClusterSubdivisions.xy;
+    const float2 froxelSize = fullResolution * invLightClusterSubdivisions.xy;
     const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
     return froxelID.x + froxelID.y * lightClusterSubdivisions.x + froxelID.z * lightClusterSubdivisions.x * lightClusterSubdivisions.y;
 }
@@ -161,7 +156,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLOR_COUNT] * float4(float3(0.8f), 1.0f);
 #endif
 
-    //return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
+   // return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
    // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
 
     const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
@@ -179,16 +174,8 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
 
     irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, normalize(u_PC.LightData.Sun.Direction), N);
 
-    const uint froxelIndex = GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
-
-    for (uint k = 0; k < u_PC.LightClusterList[froxelIndex].PointLightCount; ++k)
-    {
-        PointLight pl = u_PC.LightData->PointLights[u_PC.LightClusterList[froxelIndex].PointLightIndices[k]];
-        const float lightToFragDistance = length(pl.sphere.Origin - fsInput.FragPosWS);
-        const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
-        const float3 L = normalize(pl.sphere.Origin - fsInput.FragPosWS);
-        irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedo.rgb, metallicRoughness, V, L, N);
-    }
+    const uint froxelIndex = GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
+    ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedo.rgb, metallicRoughness, V, N);
 
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
     uint heatmapPointLightCount = 0;
@@ -198,7 +185,17 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     for (uint sliceIndex = 0; sliceIndex < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++sliceIndex)
         heatmapPointLightCount += u_PC.LightClusterList[GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, sliceIndex, fragCoord.xy)].PointLightCount;
 #else
-    heatmapPointLightCount += u_PC.LightClusterList[froxelIndex].PointLightCount;
+    // Read range of words of visibility bits
+    for (uint bitmaskIndex = 0; bitmaskIndex < LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE; ++bitmaskIndex)
+    {
+        uint currentBitmask = u_PC.LightClusterList[froxelIndex].PointLightBitmasks[bitmaskIndex];
+        while (currentBitmask != 0)
+        {
+            const uint lightBitIndex = firstbitlow(currentBitmask);
+            currentBitmask ^= (1u << lightBitIndex); // Remove(xor) processed light
+            ++heatmapPointLightCount;
+        }
+    }
 #endif
 
     return lerp(Heatmap(heatmapPointLightCount), float4(irradiance, albedo.a), 0.3f);

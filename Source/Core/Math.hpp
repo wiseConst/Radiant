@@ -36,6 +36,11 @@ namespace Radiant
         static constexpr f64 s_KINDA_SMALL_f64_NUMBER = 10.e-4;
         static constexpr f64 s_SMALL_f64_NUMBER       = 10.e-9;
 
+        template <typename T> static FORCEINLINE T AlignUp(const T val, const T alignment) noexcept
+        {
+            return (val + alignment - 1) & ~(alignment - 1);
+        }
+
     }  // namespace Math
 
 }  // namespace Radiant

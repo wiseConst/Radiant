@@ -1,7 +1,7 @@
 // ssao.slang
 
-#include "../../Source/ShaderDefines.h"
-#include "../../Assets/Shaders/FullScreenQuad.slang"
+#include "../../../Source/ShaderDefines.h"
+#include "../FullScreenQuad.slang"
 
 // Precalculated hemisphere kernel(TBN space)
 static const uint KERNEL_SIZE = 32;

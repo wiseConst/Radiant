@@ -64,9 +64,9 @@ namespace Radiant
     struct DirectionalLight
     {
         float3 Direction;
-        uint32_t Color;  // NOTE: Packed color, alpha is not touched
-        float Intensity;
-        // bool bCastShadows;
+        uint32_t Color;   // NOTE: Packed color, alpha is not touched
+        float Intensity;  // TODO: Sign bit used for detecting if a shadow caster
+        bool bCastShadows;
     };
 
     struct PointLight
@@ -74,13 +74,13 @@ namespace Radiant
         Sphere sphere;
         uint32_t Color;  // NOTE: Packed color, alpha is not touched
         float Intensity;
-        // bool bCastShadows;
     };
 
     namespace Shaders
     {
         static const float s_KINDA_SMALL_NUMBER = 10.E-4f;
         static const float s_PI                 = 3.14159265f;
+        static const float s_RcpPI              = 0.31830989f;
 
         static const uint32_t s_RAINBOW_COLOR_COUNT                 = 8;
         static const float4 s_RAINBOW_COLORS[s_RAINBOW_COLOR_COUNT] = {
@@ -116,7 +116,8 @@ namespace Radiant
         };
 
         // NOTE: By default all textures in glTF are in sRGB color space, so we convert all textures firstly in linear RGB color space and
-        // then apply in the end gamma correction. NOTE: By default GfxContext creates white texture, so each texture ID has 0 index!
+        // then apply in the end gamma correction.
+        // NOTE: By default GfxContext creates white texture, so each texture ID is 0!
         struct GLTFMaterial
         {
             struct PBRData
@@ -249,6 +250,35 @@ namespace Radiant
             const float3 lower  = sRGB.rgb * float3(0.0773994f);
 
             return float4(lerp(higher, lower, (float3)cutoff), sRGB.a);
+        }
+
+        // Microfacet distribution aligned to halfway vector
+        float EvaluateDistributionGGX(const float NdotH, const float roughness)
+        {
+            const float a     = roughness * roughness;
+            const float a2    = a * a;
+            const float denom = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
+
+            return a2 / (denom * denom) * Shaders::s_RcpPI;
+        }
+
+        float GeometrySchlickGGX(float NdotV, const float roughness)
+        {
+            const float k = (roughness + 1.0f) * (roughness + 1.0f) * 0.125f;
+            return NdotV / (NdotV * (1.0f - k) + k);
+        }
+
+        // geom obstruction && geom shadowing
+        float EvaluateGeometrySmith(const float NdotV, const float NdotL, const float roughness)
+        {
+            return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
+        }
+
+        // FresnelSchlick, evaluating ratio of base reflectivity looking perpendicularly towards surface
+        float3 EvaluateFresnel(const float HdotV, const float3 F0)
+        {
+            static constexpr float F90 = 1.0f;
+            return F0 + (F90 - F0) * pow(1.0f - HdotV, 5.0f);
         }
 
 #else

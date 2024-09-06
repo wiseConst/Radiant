@@ -137,7 +137,7 @@ namespace Radiant
             const auto shaderStages = m_Description.Shader->GetShaderStages();
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
                 m_Device->GetPipelineCache(), vk::GraphicsPipelineCreateInfo()
-                                                  .setLayout(*m_BindlessPipelineLayout)
+                                                  .setLayout(*m_Device->GetBindlessPipelineLayout())
                                                   .setStages(shaderStages)
                                                   .setPDepthStencilState(&depthStencilStateCI)
                                                   .setPNext(&dynamicRenderingInfo)
@@ -155,7 +155,7 @@ namespace Radiant
         {
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createComputePipelineUnique(
                 m_Device->GetPipelineCache(), vk::ComputePipelineCreateInfo()
-                                                  .setLayout(*m_BindlessPipelineLayout)
+                                                  .setLayout(*m_Device->GetBindlessPipelineLayout())
                                                   .setStage(m_Description.Shader->GetShaderStages().back()));
             RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to create COMPUTE pipeline!");
 

@@ -1,6 +1,6 @@
 // bloom_upsample_blur_compute.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.h"
 
 // This shader performs upsampling on a texture,
 // as taken from Call Of Duty method, presented at ACM Siggraph 2014.
@@ -34,17 +34,17 @@ void computeMain(uint3 DTid : SV_DispatchThreadID)
     // d - e - f
     // g - h - i
     // === ('e' is the current texel) ===
-    const float3 a = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-x, y));
-    const float3 b = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, y));
-    const float3 c = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, y));
+    const float3 a = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 0));
+    const float3 b = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 0));
+    const float3 c = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 0));
 
-    const float3 d = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-x, 0));
-    const float3 e = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy));
-    const float3 f = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 0));
+    const float3 d = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, y));
+    const float3 e = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, y));
+    const float3 f = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, y));
 
-    const float3 g = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-x, -y));
-    const float3 h = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, -y));
-    const float3 i = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, -y));
+    const float3 g = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 2 * y));
+    const float3 h = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 2 * y));
+    const float3 i = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 2 * y));
 
     // Apply weighted distribution, by using a 3x3 tent filter:
     //  1   | 1 2 1 |
@@ -56,7 +56,7 @@ void computeMain(uint3 DTid : SV_DispatchThreadID)
     finalColor *= 0.0625f;
 
     float3 srcColor = float3(0.0f);
-    if (u_PC.MipLevel != 0) srcColor =  Shaders::RWImage2D_Heap_F3[u_PC.DstTextureID].Load(float2(DTid.xy));
+    if (u_PC.MipLevel != 0) srcColor = Shaders::RWImage2D_Heap_F3[u_PC.DstTextureID].Load(DTid.xy);
 
     Shaders::RWImage2D_Heap_F3[u_PC.DstTextureID][DTid.xy] = finalColor + srcColor;
 }

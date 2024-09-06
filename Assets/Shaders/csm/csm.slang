@@ -1,7 +1,7 @@
 // csm.slang
 
-#include "../../Source/ShaderDefines.h"
-
+#include "../../../Source/ShaderDefines.h"
+#include <csm_defines.hpp>
 
 struct VSOutput
 {

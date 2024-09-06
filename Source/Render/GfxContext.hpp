@@ -111,12 +111,10 @@ namespace Radiant
         bool BeginFrame() noexcept;
         void EndFrame() noexcept;
 
-        NODISCARD FORCEINLINE const auto GetGlobalFrameNumber() const noexcept { return m_GlobalFrameNumber; }
         NODISCARD FORCEINLINE auto& GetCurrentFrameData() const noexcept { return m_FrameData[m_CurrentFrameIndex]; }
         NODISCARD FORCEINLINE const auto& GetInstance() const noexcept { return m_Instance; }
-        NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return m_PipelineLayout; }
         NODISCARD FORCEINLINE auto& GetDevice() const noexcept { return m_Device; }
-        NODISCARD FORCEINLINE auto GetDefaultWhiteTexture() const noexcept { return m_DefaultWhiteTexture; }
+        NODISCARD FORCEINLINE auto& GetDefaultWhiteTexture() const noexcept { return m_DefaultWhiteTexture; }
 
         NODISCARD FORCEINLINE const auto GetSwapchainImageFormat() const noexcept { return m_SwapchainImageFormat; }
         NODISCARD FORCEINLINE const auto& GetSwapchainExtent() const noexcept { return m_SwapchainExtent; }
@@ -230,50 +228,6 @@ namespace Radiant
             return *s_Instance;
         }
 
-        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
-        {
-            std::scoped_lock lock(m_Mtx);
-            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
-                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
-                        "Unknown binding!");
-            RDNT_ASSERT(!bindlessID.has_value(), "BindlessID is already populated!");
-
-            if (binding != Shaders::s_BINDLESS_SAMPLER_BINDING) RDNT_ASSERT(imageInfo.imageView, "ImageView is invalid!");
-            if (binding != Shaders::s_BINDLESS_IMAGE_BINDING) RDNT_ASSERT(imageInfo.sampler, "Sampler is invalid!");
-
-            bindlessID = static_cast<u32>(m_BindlessThingsIDs[binding].Emplace(m_BindlessThingsIDs[binding].GetSize()));
-
-            const auto descriptorType = (binding == Shaders::s_BINDLESS_IMAGE_BINDING) ? vk::DescriptorType::eStorageImage
-                                                                                       : ((binding == Shaders::s_BINDLESS_SAMPLER_BINDING)
-                                                                                              ? vk::DescriptorType::eSampler
-                                                                                              : vk::DescriptorType::eCombinedImageSampler);
-
-            std::array<vk::WriteDescriptorSet, s_BufferedFrameCount> writes{};
-            for (u8 frame{}; frame < s_BufferedFrameCount; ++frame)
-            {
-                writes[frame] = vk::WriteDescriptorSet()
-                                    .setDescriptorCount(1)
-                                    .setDescriptorType(descriptorType)
-                                    .setDstArrayElement(*bindlessID)
-                                    .setDstBinding(binding)
-                                    .setDstSet(m_FrameData[frame].DescriptorSet)
-                                    .setImageInfo(imageInfo);
-            }
-
-            m_Device->GetLogicalDevice()->updateDescriptorSets(writes, {});
-        }
-
-        void PopBindlessThing(std::optional<u32>& bindlessID, const u32 binding) noexcept
-        {
-            std::scoped_lock lock(m_Mtx);
-            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
-                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
-                        "Unknown binding!");
-            RDNT_ASSERT(bindlessID.has_value(), "BindlessID is invalid!");
-            m_BindlessThingsIDs[binding].Release(static_cast<PoolID>(*bindlessID));
-            bindlessID = std::nullopt;
-        }
-
         NODISCARD FORCEINLINE auto& GetMutex() noexcept { return m_Mtx; }
 
         NODISCARD FORCEINLINE const auto GetLastFrameCPUProfilerData() const noexcept
@@ -291,10 +245,6 @@ namespace Radiant
         static inline GfxContext* s_Instance{nullptr};  // NOTE: Used only for safely pushing objects through device into deletion queue.
         vk::UniqueInstance m_Instance{};
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
-
-        // NOTE: Destroy pools only after deferred deletion queues are finished!
-        // Bindless resources part3
-        std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
         Unique<GfxDevice> m_Device{nullptr};
         Shared<GfxTexture> m_DefaultWhiteTexture{nullptr};
@@ -319,19 +269,11 @@ namespace Radiant
             vk::UniqueFence RenderFinishedFence{};
             vk::UniqueSemaphore ImageAvailableSemaphore{};
             vk::UniqueSemaphore RenderFinishedSemaphore{};
-
-            // Bindless resources part1
-            vk::UniqueDescriptorPool DescriptorPool{};
-            vk::DescriptorSet DescriptorSet{};
         };
         std::array<FrameData, s_BufferedFrameCount> m_FrameData{};
 
-        // Bindless resources part2
-        vk::UniqueDescriptorSetLayout m_DescriptorSetLayout{};
-        vk::UniquePipelineLayout m_PipelineLayout{};
-
         // Swapchain things
-        u64 m_GlobalFrameNumber{0};  // Used to help determine device's DeferredDeletionQueue flush.
+        u64 m_GlobalFrameNumber{0};  // Used to help to determine device's DeferredDeletionQueue flush.
         vk::Extent2D m_SwapchainExtent{};
         vk::Format m_SwapchainImageFormat{};
         vk::UniqueSurfaceKHR m_Surface{};

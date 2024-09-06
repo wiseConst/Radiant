@@ -60,6 +60,8 @@ namespace Radiant
 
     void GfxTexture::Invalidate() noexcept
     {
+        Destroy();
+
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
         const auto imageCI = vk::ImageCreateInfo()
@@ -83,7 +85,8 @@ namespace Radiant
             return;
         }
 
-        m_Device->AllocateTexture(imageCI, (VkImage&)m_Image, m_Allocation);
+        m_Image = vk::Image();
+        m_Device->AllocateTexture(imageCI, (VkImage&)*m_Image, m_Allocation);
         CreateMipChainAndSubmitToBindlessPool();
     }
 
@@ -102,7 +105,7 @@ namespace Radiant
                                        .setB(vk::ComponentSwizzle::eB)
                                        .setA(vk::ComponentSwizzle::eA))
                     .setFormat(m_Description.Format)
-                    .setImage(m_Image)
+                    .setImage(*m_Image)
                     .setViewType(vk::ImageViewType::e2D)
                     .setSubresourceRange(vk::ImageSubresourceRange()
                                              .setAspectMask(IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth
@@ -119,7 +122,7 @@ namespace Radiant
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()
-                        .setImage(m_Image)
+                        .setImage(*m_Image)
                         .setSubresourceRange(vk::ImageSubresourceRange()
                                                  .setBaseArrayLayer(0)
                                                  .setBaseMipLevel(baseMipLevel)
@@ -142,13 +145,13 @@ namespace Radiant
                     executionContext.Queue.waitIdle();
                 }
 
-                GfxContext::Get().PushBindlessThing(vk::DescriptorImageInfo()
-                                                        .setImageView(*m_MipChain[baseMipLevel].ImageView)
-                                                        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                                                        .setSampler(m_Description.SamplerCreateInfo.has_value()
-                                                                        ? m_Device->GetSampler(*m_Description.SamplerCreateInfo)
-                                                                        : m_Device->GetDefaultSampler()),
-                                                    m_MipChain[baseMipLevel].BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
+                m_Device->PushBindlessThing(vk::DescriptorImageInfo()
+                                                .setImageView(*m_MipChain[baseMipLevel].ImageView)
+                                                .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                                                .setSampler(m_Description.SamplerCreateInfo.has_value()
+                                                                ? m_Device->GetSampler(*m_Description.SamplerCreateInfo)
+                                                                : m_Device->GetDefaultSampler()),
+                                            m_MipChain[baseMipLevel].BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
             }
 
             if (m_Description.UsageFlags & vk::ImageUsageFlagBits::eStorage)
@@ -159,7 +162,7 @@ namespace Radiant
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                     vk::ImageMemoryBarrier2()
-                        .setImage(m_Image)
+                        .setImage(*m_Image)
                         .setSubresourceRange(vk::ImageSubresourceRange()
                                                  .setBaseArrayLayer(0)
                                                  .setBaseMipLevel(baseMipLevel)
@@ -182,7 +185,7 @@ namespace Radiant
                     executionContext.Queue.waitIdle();
                 }
 
-                GfxContext::Get().PushBindlessThing(
+                m_Device->PushBindlessThing(
                     vk::DescriptorImageInfo().setImageView(*m_MipChain[baseMipLevel].ImageView).setImageLayout(vk::ImageLayout::eGeneral),
                     m_MipChain[baseMipLevel].BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
             }
@@ -205,11 +208,11 @@ namespace Radiant
 
         const auto aspectMask = IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
         auto imageMemoryBarrier =
-            vk::ImageMemoryBarrier2().setImage(m_Image).setSubresourceRange(vk::ImageSubresourceRange()
-                                                                                .setBaseArrayLayer(0)
-                                                                                .setLevelCount(1)
-                                                                                .setLayerCount(m_Description.LayerCount)
-                                                                                .setAspectMask(aspectMask));
+            vk::ImageMemoryBarrier2().setImage(*m_Image).setSubresourceRange(vk::ImageSubresourceRange()
+                                                                                 .setBaseArrayLayer(0)
+                                                                                 .setLevelCount(1)
+                                                                                 .setLayerCount(m_Description.LayerCount)
+                                                                                 .setAspectMask(aspectMask));
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
 
         u32 mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
@@ -238,9 +241,9 @@ namespace Radiant
             cmd.blitImage2(
                 vk::BlitImageInfo2()
                     .setFilter(vk::Filter::eLinear)
-                    .setSrcImage(m_Image)
+                    .setSrcImage(*m_Image)
                     .setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
-                    .setDstImage(m_Image)
+                    .setDstImage(*m_Image)
                     .setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
                     .setRegions(
                         vk::ImageBlit2()
@@ -278,23 +281,24 @@ namespace Radiant
         if (m_Description.Dimensions == dimensions) return false;
         m_Description.Dimensions = dimensions;
 
-        Destroy();
         Invalidate();
         return true;
     }
 
     void GfxTexture::Destroy() noexcept
     {
+        if (!m_Image.has_value()) return;
+
         m_Device->PushObjectToDelete(
             [bControlledByRenderGraph = m_Description.bControlledByRenderGraph, movedMipChain = std::move(m_MipChain),
-             movedImage = std::move(m_Image), movedAllocation = std::move(m_Allocation)]() noexcept
+             movedImage = std::move(*m_Image), movedAllocation = std::move(m_Allocation)]() noexcept
             {
                 for (auto& mipInfo : movedMipChain)
                 {
                     auto& nonConstMipInfo = const_cast<MipInfo&>(mipInfo);
-                    GfxContext::Get().PopBindlessThing(nonConstMipInfo.BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
+                    GfxContext::Get().GetDevice()->PopBindlessThing(nonConstMipInfo.BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
                     if (mipInfo.BindlessImageID.has_value())
-                        GfxContext::Get().PopBindlessThing(nonConstMipInfo.BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
+                        GfxContext::Get().GetDevice()->PopBindlessThing(nonConstMipInfo.BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
                 }
 
                 if (bControlledByRenderGraph)
@@ -302,6 +306,7 @@ namespace Radiant
                 else
                     GfxContext::Get().GetDevice()->DeallocateTexture((VkImage&)movedImage, (VmaAllocation&)movedAllocation);
             });
+        m_Image = std::nullopt;
     }
 
 }  // namespace Radiant

@@ -1,7 +1,7 @@
 // ssao_box_blur.slang
 
-#include "../../Source/ShaderDefines.h"
-#include "../../Assets/Shaders/FullScreenQuad.slang"
+#include "../../../Source/ShaderDefines.h"
+#include "../FullScreenQuad.slang"
 
 struct PushConstantBlock
 {

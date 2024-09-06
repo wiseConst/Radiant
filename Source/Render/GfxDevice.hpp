@@ -145,7 +145,57 @@ namespace Radiant
             return GetSampler(defaultSamplerCI);
         }
 
+        NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return m_PipelineLayout; }
         FORCEINLINE const auto GetMSAASamples() const noexcept { return m_MSAASamples; }
+
+        void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
+        {
+            std::scoped_lock lock(m_Mtx);
+            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
+                        "Unknown binding!");
+            RDNT_ASSERT(!bindlessID.has_value(), "BindlessID is already populated!");
+
+            if (binding != Shaders::s_BINDLESS_SAMPLER_BINDING) RDNT_ASSERT(imageInfo.imageView, "ImageView is invalid!");
+            if (binding != Shaders::s_BINDLESS_IMAGE_BINDING) RDNT_ASSERT(imageInfo.sampler, "Sampler is invalid!");
+
+            bindlessID = static_cast<u32>(m_BindlessThingsIDs[binding].Emplace(m_BindlessThingsIDs[binding].GetSize()));
+
+            const auto descriptorType = (binding == Shaders::s_BINDLESS_IMAGE_BINDING) ? vk::DescriptorType::eStorageImage
+                                                                                       : ((binding == Shaders::s_BINDLESS_SAMPLER_BINDING)
+                                                                                              ? vk::DescriptorType::eSampler
+                                                                                              : vk::DescriptorType::eCombinedImageSampler);
+
+            std::array<vk::WriteDescriptorSet, s_BufferedFrameCount> writes{};
+            for (u8 frame{}; frame < s_BufferedFrameCount; ++frame)
+            {
+                writes[frame] = vk::WriteDescriptorSet()
+                                    .setDescriptorCount(1)
+                                    .setDescriptorType(descriptorType)
+                                    .setDstArrayElement(*bindlessID)
+                                    .setDstBinding(binding)
+                                    .setDstSet(m_BindlessResourcesPerFrame[frame].DescriptorSet)
+                                    .setImageInfo(imageInfo);
+            }
+
+            m_Device->updateDescriptorSets(writes, {});
+        }
+
+        void PopBindlessThing(std::optional<u32>& bindlessID, const u32 binding) noexcept
+        {
+            std::scoped_lock lock(m_Mtx);
+            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
+                        "Unknown binding!");
+            RDNT_ASSERT(bindlessID.has_value(), "BindlessID is invalid!");
+            m_BindlessThingsIDs[binding].Release(static_cast<PoolID>(*bindlessID));
+            bindlessID = std::nullopt;
+        }
+
+        NODISCARD FORCEINLINE auto& GetCurrentFrameBindlessResources() const noexcept
+        {
+            return m_BindlessResourcesPerFrame[m_CurrentFrameNumber % s_BufferedFrameCount];
+        }
 
       private:
         mutable std::mutex m_Mtx{};
@@ -153,9 +203,24 @@ namespace Radiant
         vk::PhysicalDevice m_PhysicalDevice{};
         vk::PhysicalDeviceProperties m_GPUProperties{};
         bool m_bMemoryPrioritySupported{false};
+        u64 m_CurrentFrameNumber{0};
+
+        // Bindless resources part1
+        struct BindlessResources
+        {
+            vk::UniqueDescriptorPool DescriptorPool{};
+            vk::DescriptorSet DescriptorSet{};
+        };
+        std::array<BindlessResources, s_BufferedFrameCount> m_BindlessResourcesPerFrame{};
+
+        // Bindless resources part2
+        vk::UniqueDescriptorSetLayout m_DescriptorSetLayout{};
+        vk::UniquePipelineLayout m_PipelineLayout{};
+
+        // Bindless resources part3
+        std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
         vk::UniquePipelineCache m_PipelineCache{};
-
         mutable UnorderedMap<vk::SamplerCreateInfo, vk::UniqueSampler> m_SamplerMap{};
 
         struct Queue
@@ -164,12 +229,11 @@ namespace Radiant
             std::optional<u32> QueueFamilyIndex{std::nullopt};
         } m_GeneralQueue{}, m_PresentQueue{}, m_TransferQueue{}, m_ComputeQueue{};
 
-        VmaAllocator m_Allocator{};
+        VmaAllocator m_Allocator{VK_NULL_HANDLE};
         vk::SampleCountFlagBits m_MSAASamples{vk::SampleCountFlagBits::e1};
 
         struct DeferredDeletionQueue
         {
-          public:
             DeferredDeletionQueue() noexcept  = default;
             ~DeferredDeletionQueue() noexcept = default;
 
@@ -213,7 +277,6 @@ namespace Radiant
         // NOTE: u64 - global frame number
         // TODO: Fix compilation issues using UnorderedMap!
         std::unordered_map<u64, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
-        u64 m_CurrentFrameNumber{0};  // Exclusively occupied by DeferredDeletionQueue needs.
 
         // NOTE: Only GfxContext can call it!
         friend class GfxContext;
@@ -226,6 +289,7 @@ namespace Radiant
                                             const vk::PhysicalDeviceFeatures& requiredDeviceFeatures, const void* pNext = nullptr) noexcept;
         void InitVMA(const vk::UniqueInstance& instance) noexcept;
         void LoadPipelineCache() noexcept;
+        void CreateBindlessSystem() noexcept;
 
         void Shutdown() noexcept;
     };

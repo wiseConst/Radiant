@@ -1,7 +1,7 @@
 // pbr_bloom_upsample_blur.slang
 
-#include "../../Source/ShaderDefines.h"
-#include "FullScreenQuad.slang"
+#include "../../../Source/ShaderDefines.h"
+#include "../FullScreenQuad.slang"
 
 // This shader performs upsampling on a texture,
 // as taken from Call Of Duty method, presented at ACM Siggraph 2014.

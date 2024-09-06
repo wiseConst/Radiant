@@ -51,8 +51,13 @@ namespace Radiant
         }
         ~GfxBuffer() noexcept { Destroy(); }
 
+        void Invalidate() noexcept;
         void RG_Finalize(VmaAllocation& allocation) noexcept;
-        operator vk::Buffer&() noexcept { return m_Handle; }
+        operator vk::Buffer&() noexcept
+        {
+            RDNT_ASSERT(m_Handle.has_value(), "Buffer is invalid!");
+            return *m_Handle;
+        }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
         NODISCARD FORCEINLINE const vk::DeviceAddress& GetBDA() const noexcept
@@ -75,7 +80,6 @@ namespace Radiant
             if (newElementSize != std::numeric_limits<u64>::max()) m_Description.ElementSize = newElementSize;
 
             m_Description.Capacity = newCapacity;
-            Destroy();
             Invalidate();
             return true;
         }
@@ -90,13 +94,12 @@ namespace Radiant
         const Unique<GfxDevice>& m_Device;
         GfxBufferDescription m_Description{};
 
-        vk::Buffer m_Handle{nullptr};
+        std::optional<vk::Buffer> m_Handle{std::nullopt};
         VmaAllocation m_Allocation{VK_NULL_HANDLE};
         std::optional<vk::DeviceAddress> m_BDA{std::nullopt};
         void* m_Mapped{nullptr};
 
         constexpr GfxBuffer() noexcept = delete;
-        void Invalidate() noexcept;
         void Destroy() noexcept;
     };
 

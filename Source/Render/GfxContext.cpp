@@ -124,7 +124,13 @@ namespace Radiant
         cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
 
         // NOTE: Reset all states only after every GPU op finished!
+
         m_Device->PollDeletionQueues();
+
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPool);
+
         m_PipelineStateCache = {};
         currentFrameData.CPUProfilerData.clear();
         currentFrameData.GPUProfilerData.clear();
@@ -143,7 +149,9 @@ namespace Radiant
             // NOTE: CPUProfilerData is populated right when executing rendergraph, but with GPU things are different and we populate it's
             // timings right after it finished work for appropriate frame.
             auto& prevFrameGPUProfilerData = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].GPUProfilerData;
-            for (u32 taskIndex{}, timestampIndex{}; taskIndex < prevFrameGPUProfilerData.size(); ++taskIndex, timestampIndex += 2)
+            for (u32 taskIndex{}, timestampIndex{};
+                 taskIndex < prevFrameGPUProfilerData.size() && timestampIndex < currentFrameData.TimestampResults.size();
+                 ++taskIndex, timestampIndex += 2)
             {
                 const auto frequencyFactor = m_Device->GetGPUProperties().limits.timestampPeriod / 1e9;
                 prevFrameGPUProfilerData[taskIndex].StartTime =
@@ -170,15 +178,12 @@ namespace Radiant
 
             m_CurrentImageIndex = imageIndex;
         }
-        catch (vk::OutOfDateKHRError)
+        catch (const vk::OutOfDateKHRError&)
         {
             m_bSwapchainNeedsResize = true;
             return false;
         }
 
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPool);
         return true;
     }
 
@@ -205,7 +210,7 @@ namespace Radiant
             else if (result != vk::Result::eSuccess)
                 RDNT_ASSERT(false, "presentKHR(): unknown result!");
         }
-        catch (vk::OutOfDateKHRError)
+        catch (const vk::OutOfDateKHRError&)
         {
             m_bSwapchainNeedsResize = true;
         }
@@ -284,12 +289,15 @@ namespace Radiant
                                  .setEngineVersion(VK_MAKE_VERSION(1, 0, 0))
                                  .setApiVersion(apiVersion);
 
-        m_Instance = vk::createInstanceUnique(vk::InstanceCreateInfo()
-                                                  .setPApplicationInfo(&appInfo)
-                                                  .setEnabledExtensionCount(enabledInstanceExtensions.size())
-                                                  .setPEnabledExtensionNames(enabledInstanceExtensions)
-                                                  .setEnabledLayerCount(enabledInstanceLayers.size())
-                                                  .setPEnabledLayerNames(enabledInstanceLayers));
+        constexpr auto validationFeatureToEnable = vk::ValidationFeatureEnableEXT::eDebugPrintf;
+        const auto validationInfo                = vk::ValidationFeaturesEXT().setEnabledValidationFeatures(validationFeatureToEnable);
+        m_Instance                               = vk::createInstanceUnique(vk::InstanceCreateInfo()
+                                                                                .setPNext(s_bForceGfxValidation ? &validationInfo : nullptr)
+                                                                                .setPApplicationInfo(&appInfo)
+                                                                                .setEnabledExtensionCount(enabledInstanceExtensions.size())
+                                                                                .setPEnabledExtensionNames(enabledInstanceExtensions)
+                                                                                .setEnabledLayerCount(enabledInstanceLayers.size())
+                                                                                .setPEnabledLayerNames(enabledInstanceLayers));
 
         LOG_TRACE("VkInstance {}.{}.{} created.", VK_VERSION_MAJOR(apiVersion), VK_VERSION_MINOR(apiVersion), VK_VERSION_PATCH(apiVersion));
 
@@ -342,50 +350,7 @@ namespace Radiant
 
     void GfxContext::CreateFrameResources() noexcept
     {
-        constexpr std::array<vk::DescriptorSetLayoutBinding, 3> bindings{vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_IMAGE_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eStorageImage),
-                                                                         vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_TEXTURE_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler),
-                                                                         vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_SAMPLER_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eSampler)};
-
-        constexpr std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
-            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
-            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
-            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount};
-        const auto megaSetLayoutExtendedInfo = vk::DescriptorSetLayoutBindingFlagsCreateInfo().setBindingFlags(bindingFlags);
-
         const auto& logicalDevice = m_Device->GetLogicalDevice();
-        m_DescriptorSetLayout =
-            logicalDevice->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo()
-                                                               .setBindings(bindings)
-                                                               .setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool)
-                                                               .setPNext(&megaSetLayoutExtendedInfo));
-
-        m_PipelineLayout = logicalDevice->createPipelineLayoutUnique(
-            vk::PipelineLayoutCreateInfo()
-                .setSetLayouts(*m_DescriptorSetLayout)
-                .setPushConstantRanges(vk::PushConstantRange()
-                                           .setOffset(0)
-                                           .setSize(/* guaranteed by the spec min bytes size of maxPushConstantsSize */ 128)
-                                           .setStageFlags(vk::ShaderStageFlagBits::eAll)));
-        m_Device->SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", (const vk::PipelineLayout&)*m_PipelineLayout);
-
-        constexpr std::array<vk::DescriptorPoolSize, 3> poolSizes{
-            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES).setType(vk::DescriptorType::eStorageImage),
-            vk::DescriptorPoolSize()
-                .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
-                .setType(vk::DescriptorType::eCombinedImageSampler),
-            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
         for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
             m_FrameData[i].GeneralCommandPool = logicalDevice->createCommandPoolUnique(
@@ -408,18 +373,6 @@ namespace Radiant
                 logicalDevice->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
             m_FrameData[i].ImageAvailableSemaphore = logicalDevice->createSemaphoreUnique(vk::SemaphoreCreateInfo());
             m_FrameData[i].RenderFinishedSemaphore = logicalDevice->createSemaphoreUnique(vk::SemaphoreCreateInfo());
-
-            m_FrameData[i].DescriptorPool =
-                logicalDevice->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo()
-                                                              .setMaxSets(1)
-                                                              .setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind)
-                                                              .setPoolSizes(poolSizes));
-
-            m_FrameData[i].DescriptorSet = logicalDevice
-                                               ->allocateDescriptorSets(vk::DescriptorSetAllocateInfo()
-                                                                            .setDescriptorPool(*m_FrameData[i].DescriptorPool)
-                                                                            .setSetLayouts(*m_DescriptorSetLayout))
-                                               .back();
         }
 
         // Creating default white texture 1x1.

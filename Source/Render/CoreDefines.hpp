@@ -5,7 +5,9 @@
 
 namespace Radiant
 {
-    static constexpr u8 s_BufferedFrameCount           = 2;
+    static constexpr u8 s_BufferedFrameCount = 2;
+    static_assert(s_BufferedFrameCount > 0);
+
     static constexpr bool s_bUseResourceMemoryAliasing = true;
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr bool s_bRequireRayTracing         = false;

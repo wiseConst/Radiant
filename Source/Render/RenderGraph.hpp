@@ -420,38 +420,10 @@ namespace Radiant
             ResourceMemoryAliaser() noexcept  = default;  // NOTE: Shouldn't be used!
             ~ResourceMemoryAliaser() noexcept = default;
 
-            void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID,
-                                  const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
-                                  const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
+            FORCEINLINE void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID,
+                                              const std::string& debugName, const vk::MemoryRequirements& memoryRequirements,
+                                              const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
             {
-                // TODO: Remove it? Since m_ResourceInfoMap now getting filled every frame.
-                // NOTE: Huge check if we need trigger memory reallocation.
-                if (m_ResourceInfoMap.contains(resourceID) && !m_ResourcesNeededMemoryRebind.contains(resourceID))
-                {
-                    bool bResourceHandleDifferent = false;
-                    if (m_ResourceInfoMap[resourceID].ResourceHandle.index() == resourceHandle.index())
-                    {
-                        if (const auto* rgTextureHandleLhs = std::get_if<RGTextureHandle>(&resourceHandle);
-                            const auto* rgTextureHandleRhs = std::get_if<RGTextureHandle>(&m_ResourceInfoMap[resourceID].ResourceHandle))
-                        {
-                            bResourceHandleDifferent = *rgTextureHandleLhs != *rgTextureHandleRhs;
-                        }
-                        else if (const auto* rgBufferHandleLhs = std::get_if<RGBufferHandle>(&resourceHandle);
-                                 const auto* rgBufferHandleRhs = std::get_if<RGBufferHandle>(&m_ResourceInfoMap[resourceID].ResourceHandle))
-                        {
-                            bResourceHandleDifferent = rgBufferHandleLhs->ID != rgBufferHandleRhs->ID ||
-                                                       rgBufferHandleLhs->BufferFlags != rgBufferHandleRhs->BufferFlags;
-                        }
-                    }
-                    else
-                        bResourceHandleDifferent = true;
-
-                    const bool bResourceNeedsToBeReallocated = bResourceHandleDifferent ||
-                                                               m_ResourceInfoMap[resourceID].MemoryRequirements != memoryRequirements ||
-                                                               m_ResourceInfoMap[resourceID].MemoryPropertyFlags != memoryPropertyFlags;
-                    if (bResourceNeedsToBeReallocated) m_ResourcesNeededMemoryRebind.emplace(resourceID);
-                }
-
                 m_ResourceInfoMap[resourceID] = {.ResourceHandle      = resourceHandle,
                                                  .DebugName           = debugName,
                                                  .MemoryRequirements  = memoryRequirements,

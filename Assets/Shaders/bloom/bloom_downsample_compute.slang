@@ -1,6 +1,6 @@
 // bloom_downsample_compute.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.h"
 
 // This shader performs downsampling on a texture,
 // as taken from Call Of Duty method, presented at ACM Siggraph 2014.
@@ -48,23 +48,23 @@ void computeMain(uint3 DTid : SV_DispatchThreadID)
     const float x = u_PC.SrcTexelSize.x;
     const float y = u_PC.SrcTexelSize.y;
 
-    const float3 a = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-2.0f * x, 2.0f * y));
-    const float3 b = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.0f, 2.0f * y));
-    const float3 c = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2.0f * x, 2.0f * y));
+    const float3 a = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 0));
+    const float3 b = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 0));
+    const float3 c = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 0));
 
-    const float3 d = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-2.0f * x, 0.0f));
-    const float3 e = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy));
-    const float3 f = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + float2(2.0f * x, 0.0f));
+    const float3 d = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, y));
+    const float3 e = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, y));
+    const float3 f = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, y));
 
-    const float3 g = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-2.0f * x, -2.0f * y));
-    const float3 h = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.0f, -2.0f * y));
-    const float3 i = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2.0f * x, -2.0f * y));
+    const float3 g = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 2 * y));
+    const float3 h = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 2 * y));
+    const float3 i = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 2 * y));
 
-    const float3 j = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-x, y));
-    const float3 k = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, y));
-    const float3 l = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(-x, -y));
-    const float3 m = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, -y));
-
+    const float3 j = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 0.5 * y));
+    const float3 k = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 1.5 * y));
+    const float3 l = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 1.5 * y));
+    const float3 m = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(1.5 * x, 1.5 * y));
+    
     float3 finalColor = 0.0f;
     if (u_PC.MipLevel == 0)
     {

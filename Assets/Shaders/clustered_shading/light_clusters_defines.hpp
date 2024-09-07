@@ -13,7 +13,7 @@ namespace Radiant
     {
 
         // Clustered Shading. DOOM2016 subdivision scheme 3072 clusters(16x8x24), depth slices logarithmic (Tiago Sousa).
-        static constexpr uint3 s_LIGHT_CLUSTER_SUBDIVISIONS = uint3(16, 8, 24);  // uint3(24, 12, 32);
+        static constexpr uint3 s_LIGHT_CLUSTER_SUBDIVISIONS = uint3(24, 12, 32);
         static constexpr uint32_t s_LIGHT_CLUSTER_COUNT =
             s_LIGHT_CLUSTER_SUBDIVISIONS.x * s_LIGHT_CLUSTER_SUBDIVISIONS.y * s_LIGHT_CLUSTER_SUBDIVISIONS.z;
 
@@ -34,9 +34,15 @@ namespace Radiant
             uint32_t PointLightBitmasks[LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE];
         };
 
+        // NOTE: This results in a LIGHT_CLUSTERS_BUILD_WG_SIZE^3 workgroup size!
 #define LIGHT_CLUSTERS_BUILD_WG_SIZE 4
+
 #define LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE 64
 #define LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS 2048
+
+#define LIGHT_CLUSTERS_SPLIT_DISPATCHES 1
+        // NOTE: This count defines how many lights can be processed in a single workgroup, better to be a multiple of shared light count!
+#define LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT 6144
 
     }  // namespace Shaders
 

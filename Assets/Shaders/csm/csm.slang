@@ -10,7 +10,10 @@ struct VSOutput
 
 struct PushConstantBlock
 {
-    
+    float3 scale;
+    float3 translation;
+    float4 orientation;
+    const VertexPosition *VtxPositions;
 };
 [vk::push_constant] PushConstantBlock u_PC;
 

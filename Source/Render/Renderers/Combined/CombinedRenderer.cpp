@@ -5,6 +5,7 @@
 #include <Core/Window/GLFWWindow.hpp>
 
 #include <clustered_shading/light_clusters_defines.hpp>
+#include <csm/csm_defines.hpp>
 
 namespace Radiant
 {
@@ -308,6 +309,77 @@ namespace Radiant
                 lightUBO->SetData(&m_LightData, sizeof(m_LightData));
             });
 
+#if 0
+        struct CascadedShadowMapsPassData
+        {
+            RGResourceID CameraBuffer;
+        };
+        std::vector<CascadedShadowMapsPassData> csmData(SHADOW_MAP_CASCADE_COUNT);
+        for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
+        {
+            const auto passName    = "CSM" + std::to_string(cascadeIndex);
+            const auto textureName = "CSMTexture" + std::to_string(cascadeIndex);
+            m_RenderGraph->AddPass(
+                passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                [&](RenderGraphResourceScheduler& scheduler)
+                {
+                    /* csmData[cascadeIndex].CameraBuffer =
+                         scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);*/
+
+                    // NOTE: Here I can create 1 texture with multiple mips or multiple textures,
+                    // I went with multiple textures, don't want to bother with mips cuz memory aliaser will make things.
+                    scheduler.CreateTexture(
+                        textureName,
+                        GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(SHADOW_MAP_DIMENSIONS, SHADOW_MAP_DIMENSIONS, 1.0f),
+                                              vk::Format::eD24UnormS8Uint, vk::ImageUsageFlagBits::eDepthStencilAttachment));
+                    scheduler.WriteDepthStencil(textureName, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                                vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(1.0f).setStencil(0));
+
+                    scheduler.SetViewportScissors(
+                        vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(SHADOW_MAP_DIMENSIONS).setHeight(SHADOW_MAP_DIMENSIONS),
+                        vk::Rect2D().setExtent(vk::Extent2D().setWidth(SHADOW_MAP_DIMENSIONS).setHeight(SHADOW_MAP_DIMENSIONS)));
+                },
+                [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                {
+                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    pipelineStateCache.Bind(cmd, m_CSMPipeline.get());
+
+                    //  auto& cameraUBO = scheduler.GetBuffer(depthPrePassData.CameraBuffer);
+                    for (const auto& ro : m_DrawContext.RenderObjects)
+                    {
+                        if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
+
+                        struct PushConstantBlock
+                        {
+                            glm::vec3 scale{1.f};
+                            glm::vec3 translation{0.f};
+                            float4 orientation{1};
+                            const VertexPosition* VtxPositions{nullptr};
+                            const Shaders::CameraData* CameraData{nullptr};
+                        } pc = {};
+
+                        glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
+                        glm::vec3 decomposePlaceholder0{1.0f};
+                        glm::vec4 decomposePlaceholder1{1.0f};
+                        glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                        pc.scale /= 100.0f;
+                        pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
+
+                        pc.CameraData   = (const Shaders::CameraData*)cameraUBO->GetBDA();
+                        pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
+
+                        pipelineStateCache.Set(cmd, ro.CullMode);
+                        pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
+
+                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                             vk::ShaderStageFlagBits::eAll, 0, pc);
+                        pipelineStateCache.Bind(cmd, ro.IndexBuffer.get());
+                        cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
+                    }
+                });
+        }
+#endif
+
         struct DepthPrePassData
         {
             RGResourceID CameraBuffer;
@@ -452,6 +524,10 @@ namespace Radiant
                     const AABB* Clusters;
                     Shaders::LightClusterList* LightClusterList;
                     const Shaders::LightData* LightData;
+#if LIGHT_CLUSTERS_SPLIT_DISPATCHES
+                    u32 PointLightBatchOffset{0};
+                    u32 PointLightBatchCount{0};
+#endif
                 } pc = {};
 
                 auto& cameraUBO              = scheduler.GetBuffer(lcaPassData.CameraBuffer);
@@ -463,10 +539,27 @@ namespace Radiant
                 auto& lightClusterListBuffer = scheduler.GetBuffer(lcaPassData.LightClusterListBuffer);
                 pc.LightClusterList          = (Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
 
+#if LIGHT_CLUSTERS_SPLIT_DISPATCHES
+                const u32 lightBatchCount =
+                    (m_LightData.PointLightCount + LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT - 1) / LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT;
+                for (u64 lightBatchIndex{}; lightBatchIndex < lightBatchCount; ++lightBatchIndex)
+                {
+                    const u64 pointLightBatchCount =
+                        glm::min((u64)LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT,
+                                 m_LightData.PointLightCount - LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT * lightBatchIndex);
+                    pc.PointLightBatchCount = pointLightBatchCount;
+
+                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                         vk::ShaderStageFlagBits::eAll, 0, pc);
+                    cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
+
+                    pc.PointLightBatchOffset += pointLightBatchCount;
+                }
+#else
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
-
                 cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
+#endif
             });
 
 #if 0

@@ -16,7 +16,7 @@ namespace Radiant
 
 #endif
 
-#define MAX_POINT_LIGHT_COUNT 256
+#define MAX_POINT_LIGHT_COUNT 1024
 
 // NOTE: AMD iGPU doesn't support storagePushConstant8/16, but I wanna preserve them on my NV dGPU so I can fastly transfer quantized data.
 #define RENDER_FORCE_IGPU 0

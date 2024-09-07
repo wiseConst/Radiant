@@ -121,7 +121,7 @@ void ProcessSinglePointLight(const uint pointLightIndex, inout float3 irradiance
 
 void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const float3 fragPosWS, const float3 F0, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 N)
 {
-    // Read range of words of visibility bits
+    // Read range of words of visibility bits.
     for (uint bitmaskIndex = 0; bitmaskIndex < LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE; ++bitmaskIndex)
     {
         uint currentBitmask = u_PC.LightClusterList[froxelIndex].PointLightBitmasks[bitmaskIndex];
@@ -130,7 +130,7 @@ void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const f
             const uint lightBitIndex = firstbitlow(currentBitmask);
             const uint lightIndex = bitmaskIndex * LIGHT_CLUSTERS_WORD_SIZE + lightBitIndex;
             ProcessSinglePointLight(lightIndex, irradiance, fragPosWS, F0, albedo, metallicRoughness, V, N);
-            currentBitmask ^= (1u << lightBitIndex); // Remove(xor) processed light
+            currentBitmask ^= (1u << lightBitIndex); // Remove(xor) processed light.
         }
     }
 }
@@ -156,8 +156,8 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLOR_COUNT] * float4(float3(0.8f), 1.0f);
 #endif
 
-   // return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
-   // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
+    // return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
+    // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
 
     const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
     const float4 albedo = fsInput.Color * Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));

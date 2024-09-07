@@ -36,6 +36,7 @@ namespace Radiant
 
         constexpr GfxShader() noexcept = delete;
         void Invalidate() noexcept;
+        bool TryLoadCache() noexcept;
     };
 
 }  // namespace Radiant

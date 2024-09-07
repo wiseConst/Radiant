@@ -54,7 +54,7 @@ namespace Radiant
 
     void GfxShader::Invalidate() noexcept
     {
-        RDNT_ASSERT(!m_Description.Path.empty(), "Shader path is invalid!");
+        if (TryLoadCache()) return;
 
         using Slang::ComPtr;
         constexpr auto diagnoseSlangBlob = [](slang::IBlob* diagnosticsBlob) noexcept
@@ -86,11 +86,11 @@ namespace Radiant
         {
             compileOptions.emplace_back(slang::CompilerOptionName::Optimization,
                                         slang::CompilerOptionValue{.intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE});
-            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
-            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
-            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
-            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});
-            //compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
+            // compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
+            //                             slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
+            // compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
+            //                             slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});
+            // compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
         }
         else
         {
@@ -125,14 +125,16 @@ namespace Radiant
             RDNT_ASSERT(SLANG_SUCCEEDED(slangResult) && entryPoint, "Failed to retrieve entry point [{}] from shader: {}", i,
                         m_Description.Path);
 
-            shaderComponents.emplace_back(entryPoint);
-
             auto entryPointLayout = entryPoint->getLayout();
             RDNT_ASSERT(entryPointLayout, "SLANG: EntryPointLayout isn't valid!");
 
             auto reflectedEntryPoint = entryPointLayout->getEntryPointByIndex(0);
             RDNT_ASSERT(reflectedEntryPoint, "SLANG: ReflectedEntryPoint isn't valid!");
 
+            const auto shaderStageVK = SlangUtils::SlangShaderStageToVulkan(reflectedEntryPoint->getStage());
+            if (m_ModuleMap.contains(shaderStageVK)) continue;
+
+            shaderComponents.emplace_back(entryPoint);
             ComPtr<slang::IComponentType> composedProgram;
             {
                 ComPtr<slang::IBlob> diagnosticBlob;
@@ -150,12 +152,99 @@ namespace Radiant
                 RDNT_ASSERT(SLANG_SUCCEEDED(slangResult), "SLANG: Failed to compile shader program!");
             }
 
-            m_ModuleMap.emplace(SlangUtils::SlangShaderStageToVulkan(reflectedEntryPoint->getStage()),
-                                m_Device->GetLogicalDevice()->createShaderModuleUnique(
-                                    vk::ShaderModuleCreateInfo()
-                                        .setPCode(static_cast<const u32*>(spirvCode->getBufferPointer()))
-                                        .setCodeSize(spirvCode->getBufferSize())));
+            m_ModuleMap.emplace(shaderStageVK, m_Device->GetLogicalDevice()->createShaderModuleUnique(
+                                                   vk::ShaderModuleCreateInfo()
+                                                       .setPCode(static_cast<const u32*>(spirvCode->getBufferPointer()))
+                                                       .setCodeSize(spirvCode->getBufferSize())));
+
+            const auto GetStrippedShaderNameFunc = [](const std::string& shaderPath, const std::string& shaderStage) -> std::string
+            {
+                const std::string suffix(".slang");
+                const u64 pos = shaderPath.rfind(suffix);  // Find the last occurrence of ".slang".
+                RDNT_ASSERT(pos != std::string::npos, "Shader path doesn't contain <.slang>!");
+
+                // Search for the previous slash to isolate the filename.
+                const u64 lastSlashIndex = shaderPath.rfind('/', pos);
+                if (lastSlashIndex != std::string::npos)  // Get filename with .slang
+                    return shaderPath.substr(lastSlashIndex + 1) + "." + shaderStage;
+                else  // If no slash is found, return the whole substring including .slang
+                    return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage;
+            };
+
+            const u32 elementsNum      = spirvCode->getBufferSize() / sizeof(u32);
+            const auto shaderCacheName = GetStrippedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK)) + ".spv";
+            std::vector<u32> cache(1 + elementsNum);
+
+            cache[0] = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
+            std::memcpy(cache.data() + cache.size() - elementsNum, spirvCode->getBufferPointer(), spirvCode->getBufferSize());
+            CoreUtils::SaveData(shaderCacheName, cache);
         }
+    }
+
+    bool GfxShader::TryLoadCache() noexcept
+    {
+        RDNT_ASSERT(m_Description.Path.ends_with(".slang"), "Shader name doesn't contain <.slang> in the end!");
+        RDNT_ASSERT(!m_Description.Path.empty(), "Shader path is invalid!");
+
+        static constexpr const char* s_ShaderCacheDir = "Shaders/";
+        if (!std::filesystem::exists(s_ShaderCacheDir))
+            RDNT_ASSERT(std::filesystem::create_directory(s_ShaderCacheDir), "Failed to create shader cache dir!");
+
+        static constexpr std::array<vk::ShaderStageFlagBits, 16> shaderStagesVK = {vk::ShaderStageFlagBits::eVertex,
+                                                                                   vk::ShaderStageFlagBits::eTessellationControl,
+                                                                                   vk::ShaderStageFlagBits::eTessellationEvaluation,
+                                                                                   vk::ShaderStageFlagBits::eGeometry,
+                                                                                   vk::ShaderStageFlagBits::eFragment,
+                                                                                   vk::ShaderStageFlagBits::eCompute,
+                                                                                   vk::ShaderStageFlagBits::eRaygenKHR,
+                                                                                   vk::ShaderStageFlagBits::eAnyHitKHR,
+                                                                                   vk::ShaderStageFlagBits::eClosestHitKHR,
+                                                                                   vk::ShaderStageFlagBits::eMissKHR,
+                                                                                   vk::ShaderStageFlagBits::eIntersectionKHR,
+                                                                                   vk::ShaderStageFlagBits::eCallableKHR,
+                                                                                   vk::ShaderStageFlagBits::eTaskEXT,
+                                                                                   vk::ShaderStageFlagBits::eMeshEXT,
+                                                                                   vk::ShaderStageFlagBits::eSubpassShadingHUAWEI,
+                                                                                   vk::ShaderStageFlagBits::eClusterCullingHUAWEI};
+
+        bool bEverythingLoaded{true};
+        for (const auto shaderStageVK : shaderStagesVK)
+        {
+            const auto GetCachedShaderNameFunc = [](const std::string& shaderPath, const std::string& shaderStage) -> std::string
+            {
+                const std::string suffix(".slang");
+                const u64 pos = shaderPath.rfind(suffix);  // Find the last occurrence of ".slang".
+                RDNT_ASSERT(pos != std::string::npos, "Shader path doesn't contain <.slang>!");
+
+                // Search for the previous slash to isolate the filename.
+                const u64 lastSlashIndex = shaderPath.rfind('/', pos);
+                if (lastSlashIndex != std::string::npos)  // Get filename with .slang
+                    return shaderPath.substr(lastSlashIndex + 1) + "." + shaderStage + ".spv";
+                else  // If no slash is found, return the whole substring including .slang
+                    return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage + ".spv";
+            };
+
+            const auto shaderCacheName = GetCachedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK));
+            if (!std::filesystem::exists(shaderCacheName)) continue;
+
+            const std::vector<u32> cacheData = CoreUtils::LoadData<u32>(shaderCacheName);
+            RDNT_ASSERT(!cacheData.empty(), "Failed to load shader cache!");
+
+            // Get the last modified time of the whole slang file!
+            const auto lastWriteTime = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
+            if (cacheData[0] != lastWriteTime)
+            {
+                bEverythingLoaded = false;
+                continue;
+            }
+
+            m_ModuleMap.emplace(shaderStageVK, m_Device->GetLogicalDevice()->createShaderModuleUnique(
+                                                   vk::ShaderModuleCreateInfo()
+                                                       .setPCode(cacheData.data() + 1)
+                                                       .setCodeSize((cacheData.size() - 1) * sizeof(cacheData[0]))));
+        }
+
+        return bEverythingLoaded && !m_ModuleMap.empty();
     }
 
 }  // namespace Radiant

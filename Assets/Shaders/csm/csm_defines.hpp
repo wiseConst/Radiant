@@ -6,21 +6,21 @@
 namespace Radiant
 {
 
-using float4x4 = glm::mat4;
+    using float4x4 = glm::mat4;
 
 #endif
 
-namespace Shaders
-{
-
-    #define CSM_CASCADE_COUNT 4
-    struct CSMCascadeData
+    namespace Shaders
     {
-        float4x4 ViewProjectionMatrix;
-    };
 
+#define SHADOW_MAP_DIMENSIONS 2048
+#define SHADOW_MAP_CASCADE_COUNT 4
+        struct CSMCascadeData
+        {
+            float4x4 ViewProjectionMatrix;
+        };
 
-}
+    }  // namespace Shaders
 
 #ifdef __cplusplus
 }

@@ -45,9 +45,9 @@ struct PushConstantBlock
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
-static const float g_SampleRadius = 0.5f;
+static const float g_SampleRadius = 0.25f;
 static const float g_SampleBias = 0.0285f;
-static const uint g_SSAOStrength = 3;
+static const uint g_SSAOStrength = 2;
 
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target

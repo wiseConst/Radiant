@@ -29,8 +29,8 @@ float3 IntersectSegmentPlane(const float3 startPoint, const float3 endPoint, con
 [numthreads(LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE)]
 void computeMain(uint3 DTid: SV_DispatchThreadID)
 {
-    const uint froxelIndex = DTid.x + DTid.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x + DTid.z * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y * Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x;
-    if (froxelIndex >= Shaders::s_LIGHT_CLUSTER_COUNT) return;
+    const uint froxelIndex = DTid.x + DTid.y * LIGHT_CLUSTERS_SUBDIVISION_X + DTid.z * LIGHT_CLUSTERS_SUBDIVISION_Y * LIGHT_CLUSTERS_SUBDIVISION_X;
+    if (froxelIndex >= LIGHT_CLUSTERS_COUNT) return;
     
     // Calculate the min and max points of a tile in screen space(not kind of screen space tbh).
     const float2 minPosSS = Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * DTid.xy;

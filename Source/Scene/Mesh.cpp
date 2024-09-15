@@ -21,14 +21,15 @@ namespace Radiant
 
         template <typename T>
         static constexpr void RemapVertexStream(const u64 uniqueVertexCount, std::vector<T>& vertexStream,
-                                                std::vector<u32>& indices) noexcept
+                                                const std::vector<u32>& rempaTable) noexcept
         {
             std::vector<T> newVertexStream(uniqueVertexCount);
-            meshopt_remapVertexBuffer(newVertexStream.data(), vertexStream.data(), vertexStream.size(), sizeof(T), indices.data());
+            meshopt_remapVertexBuffer(newVertexStream.data(), vertexStream.data(), vertexStream.size(), sizeof(T), rempaTable.data());
             vertexStream = std::move(newVertexStream);
         }
 
-        static void OptimizeMesh(std::vector<u32>& indices, std::vector<VertexPosition>& vertexPositions,
+        template <typename IndexType>
+        static void OptimizeMesh(std::vector<IndexType>& indices, std::vector<VertexPosition>& vertexPositions,
                                  std::vector<VertexAttribute>& vertexAttributes) noexcept
         {
             RDNT_ASSERT(vertexPositions.size() == vertexAttributes.size(),
@@ -177,19 +178,21 @@ namespace Radiant
                                 gfxContext->GetDevice(),
                                 GfxTextureDescription(vk::ImageType::e2D, {width, height, 1}, vk::Format::eR8G8B8A8Unorm,
                                                       vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
-                                                      samplerCI, 1, vk::SampleCountFlagBits::e1, false, bGenerateMipMaps));
+                                                      samplerCI, 1, vk::SampleCountFlagBits::e1,
+                                                      EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
                         const auto imageSize = static_cast<u64>(width * height * channels);
-                        auto stagingBuffer =
-                            MakeUnique<GfxBuffer>(gfxContext->GetDevice(), GfxBufferDescription(imageSize, /* placeholder */ 1,
-                                                                                                vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                                EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
+                        auto stagingBuffer   = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
+                                                                   GfxBufferDescription(imageSize, /* placeholder */ 1,
+                                                                                          vk::BufferUsageFlagBits::eTransferSrc,
+                                                                                          EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
                         stagingBuffer->SetData(imageData, imageSize);
 
-                        executionContext = gfxContext->CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
+                        executionContext =
+                            gfxContext->CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
                         executionContext.CommandBuffer.begin(
                             vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
@@ -384,17 +387,13 @@ namespace Radiant
 
             u32 albedoTextureID{0};
             if (fastgltfMaterial.pbrData.baseColorTexture.has_value())
-            {
                 albedoTextureID =
                     TextureMap[textureNameLUT[fastgltfMaterial.pbrData.baseColorTexture->textureIndex]]->GetBindlessTextureID();
-            }
 
             u32 metallicRoughnessTextureID{0};
             if (fastgltfMaterial.pbrData.metallicRoughnessTexture.has_value())
-            {
                 metallicRoughnessTextureID =
                     TextureMap[textureNameLUT[fastgltfMaterial.pbrData.metallicRoughnessTexture->textureIndex]]->GetBindlessTextureID();
-            }
 
             u32 normalTextureID{0};
             f32 normalScale{1.0f};
@@ -414,9 +413,7 @@ namespace Radiant
 
             u32 emissiveTextureID{0};
             if (fastgltfMaterial.emissiveTexture.has_value())
-            {
                 emissiveTextureID = TextureMap[textureNameLUT[fastgltfMaterial.emissiveTexture->textureIndex]]->GetBindlessTextureID();
-            }
 
             const std::string materialName{fastgltfMaterial.name};
             materialMap[materialName] = {
@@ -435,7 +432,7 @@ namespace Radiant
         }
 
         // Use the same vectors for all meshes so that the memory doesn't reallocate as often.
-        std::vector<u32> indices;
+        std::vector<u32> indicesUint32;
         std::vector<VertexPosition> vertexPositions;
         std::vector<VertexAttribute> vertexAttributes;
         LOG_INFO("Loading scene: {}", meshFilePath.string());
@@ -449,44 +446,60 @@ namespace Radiant
             const std::string meshName{fastgltfMesh.name};
             LOG_INFO("Loading submesh: {}", meshName);
 
-            indices.clear();
+            indicesUint32.clear();
             vertexPositions.clear();
             vertexAttributes.clear();
 
             meshAssetLUT.emplace_back(meshName);
-            MeshAssetMap[meshName]       = MakeShared<MeshAsset>();
-            MeshAssetMap[meshName]->Name = meshName;
 
-            for (const auto& primitve : fastgltfMesh.primitives)
+            auto& currentMeshAsset = MeshAssetMap[meshName];
+            currentMeshAsset       = MakeShared<MeshAsset>();
+            currentMeshAsset->Name = meshName;
+
+            for (const auto& primitive : fastgltfMesh.primitives)
             {
-                RDNT_ASSERT(primitve.indicesAccessor.has_value(),
+                RDNT_ASSERT(primitive.indicesAccessor.has_value(),
                             "fastgltf: We specify GenerateMeshIndices, so we should always have indices!");
-                const auto* positionIt = primitve.findAttribute("POSITION");
-                RDNT_ASSERT(positionIt != primitve.attributes.end(),
+                const auto* positionIt = primitive.findAttribute("POSITION");
+                RDNT_ASSERT(positionIt != primitive.attributes.end(),
                             "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
 
-                MeshAssetMap[meshName]->Surfaces.emplace_back(
-                    GeometryData{.StartIndex{static_cast<u32>(indices.size())},
-                                 .Count{static_cast<u32>(asset->accessors[*primitve.indicesAccessor].count)},
-                                 .MaterialID{0},
-                                 .PrimitiveTopology{FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitve.type)}});
+                currentMeshAsset->Surfaces.emplace_back(
+                    static_cast<u32>(indicesUint32.size()), static_cast<u32>(asset->accessors[*primitive.indicesAccessor].count), Sphere{},
+                    primitive.materialIndex.value_or(0), FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitive.type));
 
-                MeshAssetMap[meshName]->Surfaces.back().MaterialID = primitve.materialIndex.value_or(0);
-                MeshAssetMap[meshName]->Surfaces.back().AlphaMode =
-                    FastGltfUtils::ConvertAlphaModeToRadiant(asset->materials[primitve.materialIndex.value_or(0)].alphaMode);
-                MeshAssetMap[meshName]->Surfaces.back().CullMode = asset->materials[primitve.materialIndex.value_or(0)].doubleSided
-                                                                       ? vk::CullModeFlagBits::eNone
-                                                                       : vk::CullModeFlagBits::eBack;
+                if (primitive.materialIndex.has_value())
+                {
+                    currentMeshAsset->Surfaces.back().CullMode =
+                        asset->materials[*primitive.materialIndex].doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack;
+                    currentMeshAsset->Surfaces.back().AlphaMode =
+                        FastGltfUtils::ConvertAlphaModeToRadiant(asset->materials[primitive.materialIndex.value_or(0)].alphaMode);
+                }
 
                 const auto initialVertexIndex{vertexPositions.size()};
 
                 // Loading indices.
                 {
-                    const auto& indicesAccessor = asset->accessors[*primitve.indicesAccessor];
-                    indices.reserve(indices.size() + indicesAccessor.count);
+                    const auto& indicesAccessor = asset->accessors[*primitive.indicesAccessor];
+
+                    const auto parsedIndexType  = (indicesAccessor.componentType == fastgltf::ComponentType::UnsignedByte ||
+                                                  indicesAccessor.componentType == fastgltf::ComponentType::UnsignedShort)
+                                                      ? vk::IndexType::eUint16
+                                                      : vk::IndexType::eUint32;
+                    currentMeshAsset->IndexType = currentMeshAsset->IndexType == vk::IndexType::eNoneKHR
+                                                      ? parsedIndexType
+                                                      : std::max(currentMeshAsset->IndexType, parsedIndexType);
+                    indicesUint32.reserve(indicesUint32.size() + indicesAccessor.count);
 
                     fastgltf::iterateAccessor<u32>(asset.get(), indicesAccessor,
-                                                   [&](u32 idx) { indices.emplace_back(initialVertexIndex + idx); });
+                                                   [&](u32 idx)
+                                                   {
+                                                       indicesUint32.emplace_back(initialVertexIndex + idx);
+                                                       // NOTE: Check if index > u16::max() and then switch to index type u32.
+                                                       currentMeshAsset->IndexType = indicesUint32.back() > std::numeric_limits<u16>::max()
+                                                                                         ? vk::IndexType::eUint32
+                                                                                         : currentMeshAsset->IndexType;
+                                                   });
                 }
 
                 // Load vertex positions.
@@ -503,56 +516,65 @@ namespace Radiant
                 }
 
                 // Load vertex attributes.
+                // 1. Vertex colors
+                if (const auto* colorsAttribute = primitive.findAttribute("COLOR_0"); colorsAttribute != primitive.attributes.end())
                 {
-                    // 1. Vertex colors
-                    if (const auto* colorsAttribute = primitve.findAttribute("COLOR_0"); colorsAttribute != primitve.attributes.end())
-                    {
-                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
-                                                                      [&](const glm::vec4& vertexColor, const u64 index) {
-                                                                          vertexAttributes[initialVertexIndex + index].Color =
-                                                                              Shaders::PackUnorm4x8(vertexColor);
-                                                                      });
-                    }
+                    fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[colorsAttribute->accessorIndex],
+                                                                  [&](const glm::vec4& vertexColor, const u64 index) {
+                                                                      vertexAttributes[initialVertexIndex + index].Color =
+                                                                          Shaders::PackUnorm4x8(vertexColor);
+                                                                  });
+                }
 
-                    // 2. Normals
-                    if (const auto* normalsAttribute = primitve.findAttribute("NORMAL"); normalsAttribute != primitve.attributes.end())
-                    {
-                        fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), asset->accessors[normalsAttribute->accessorIndex],
-                                                                      [&](const glm::vec3& n, const u64 index) {
-                                                                          vertexAttributes[initialVertexIndex + index].Normal =
-                                                                              glm::packHalf(Shaders::EncodeOct(n));
-                                                                      });
-                    }
+                // 2. Normals
+                if (const auto* normalsAttribute = primitive.findAttribute("NORMAL"); normalsAttribute != primitive.attributes.end())
+                {
+                    fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), asset->accessors[normalsAttribute->accessorIndex],
+                                                                  [&](const glm::vec3& n, const u64 index) {
+                                                                      vertexAttributes[initialVertexIndex + index].Normal =
+                                                                          glm::packHalf(Shaders::EncodeOct(n));
+                                                                  });
+                }
 
-                    // 3. Tangents
-                    if (const auto* tangentAttribute = primitve.findAttribute("TANGENT"); tangentAttribute != primitve.attributes.end())
-                    {
-                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[tangentAttribute->accessorIndex],
-                                                                      [&](const glm::vec4& t, const u64 index)
-                                                                      {
-                                                                          vertexAttributes[initialVertexIndex + index].TSign = t.w;
-                                                                          vertexAttributes[initialVertexIndex + index].Tangent =
-                                                                              glm::packHalf(Shaders::EncodeOct(t));
-                                                                      });
-                    }
+                // 3. Tangents
+                if (const auto* tangentAttribute = primitive.findAttribute("TANGENT"); tangentAttribute != primitive.attributes.end())
+                {
+                    fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), asset->accessors[tangentAttribute->accessorIndex],
+                                                                  [&](const glm::vec4& t, const u64 index)
+                                                                  {
+                                                                      vertexAttributes[initialVertexIndex + index].TSign = t.w;
+                                                                      vertexAttributes[initialVertexIndex + index].Tangent =
+                                                                          glm::packHalf(Shaders::EncodeOct(t));
+                                                                  });
+                }
 
-                    // 4. UV
-                    if (const auto* uvAttribute = primitve.findAttribute("TEXCOORD_0"); uvAttribute != primitve.attributes.end())
-                    {
-                        fastgltf::iterateAccessorWithIndex<glm::vec2>(asset.get(), asset->accessors[uvAttribute->accessorIndex],
-                                                                      [&](const glm::vec2& uv, const u64 index) {
-                                                                          vertexAttributes[initialVertexIndex + index].UV =
-                                                                              glm::packHalf(uv);
-                                                                      });
-                    }
+                // 4. UV
+                if (const auto* uvAttribute = primitive.findAttribute("TEXCOORD_0"); uvAttribute != primitive.attributes.end())
+                {
+                    fastgltf::iterateAccessorWithIndex<glm::vec2>(asset.get(), asset->accessors[uvAttribute->accessorIndex],
+                                                                  [&](const glm::vec2& uv, const u64 index)
+                                                                  { vertexAttributes[initialVertexIndex + index].UV = glm::packHalf(uv); });
                 }
             }
 
-            MeshoptimizerUtils::OptimizeMesh(indices, vertexPositions, vertexAttributes);
+            currentMeshAsset->IndexBufferID           = IndexBuffers.size();
+            currentMeshAsset->VertexPositionBufferID  = VertexPositionBuffers.size();
+            currentMeshAsset->VertexAttributeBufferID = VertexAttributeBuffers.size();
 
-            MeshAssetMap[meshName]->IndexBufferID           = IndexBuffers.size();
-            MeshAssetMap[meshName]->VertexPositionBufferID  = VertexPositionBuffers.size();
-            MeshAssetMap[meshName]->VertexAttributeBufferID = VertexAttributeBuffers.size();
+            // NOTE:
+            // I store indices as uint32, but in case index type is different, then encoding also different.
+            // For now I do expose only u16/u32, in future will be u8 as well.
+            std::vector<u16> indicesUint16{};
+            if (currentMeshAsset->IndexType != vk::IndexType::eUint32)
+            {
+                indicesUint16.reserve(indicesUint32.size());
+                std::transform(indicesUint32.begin(), indicesUint32.end(), std::back_inserter(indicesUint16),
+                               [](const u32 indexUint32) noexcept { return static_cast<u16>(indexUint32); });
+                indicesUint32.clear();  // Clear to save memory footprint.
+                MeshoptimizerUtils::OptimizeMesh(indicesUint16, vertexPositions, vertexAttributes);
+            }
+            else
+                MeshoptimizerUtils::OptimizeMesh(indicesUint32, vertexPositions, vertexAttributes);
 
             const auto [cmd, queue] =
                 gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT);
@@ -565,11 +587,10 @@ namespace Radiant
                                      vk::BufferUsageFlagBits::eTransferSrc, EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
             vbpStagingBuffer->SetData(vertexPositions.data(), vertexPositions.size() * sizeof(vertexPositions[0]));
 
-            auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(
-                MakeShared<GfxBuffer>(gfxContext->GetDevice(),
-                                      GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
-                                                           vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
-                                                           EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
+            auto& vtxPosBuffer = VertexPositionBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(),
+                GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
+                                     vk::BufferUsageFlagBits::eVertexBuffer, EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
             cmd->copyBuffer(*vbpStagingBuffer, *vtxPosBuffer,
                             vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
 
@@ -583,24 +604,26 @@ namespace Radiant
             auto& vtxAttribBuffer = VertexAttributeBuffers.emplace_back(MakeShared<GfxBuffer>(
                 gfxContext->GetDevice(),
                 GfxBufferDescription(vertexAttributes.size() * sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0]),
-                                     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer,
-                                     EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
+                                     vk::BufferUsageFlagBits::eVertexBuffer, EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
             cmd->copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
                             vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
 
-            // Handle indices.
-            auto ibStagingBuffer =
-                MakeUnique<GfxBuffer>(gfxContext->GetDevice(), GfxBufferDescription(indices.size() * sizeof(indices[0]), sizeof(indices[0]),
-                                                                                    vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                    EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
-            ibStagingBuffer->SetData(indices.data(), indices.size() * sizeof(indices[0]));
+            // Handle indices with different types.
+            const auto ibBufferElementSize =
+                currentMeshAsset->IndexType == vk::IndexType::eUint32 ? sizeof(indicesUint32[0]) : sizeof(indicesUint16[0]);
+            const auto ibBufferSize = currentMeshAsset->IndexType == vk::IndexType::eUint32 ? indicesUint32.size() * ibBufferElementSize
+                                                                                            : indicesUint16.size() * ibBufferElementSize;
+            auto ibStagingBuffer    = MakeUnique<GfxBuffer>(
+                gfxContext->GetDevice(), GfxBufferDescription(ibBufferSize, ibBufferElementSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                 EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
+            ibStagingBuffer->SetData(currentMeshAsset->IndexType == vk::IndexType::eUint32 ? (const void*)indicesUint32.data()
+                                                                                           : (const void*)indicesUint16.data(),
+                                     ibBufferSize);
 
-            auto& ibBuffer = IndexBuffers.emplace_back(
-                MakeShared<GfxBuffer>(gfxContext->GetDevice(),
-                                      GfxBufferDescription(indices.size() * sizeof(indices[0]), sizeof(indices[0]),
-                                                           vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
-                                                           EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
-            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(indices.size() * sizeof(indices[0])));
+            auto& ibBuffer = IndexBuffers.emplace_back(MakeShared<GfxBuffer>(
+                gfxContext->GetDevice(), GfxBufferDescription(ibBufferSize, ibBufferElementSize, vk::BufferUsageFlagBits::eIndexBuffer,
+                                                              EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
+            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(ibBufferSize));
 
             cmd->end();
             queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));

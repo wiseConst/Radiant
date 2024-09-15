@@ -9,6 +9,8 @@
 namespace Radiant
 {
 
+    static constexpr const char* s_ShaderCacheDir = "ShaderCache/";
+
     namespace SlangUtils
     {
         NODISCARD static vk::ShaderStageFlagBits SlangShaderStageToVulkan(const SlangStage shaderStage) noexcept
@@ -171,8 +173,9 @@ namespace Radiant
                     return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage;
             };
 
-            const u32 elementsNum      = spirvCode->getBufferSize() / sizeof(u32);
-            const auto shaderCacheName = GetStrippedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK)) + ".spv";
+            const u32 elementsNum = spirvCode->getBufferSize() / sizeof(u32);
+            const auto shaderCacheName =
+                std::string(s_ShaderCacheDir) + GetStrippedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK)) + ".spv";
             std::vector<u32> cache(1 + elementsNum);
 
             cache[0] = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
@@ -186,9 +189,8 @@ namespace Radiant
         RDNT_ASSERT(m_Description.Path.ends_with(".slang"), "Shader name doesn't contain <.slang> in the end!");
         RDNT_ASSERT(!m_Description.Path.empty(), "Shader path is invalid!");
 
-        static constexpr const char* s_ShaderCacheDir = "Shaders/";
         if (!std::filesystem::exists(s_ShaderCacheDir))
-            RDNT_ASSERT(std::filesystem::create_directory(s_ShaderCacheDir), "Failed to create shader cache dir!");
+            std::filesystem::create_directory(s_ShaderCacheDir);
 
         static constexpr std::array<vk::ShaderStageFlagBits, 16> shaderStagesVK = {vk::ShaderStageFlagBits::eVertex,
                                                                                    vk::ShaderStageFlagBits::eTessellationControl,
@@ -224,7 +226,8 @@ namespace Radiant
                     return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage + ".spv";
             };
 
-            const auto shaderCacheName = GetCachedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK));
+            const auto shaderCacheName =
+                std::string(s_ShaderCacheDir) + GetCachedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK));
             if (!std::filesystem::exists(shaderCacheName)) continue;
 
             const std::vector<u32> cacheData = CoreUtils::LoadData<u32>(shaderCacheName);

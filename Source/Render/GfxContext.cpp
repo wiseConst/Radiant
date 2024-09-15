@@ -51,10 +51,14 @@ namespace Radiant
                                      const vk::IndexType indexType) noexcept
     {
         RDNT_ASSERT(indexBuffer, "GfxPipelineStateCache: IndexBuffer is invalid!");
-        if (LastBoundIndexBuffer == indexBuffer) return;
+        if (LastBoundIndexBuffer == indexBuffer && LastBoundIndexBufferOffset.has_value() && *LastBoundIndexBufferOffset == offset &&
+            LastBoundIndexType.has_value() && *LastBoundIndexType == indexType)
+            return;
 
         cmd.bindIndexBuffer(*indexBuffer, offset, indexType);
-        LastBoundIndexBuffer = indexBuffer;
+        LastBoundIndexBuffer       = indexBuffer;
+        LastBoundIndexBufferOffset = offset;
+        LastBoundIndexType         = indexType;
     }
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::CullModeFlags cullMode) noexcept
@@ -434,11 +438,12 @@ namespace Radiant
     void GfxContext::InvalidateSwapchain() noexcept
     {
         // Render finished fences also need to be recreated cuz they're stalling the CPU.
-        for (u8 i{}; i < s_BufferedFrameCount; ++i)
-        {
-            m_FrameData[i].RenderFinishedFence =
-                m_Device->GetLogicalDevice()->createFenceUnique(vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
-        }
+        std::ranges::for_each(m_FrameData,
+                              [&](auto& frameData) noexcept
+                              {
+                                  frameData.RenderFinishedFence = m_Device->GetLogicalDevice()->createFenceUnique(
+                                      vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
+                              });
         m_CurrentImageIndex = m_CurrentFrameIndex = 0;
 
         const auto& window = Application::Get().GetMainWindow();

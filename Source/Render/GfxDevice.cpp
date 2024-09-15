@@ -109,7 +109,7 @@ namespace Radiant
                 .setMultiDrawIndirect(vk::True)
                 .setSamplerAnisotropy(vk::True)
                 .setPipelineStatisticsQuery(vk::True)
-                .setGeometryShader(vk::True)
+                // .setGeometryShader(vk::True)
                 // TODO: Integrate AMD Compressonator .setTextureCompressionBC(vk::True)
                 .setShaderStorageImageArrayDynamicIndexing(vk::True)
                 .setShaderSampledImageArrayDynamicIndexing(vk::True);
@@ -368,7 +368,7 @@ namespace Radiant
                                                           .setBindings(bindings)
                                                           .setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool)
                                                           .setPNext(&megaSetLayoutExtendedInfo));
-        SetDebugName("RDNT_BINDLESS_DESCRIPTOR_LAYOUT", (const vk::DescriptorSetLayout&)*m_DescriptorSetLayout);
+        SetDebugName("RDNT_BINDLESS_DESCRIPTOR_LAYOUT", *m_DescriptorSetLayout);
 
         m_PipelineLayout = m_Device->createPipelineLayoutUnique(
             vk::PipelineLayoutCreateInfo()
@@ -377,7 +377,7 @@ namespace Radiant
                                            .setOffset(0)
                                            .setSize(/* guaranteed by the spec min bytes size of maxPushConstantsSize */ 128)
                                            .setStageFlags(vk::ShaderStageFlagBits::eAll)));
-        SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", (const vk::PipelineLayout&)*m_PipelineLayout);
+        SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", *m_PipelineLayout);
 
         constexpr std::array<vk::DescriptorPoolSize, 3> poolSizes{
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES).setType(vk::DescriptorType::eStorageImage),
@@ -393,7 +393,7 @@ namespace Radiant
                                                          .setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind)
                                                          .setPoolSizes(poolSizes));
             const auto descriptorPoolName = "RDNT_BINDLESS_DESCRIPTOR_POOL_FRAME_" + std::to_string(i);
-            SetDebugName(descriptorPoolName.data(), (const vk::DescriptorPool&)*m_BindlessResourcesPerFrame[i].DescriptorPool);
+            SetDebugName(descriptorPoolName.data(), *m_BindlessResourcesPerFrame[i].DescriptorPool);
 
             m_BindlessResourcesPerFrame[i].DescriptorSet =
                 m_Device
@@ -528,6 +528,9 @@ namespace Radiant
     {
         m_Device->waitIdle();
         PollDeletionQueues(true);
+
+        for (auto& [samplerCI, samplerPair] : m_SamplerMap)
+            PopBindlessThing(samplerPair.second, Shaders::s_BINDLESS_SAMPLER_BINDING);
 
         vmaDestroyAllocator(m_Allocator);
         CoreUtils::SaveData("pso_cache.bin", m_Device->getPipelineCacheData(*m_PipelineCache));

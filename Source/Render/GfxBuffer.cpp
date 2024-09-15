@@ -2,6 +2,7 @@
 #include "GfxBuffer.hpp"
 
 #include <Render/GfxContext.hpp>
+#include <Render/GfxDevice.hpp>
 
 namespace Radiant
 {
@@ -25,7 +26,8 @@ namespace Radiant
                                   .setUsage(m_Description.UsageFlags)
                                   .setSize(m_Description.Capacity);
 
-        if (m_Description.bControlledByRenderGraph)
+        if ((m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT) &&
+            !(m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT))
         {
             m_Handle = m_Device->GetLogicalDevice()->createBuffer(bufferCI);
             return;
@@ -51,7 +53,8 @@ namespace Radiant
         }
         m_BDA = std::nullopt;
 
-        if (m_Description.bControlledByRenderGraph)
+        if ((m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT) &&
+            !(m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT))
         {
             m_Device->PushObjectToDelete([movedHandle = std::move(*m_Handle)]() noexcept
                                          { GfxContext::Get().GetDevice()->GetLogicalDevice()->destroyBuffer(movedHandle); });

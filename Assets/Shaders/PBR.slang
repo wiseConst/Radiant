@@ -2,21 +2,33 @@
 
 #include "../../Source/ShaderDefines.h"
 #include "clustered_shading/light_clusters_defines.hpp"
+#include "csm/csm_defines.hpp"
 
 struct FragmentStageInput
 { 
     float4 Color;
     float2 UV;
+    float3 FragPosVS;
     float3 FragPosWS;
     float3 Normal;
     float3 Tangent;
     float3 Bitangent;
 };
 
-struct VertexStageOutput
+struct VSOutput
 {
     FragmentStageInput FSInput : FragmentStageInput;
     float4 sv_position : SV_Position;
+};
+
+struct MainPassShaderData
+{
+    uint32_t SSAOTextureID;
+    uint32_t SSSTextureID;
+    float2 ScaleBias; // For clustered shading, x - scale, y - bias
+    const Shaders::CascadedShadowMapsData *CSMData;
+    uint CSMTextureIDs[SHADOW_MAP_CASCADE_COUNT];
+    float PlaneDistances[SHADOW_MAP_CASCADE_COUNT];
 };
 
 struct PushConstantBlock
@@ -30,22 +42,21 @@ struct PushConstantBlock
     const Shaders::GLTFMaterial *MaterialData;
     const Shaders::LightData *LightData;
     const Shaders::LightClusterList *LightClusterList;
-    uint32_t SSAOTextureID;
-    uint32_t SSSTextureID;
-    float2 ScaleBias; // For clustered shading, x - scale, y - bias
+    const MainPassShaderData *MPSData;
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
 [shader("vertex")]
-VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
+VSOutput vertexMain(uint32_t vertexID: SV_VertexID)
 {
     const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation) + u_PC.translation;
 
-    VertexStageOutput output;
+    VSOutput output;
     output.FSInput.Color = max(Shaders::UnpackUnorm4x8(u_PC.VtxAttributes[vertexID].Color), float4(1.0f));
     output.FSInput.UV = u_PC.VtxAttributes[vertexID].UV;
     output.FSInput.FragPosWS = worldPos;
     output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, float4(worldPos, 1.0f));
+    output.FSInput.FragPosVS = mul(u_PC.CameraData->ViewMatrix, float4(worldPos, 1.0f)).xyz;
 
     const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation);
     output.FSInput.Normal = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
@@ -63,7 +74,7 @@ float3 EvaluateNormalMap(const float3 T, const float3 B, const float3 N, const f
     if (materialData->NormalTextureID != 0)
     {
         const float3 sampledN = (Shaders::Texture_Heap[materialData->NormalTextureID].Sample(uv).xyz * 2.0f - 1.0f) * materialData->NormalScale;
-        const float3x3 TBN = transpose(float3x3(T, B, N)); // NOTE: slang treats matrices as rowXcol, but we target colXrow!
+        const float3x3 TBN = transpose(float3x3(T, B, N)); // NOTE: slang treats matrices(when we construct them in shader) as rowXcol, but we target colXrow!
         return normalize(mul(TBN, sampledN));
     }
     return normalize(N);
@@ -150,8 +161,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     // return float4(globalUV.x, globalUV.y, 0.0, 1.0f);        // Vulkan coordinate system(Y down)
     // return float4(globalUV.x, 1.0f - globalUV.y, 0.0, 1.0f); // OGL coordinate system(Y up)
 
-    const float3 fragPosVS = mul(u_PC.CameraData->ViewMatrix, float4(fsInput.FragPosWS, 1.0f)).xyz;
-    const uint32_t slice = uint32_t(max(log2(-fragPosVS.z) * u_PC.ScaleBias.x + u_PC.ScaleBias.y, 0.0f));
+    const uint32_t slice = uint32_t(max(log2(-fsInput.FragPosVS.z) * u_PC.MPSData.ScaleBias.x + u_PC.MPSData.ScaleBias.y, 0.0f));
 #if VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION
     return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLOR_COUNT] * float4(float3(0.8f), 1.0f);
 #endif
@@ -163,7 +173,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const float4 albedo = fsInput.Color * Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
 
     const float3 emissive = materialData->EmissiveFactor * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-    const float3 ao = Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+    const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
     const float3 ambient = float3(0.03f) * albedo.rgb * ao;
     float3 irradiance = ambient + emissive;
 
@@ -172,19 +182,58 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const float2 metallicRoughness = Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg * float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
     const float3 F0 = lerp(float3(0.04f), albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
 
-    irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, normalize(u_PC.LightData.Sun.Direction), N);
+    const float3 dirL = normalize(u_PC.LightData.Sun.Direction);
+    float shadow = 0.0f;
+    if (u_PC.LightData.Sun.bCastShadows) {
+        const float depth = abs(fsInput.FragPosVS.z);
+        int layer = SHADOW_MAP_CASCADE_COUNT - 1;
+        for (int i = 0; i < SHADOW_MAP_CASCADE_COUNT; ++i)
+        {
+            if (depth < u_PC.MPSData.PlaneDistances[i])
+            {
+                layer = i;
+                break;
+            }
+        }
+        // if (layer == 0)      return Shaders::s_RAINBOW_COLORS[0];
+        // else if (layer == 1) return Shaders::s_RAINBOW_COLORS[1];
+        // else if (layer == 2) return Shaders::s_RAINBOW_COLORS[2];
+        // else if (layer == 3) return Shaders::s_RAINBOW_COLORS[3];
+        // return float4(Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[layer]].Sample(globalUV).rrr, 1.0f);
 
-    const uint froxelIndex = GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
+        const float4 fragPosLS = mul(u_PC.MPSData.CSMData.ViewProjectionMatrix[layer], float4(fsInput.FragPosWS, 1.0f));
+        float3 projCoords = fragPosLS.xyz / fragPosLS.w;
+        projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+        if (Shaders::is_saturated(projCoords)) {
+            const float bias = max(0.005f, 0.05f * (1.0f - dot(N, dirL))) * 2.0f / u_PC.MPSData.PlaneDistances[layer];
+            float currentDepth = projCoords.z;  // get depth of current fragment from light's perspective
+            #define PCF_SHADOWS 0
+    #if PCF_SHADOWS
+            static constexpr float2 texelSize = 1.0f / SHADOW_MAP_CASCADE_SIZE;
+            for (int x = -1; x <= 1; ++x)
+            {
+                for (int y = -1; y <= 1; ++y)
+                {
+                    const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[layer]].Sample(projCoords.xy + float2(x,y) * texelSize).r;
+                    shadow += (currentDepth + bias) > sampledDepth ? 1.0 : 0.0;
+                }
+            }
+            shadow /= 9.0f;
+    #else
+            const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[layer]].Sample(projCoords.xy).r;
+            shadow += (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
+            #endif
+        }
+    }
+
+    irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ (1.0f - shadow) * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, dirL, N);
+
+    const uint froxelIndex = GetLightClusterIndex( u_PC.CameraData.FullResolution, uint3(LIGHT_CLUSTERS_SUBDIVISION_X, LIGHT_CLUSTERS_SUBDIVISION_Y, LIGHT_CLUSTERS_SUBDIVISION_Z), Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
     ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedo.rgb, metallicRoughness, V, N);
 
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
     uint heatmapPointLightCount = 0;
-
-#define COMPUTE_POINT_LIGHTS_ALONG_ALL_DEPTH_SLICES 0
-#if COMPUTE_POINT_LIGHTS_ALONG_ALL_DEPTH_SLICES
-    for (uint sliceIndex = 0; sliceIndex < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++sliceIndex)
-        heatmapPointLightCount += u_PC.LightClusterList[GetLightClusterIndex(u_PC.CameraData.FullResolution, Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS, sliceIndex, fragCoord.xy)].PointLightCount;
-#else
     // Read range of words of visibility bits
     for (uint bitmaskIndex = 0; bitmaskIndex < LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE; ++bitmaskIndex)
     {
@@ -196,8 +245,6 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
             ++heatmapPointLightCount;
         }
     }
-#endif
-
     return lerp(Heatmap(heatmapPointLightCount), float4(irradiance, albedo.a), 0.3f);
 #endif
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Render/CoreDefines.hpp>
-#include <Render/GfxDevice.hpp>
+#include <vulkan/vulkan.hpp>
 
 #define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
@@ -12,9 +12,8 @@ namespace Radiant
     struct GfxBufferDescription
     {
         GfxBufferDescription(const u64 capacity, const u64 elementSize, const vk::BufferUsageFlags usageFlags,
-                             const ExtraBufferFlags extraFlags, const bool bControlledByRenderGraph = false) noexcept
-            : Capacity(capacity), ElementSize(elementSize), UsageFlags(usageFlags), ExtraFlags(extraFlags),
-              bControlledByRenderGraph(bControlledByRenderGraph)
+                             const ExtraBufferFlags extraFlags, const ResourceCreateFlags createFlags = {}) noexcept
+            : Capacity(capacity), ElementSize(elementSize), UsageFlags(usageFlags), ExtraFlags(extraFlags), CreateFlags(createFlags)
         {
             if (ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT)
                 UsageFlags |= vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
@@ -29,16 +28,16 @@ namespace Radiant
         u64 ElementSize{};
         vk::BufferUsageFlags UsageFlags{};
         ExtraBufferFlags ExtraFlags{};
-        bool bControlledByRenderGraph{false};
+        ResourceCreateFlags CreateFlags{};
 
-        // NOTE: We don't care about capacity cuz we can resize wherever we want.
-        bool operator!=(const GfxBufferDescription& other) const noexcept
+        // NOTE: We don't care about capacity cuz we can resize whenever we want.
+        FORCEINLINE constexpr bool operator!=(const GfxBufferDescription& other) const noexcept
         {
-            return std::tie(UsageFlags, ExtraFlags, bControlledByRenderGraph) !=
-                   std::tie(other.UsageFlags, other.ExtraFlags, other.bControlledByRenderGraph);
+            return std::tie(UsageFlags, ExtraFlags, CreateFlags) != std::tie(other.UsageFlags, other.ExtraFlags, other.CreateFlags);
         }
     };
 
+    class GfxDevice;
     class GfxBuffer final : private Uncopyable, private Unmovable
     {
       public:

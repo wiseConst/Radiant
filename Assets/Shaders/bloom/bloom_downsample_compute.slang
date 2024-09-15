@@ -20,7 +20,8 @@ struct PushConstantBlock
 [[vk::push_constant]] PushConstantBlock u_PC;
 
 #define BLOOM_DOWNSAMPLE_WG_SIZE_X 8
-#define BLOOM_DOWNSAMPLE_WG_SIZE_Y 4
+#define BLOOM_DOWNSAMPLE_WG_SIZE_Y 8
+#define BLOOM_DOWNSAMPLE_RADIUS 3
 
 float RGBToLuminance(const float3 sRGBColor)
 {
@@ -34,10 +35,14 @@ float KarisAverage(const float3 color)
     return 1.0f / (1.0f + luma);
 }
 
+//groupshared float3 gs_texture_cache[(BLOOM_DOWNSAMPLE_WG_SIZE_X + 2) * (BLOOM_DOWNSAMPLE_WG_SIZE_Y + 2)];
+
 [numthreads(BLOOM_DOWNSAMPLE_WG_SIZE_X, BLOOM_DOWNSAMPLE_WG_SIZE_Y, 1)]
 [shader("compute")]
-void computeMain(uint3 DTid : SV_DispatchThreadID)
+void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid: SV_GroupID, uint d : SV_GroupThreadID)
 { 
+   // for(uint i = )
+
     // Take 13 samples around current texel:
     // a - b - c
     // - j - k -

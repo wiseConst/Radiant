@@ -366,8 +366,10 @@ namespace Radiant
                         outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                         dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                     }
-
-                    //   dstAccessMask |= vk::AccessFlagBits2::eShaderStorageRead;
+                    else
+                    {
+                        dstAccessMask |= vk::AccessFlagBits2::eShaderStorageRead;
+                    }
                 }
 
                 if (nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
@@ -626,7 +628,9 @@ namespace Radiant
     {
         for (auto& [textureName, textureDesc] : m_TextureCreates)
         {
-            textureDesc.bControlledByRenderGraph    = s_bUseResourceMemoryAliasing;
+            textureDesc.CreateFlags |= s_bUseResourceMemoryAliasing
+                                           ? EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT
+                                           : EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
             const auto resourceID                   = GetResourceID(textureName);
             const auto resourceHandle               = m_ResourcePool->CreateTexture(textureDesc, textureName, resourceID);
             m_ResourceIDToTextureHandle[resourceID] = resourceHandle;
@@ -643,7 +647,9 @@ namespace Radiant
 
         for (auto& [bufferName, bufferDesc] : m_BufferCreates)
         {
-            bufferDesc.bControlledByRenderGraph    = s_bUseResourceMemoryAliasing;
+            bufferDesc.CreateFlags |= s_bUseResourceMemoryAliasing
+                                          ? EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT
+                                          : EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
             const auto resourceID                  = GetResourceID(bufferName);
             const auto resourceHandle              = m_ResourcePool->CreateBuffer(bufferDesc, bufferName, resourceID);
             m_ResourceIDToBufferHandle[resourceID] = resourceHandle;

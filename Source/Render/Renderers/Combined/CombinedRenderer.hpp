@@ -18,9 +18,9 @@ namespace Radiant
 
       private:
         Unique<GfxPipeline> m_LightClustersBuildPipeline{nullptr};
+        Unique<GfxPipeline> m_LightClustersDetectActivePipeline{nullptr};
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
 
-        Unique<GfxPipeline> m_CSMPipeline{nullptr};
         Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
         Unique<GfxPipeline> m_PBRPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};

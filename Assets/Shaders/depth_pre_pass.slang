@@ -1,28 +1,25 @@
-// DepthPrePass.slang
+// depth_pre_pass.slang
 
-#include "../../Source/ShaderDefines.h"
+#include <../../Source/ShaderDefines.h>
 
 struct PushConstantBlock
 {
     float3 scale;
     float3 translation; 
     float4 orientation;
-    const Shaders::CameraData *CameraData;
+    float4x4 ViewProjectionMatrix;
     const VertexPosition *VtxPositions;
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
-struct VertexStageOutput
+struct VSOutput
 {
     float4 sv_position : SV_Position;
 };
 
 [shader("vertex")]
-VertexStageOutput vertexMain(uint32_t vertexID: SV_VertexID)
+VSOutput vertexMain(uint32_t vertexID: SV_VertexID)
 {
     const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation) + u_PC.translation;
-    
-    VertexStageOutput output;
-    output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, float4(worldPos, 1.0f));
-    return output;
+    return VSOutput(mul(u_PC.ViewProjectionMatrix, float4(worldPos, 1.0f)));
 }

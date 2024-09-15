@@ -1,11 +1,10 @@
 #pragma once
 
-#include <Core/Core.hpp>
+#include <Render/CoreDefines.hpp>
+#include <vulkan/vulkan.hpp>
 
 #define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
-
-#include <vulkan/vulkan.hpp>
 
 namespace Radiant
 {
@@ -29,15 +28,15 @@ namespace Radiant
         GfxTextureDescription(const vk::ImageType type, const glm::uvec3& dimensions, const vk::Format format,
                               const vk::ImageUsageFlags usageFlags,
                               const std::optional<vk::SamplerCreateInfo> samplerCreateInfo = std::nullopt, const u32 layerCount = 1,
-                              const vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1, const bool bExposeMips = false,
-                              const bool bGenerateMips = false, const bool bControlledByRenderGraph = false) noexcept
+                              const vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1,
+                              const ResourceCreateFlags createFlags = {}) noexcept
             : Type(type), Dimensions(dimensions), Format(format), UsageFlags(usageFlags), SamplerCreateInfo(samplerCreateInfo),
-              LayerCount(layerCount), Samples(samples), bExposeMips(bExposeMips), bGenerateMips(bGenerateMips),
-              bControlledByRenderGraph(bControlledByRenderGraph)
+              LayerCount(layerCount), Samples(samples), CreateFlags(createFlags)
         {
             UsageFlags |= vk::ImageUsageFlagBits::eSampled;
 
-            if (bGenerateMips) UsageFlags |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+            if (CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT)
+                UsageFlags |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
         }
         constexpr GfxTextureDescription() noexcept =
             default;  // NOTE: NEVER USE IT, IT'S NOT DELETED ONLY FOR COMPATIBILITY WITH maps/other containers!
@@ -50,21 +49,17 @@ namespace Radiant
         std::optional<vk::SamplerCreateInfo> SamplerCreateInfo{std::nullopt};
         u32 LayerCount{1};
         vk::SampleCountFlagBits Samples{vk::SampleCountFlagBits::e1};
-        bool bExposeMips{false};               // Create MipChain of image views?
-        bool bGenerateMips{false};             // NOTE: Used only for mesh textures, doesn't create MipChain of image views!
-        bool bControlledByRenderGraph{false};  // NOTE: Means resource can be only created but no be bind to any memory.
+        ResourceCreateFlags CreateFlags{};
 
         // NOTE: We don't care about dimensions cuz we can resize wherever we want.
-        bool operator!=(const GfxTextureDescription& other) const noexcept
+        FORCEINLINE constexpr bool operator!=(const GfxTextureDescription& other) const noexcept
         {
-            return std::tie(Type, bExposeMips, bGenerateMips, LayerCount, Format, UsageFlags, SamplerCreateInfo, Samples,
-                            bControlledByRenderGraph) != std::tie(other.Type, other.bExposeMips, other.bGenerateMips, other.LayerCount,
-                                                                  other.Format, other.UsageFlags, other.SamplerCreateInfo, other.Samples,
-                                                                  other.bControlledByRenderGraph);
+            return std::tie(Type, CreateFlags, LayerCount, Format, UsageFlags, SamplerCreateInfo, Samples) !=
+                   std::tie(other.Type, other.CreateFlags, other.LayerCount, other.Format, other.UsageFlags, other.SamplerCreateInfo,
+                            other.Samples);
         }
     };
 
-    // TODO: Cubemaps
     class GfxDevice;
     class GfxTexture final : private Uncopyable, private Unmovable
     {
@@ -72,9 +67,10 @@ namespace Radiant
         GfxTexture(const Unique<GfxDevice>& device, const GfxTextureDescription& textureDesc) noexcept
             : m_Device(device), m_Description(textureDesc)
         {
-            m_UUID = ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture));
-            RDNT_ASSERT((m_Description.bExposeMips && m_Description.bGenerateMips) == false,
-                        "GfxTexture can't have both bExposeMips && bGenerateMips specified!");
+            m_UUID                   = ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture));
+            const bool bExposeMips   = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT;
+            const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT;
+            RDNT_ASSERT((bExposeMips && bGenerateMips) == false, "GfxTexture can't have both bExposeMips && bGenerateMips specified!");
             Invalidate();
         }
         ~GfxTexture() noexcept { Destroy(); }
@@ -135,8 +131,8 @@ namespace Radiant
         }
 
       private:
-        u64 m_UUID{0};
         const Unique<GfxDevice>& m_Device;
+        u64 m_UUID{0};
         GfxTextureDescription m_Description{};
         std::optional<vk::Image> m_Image{std::nullopt};
 

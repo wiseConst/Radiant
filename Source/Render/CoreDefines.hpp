@@ -31,6 +31,17 @@ namespace Radiant
                                               EXTRA_BUFFER_FLAG_HOST_BIT,  // NOTE: Implies memory that can be used by both CPU and GPU!
     };
 
+    using ResourceCreateFlags = u8;
+    enum EResourceCreateBits : ResourceCreateFlags
+    {
+        RESOURCE_CREATE_EXPOSE_MIPS_BIT   = BIT(0),  // Create MipChain of image views?
+        RESOURCE_CREATE_GENERATE_MIPS_BIT = BIT(1),  // Used only for mesh textures, doesn't create MipChain of image views!
+        RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT = BIT(2),  // Means resource can be only created but no be bind to any memory.
+        RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT =
+            BIT(3),  // Create resource & bind to memory, this flag is needed cuz RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT being
+                     // set by render graph, so we can disable memory aliasing
+    };
+
     using ResourceStateFlags = u32;
     enum EResourceStateBits : ResourceStateFlags
     {

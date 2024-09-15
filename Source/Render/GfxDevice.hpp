@@ -45,6 +45,13 @@ template <> struct ankerl::unordered_dense::hash<vk::SamplerCreateInfo>
 namespace Radiant
 {
 
+    struct GfxBindlessStatistics
+    {
+        u64 ImagesUsed{0};
+        u64 TexturesUsed{0};
+        u64 SamplersUsed{0};
+    };
+
     class GfxDevice final : private Uncopyable, private Unmovable
     {
       public:
@@ -122,26 +129,31 @@ namespace Radiant
         void* Map(VmaAllocation& allocation) const noexcept;
         void Unmap(VmaAllocation& allocation) const noexcept;
 
-        NODISCARD const vk::Sampler& GetSampler(const vk::SamplerCreateInfo& samplerCI) const noexcept
+        NODISCARD std::pair<const vk::Sampler&, u32> GetSampler(const vk::SamplerCreateInfo& samplerCI) noexcept
         {
             std::scoped_lock lock(m_Mtx);
-            if (!m_SamplerMap.contains(samplerCI)) m_SamplerMap[samplerCI] = m_Device->createSamplerUnique(samplerCI);
-            return *m_SamplerMap[samplerCI];
+            if (!m_SamplerMap.contains(samplerCI))
+            {
+                m_SamplerMap[samplerCI].first = m_Device->createSamplerUnique(samplerCI);
+                PushBindlessThing(vk::DescriptorImageInfo().setSampler(*m_SamplerMap[samplerCI].first), m_SamplerMap[samplerCI].second,
+                                  Shaders::s_BINDLESS_SAMPLER_BINDING);
+            }
+            return {*m_SamplerMap[samplerCI].first, *m_SamplerMap[samplerCI].second};
         }
 
-        NODISCARD const vk::Sampler& GetDefaultSampler() const noexcept
+        NODISCARD std::pair<const vk::Sampler&, u32> GetDefaultSampler() noexcept
         {
-            const auto defaultSamplerCI = vk::SamplerCreateInfo()
-                                              .setUnnormalizedCoordinates(vk::False)
-                                              .setAddressModeU(vk::SamplerAddressMode::eRepeat)
-                                              .setAddressModeV(vk::SamplerAddressMode::eRepeat)
-                                              .setAddressModeW(vk::SamplerAddressMode::eRepeat)
-                                              .setMagFilter(vk::Filter::eLinear)
-                                              .setMinFilter(vk::Filter::eLinear)
-                                              .setMipmapMode(vk::SamplerMipmapMode::eLinear)
-                                              .setMinLod(0.0f)
-                                              .setMaxLod(vk::LodClampNone)
-                                              .setBorderColor(vk::BorderColor::eIntOpaqueBlack);
+            constexpr auto defaultSamplerCI = vk::SamplerCreateInfo()
+                                                  .setUnnormalizedCoordinates(vk::False)
+                                                  .setAddressModeU(vk::SamplerAddressMode::eRepeat)
+                                                  .setAddressModeV(vk::SamplerAddressMode::eRepeat)
+                                                  .setAddressModeW(vk::SamplerAddressMode::eRepeat)
+                                                  .setMagFilter(vk::Filter::eLinear)
+                                                  .setMinFilter(vk::Filter::eLinear)
+                                                  .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+                                                  .setMinLod(0.0f)
+                                                  .setMaxLod(vk::LodClampNone)
+                                                  .setBorderColor(vk::BorderColor::eIntOpaqueBlack);
             return GetSampler(defaultSamplerCI);
         }
 
@@ -150,7 +162,7 @@ namespace Radiant
 
         void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
-            std::scoped_lock lock(m_Mtx);
+            std::scoped_lock lock(m_BindlessThingsMtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
                             binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
                         "Unknown binding!");
@@ -183,7 +195,7 @@ namespace Radiant
 
         void PopBindlessThing(std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
-            std::scoped_lock lock(m_Mtx);
+            std::scoped_lock lock(m_BindlessThingsMtx);
             RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
                             binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
                         "Unknown binding!");
@@ -197,6 +209,13 @@ namespace Radiant
             return m_BindlessResourcesPerFrame[m_CurrentFrameNumber % s_BufferedFrameCount];
         }
 
+        NODISCARD auto GetBindlessStatistics() const noexcept
+        {
+            return GfxBindlessStatistics{m_BindlessThingsIDs[Shaders::s_BINDLESS_IMAGE_BINDING].GetPresentObjectsSize(),
+                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_TEXTURE_BINDING].GetPresentObjectsSize(),
+                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLER_BINDING].GetPresentObjectsSize()};
+        }
+
       private:
         mutable std::mutex m_Mtx{};
         vk::UniqueDevice m_Device{};
@@ -206,6 +225,7 @@ namespace Radiant
         u64 m_CurrentFrameNumber{0};
 
         // Bindless resources part1
+        mutable std::mutex m_BindlessThingsMtx{};
         struct BindlessResources
         {
             vk::UniqueDescriptorPool DescriptorPool{};
@@ -221,7 +241,7 @@ namespace Radiant
         std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
 
         vk::UniquePipelineCache m_PipelineCache{};
-        mutable UnorderedMap<vk::SamplerCreateInfo, vk::UniqueSampler> m_SamplerMap{};
+        mutable UnorderedMap<vk::SamplerCreateInfo, std::pair<vk::UniqueSampler, std::optional<u32>>> m_SamplerMap{};
 
         struct Queue
         {

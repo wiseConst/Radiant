@@ -13,11 +13,11 @@ namespace Radiant
     namespace Shaders
     {
 
-#define SHADOW_MAP_DIMENSIONS 2048
+#define SHADOW_MAP_CASCADE_SIZE 1024
 #define SHADOW_MAP_CASCADE_COUNT 4
-        struct CSMCascadeData
+        struct CascadedShadowMapsData
         {
-            float4x4 ViewProjectionMatrix;
+            float4x4 ViewProjectionMatrix[SHADOW_MAP_CASCADE_COUNT];
         };
 
     }  // namespace Shaders

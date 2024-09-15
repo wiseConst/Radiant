@@ -42,6 +42,8 @@ namespace Radiant
       private:
         GfxPipeline* LastBoundPipeline{nullptr};
         GfxBuffer* LastBoundIndexBuffer{nullptr};
+        std::optional<vk::DeviceSize> LastBoundIndexBufferOffset{std::nullopt};
+        std::optional<vk::IndexType> LastBoundIndexType{std::nullopt};
 
         std::optional<vk::CullModeFlags> CullMode{std::nullopt};
         std::optional<vk::FrontFace> FrontFace{std::nullopt};

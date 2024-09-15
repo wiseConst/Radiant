@@ -82,6 +82,7 @@ namespace Radiant
             return m_InternalData;
         }
 
+        NODISCARD FORCEINLINE auto GetZoom() const noexcept { return m_Zoom; }
         NODISCARD FORCEINLINE glm::mat4 GetViewProjectionMatrix() const noexcept { return m_ProjectionMatrix * m_ViewMatrix; }
 
       private:

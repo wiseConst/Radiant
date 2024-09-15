@@ -13,6 +13,8 @@ namespace Radiant
     {
         const std::string LightBuffer{"Resource_Light_Buffer"};
         const std::string CameraBuffer{"Resource_Camera_Buffer"};
+        const std::string CSMDataBuffer{"Resource_CSMDataBuffer"};
+        const std::string MainPassShaderDataBuffer{"Resource_MainPassShaderDataBuffer"};
 
         const std::string GBufferDepth{"Resource_DepthBuffer"};
         const std::string GBufferAlbedo{"Resource_LBuffer"};
@@ -23,11 +25,25 @@ namespace Radiant
         const std::string SSAOTexture{"Resource_SSAO"};
         const std::string SSAOTextureBlurred{"Resource_SSAO_Blurred"};
 
-        const std::string LightClusterBuffer{"Resource_Light_Cluster_Buffer"};  // Light cluster buffer after build stage
+        const std::string LightClusterDetectActiveBuffer{
+            "Resource_Light_Cluster_Detect_Active_Buffer"};                     // Light cluster buffer after build stage
+        const std::string LightClusterBuffer{"Resource_Light_Cluster_Buffer"};  // Light cluster buffer after detect active stage
         const std::string LightClusterListBuffer{
             "Resource_Light_Cluster_List_Buffer"};  // Light cluster list filled with light indices after cluster assignment stage
 
     }  // namespace ResourceNames
+
+    static bool s_bComputeSSAO{false};
+    static bool s_bUpdateLights{true};
+    static bool s_bBloomComputeBased{false};
+
+    static f32 s_MeshScale = 0.01f;
+
+    static bool s_bComputeTightFrustums{false};
+    static bool s_bKeepCascadeConstantSize{false};
+    static bool s_bKeepCascadeSquared{false};
+    static bool s_bRoundCascadeToPixelSize{false};
+    static f32 s_CascadeSplitDelta{0.910f};
 
     CombinedRenderer::CombinedRenderer() noexcept
     {
@@ -35,188 +51,226 @@ namespace Radiant
                                           1000.0f, 0.0001f);
         m_Scene      = MakeUnique<Scene>("CombinedRendererTest");
 
-        LOG_INFO("Light clusters subdivision Z slices: {}", Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
-        for (u32 slice{}; slice < Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z; ++slice)
+        LOG_INFO("Light clusters subdivision Z slices: {}", LIGHT_CLUSTERS_SUBDIVISION_Z);
+        for (u32 slice{}; slice < LIGHT_CLUSTERS_SUBDIVISION_Z; ++slice)
         {
-            const auto sd = m_MainCamera->GetShaderData();
-            const auto ZSliceNear =
-                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)slice / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
+            const auto sd         = m_MainCamera->GetShaderData();
+            const auto ZSliceNear = sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)slice / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
             const auto ZSliceFar =
-                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)(slice + 1) / (f32)Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z);
+                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)(slice + 1) / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
 
             LOG_TRACE("Slice: {}, Froxel dimensions: [{:.4f}, {:.4f}].", slice, ZSliceNear, ZSliceFar);
         }
 
-        {
-            auto lightClustersBuildShader = MakeShared<GfxShader>(
-                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/clustered_shading/light_clusters_build.slang"});
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "LightClustersBuild", .PipelineOptions = GfxComputePipelineOptions{}, .Shader = lightClustersBuildShader};
-            m_LightClustersBuildPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        std::vector<std::future<void>> pipelinesToCreate{};
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "LightClustersBuild",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(
+                        m_GfxContext->GetDevice(),
+                        GfxShaderDescription{.Path = "../Assets/Shaders/clustered_shading/light_clusters_build.slang"})};
+                m_LightClustersBuildPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto lightClustersAssignmentShader =
-                MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                      GfxShaderDescription{.Path = "../Assets/Shaders/clustered_shading/light_clusters_assignment.slang"});
-            const GfxPipelineDescription pipelineDesc = {.DebugName       = "LightClustersAssignment",
-                                                         .PipelineOptions = GfxComputePipelineOptions{},
-                                                         .Shader          = lightClustersAssignmentShader};
-            m_LightClustersAssignmentPipeline         = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "LightClustersDetectActive",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(
+                        m_GfxContext->GetDevice(),
+                        GfxShaderDescription{.Path = "../Assets/Shaders/clustered_shading/light_clusters_detect_active.slang"})};
+                m_LightClustersDetectActivePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto csmShader =
-                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/csm/csm.slang"});
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eD24UnormS8Uint},
-                                                         .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
-                                                         .CullMode{vk::CullModeFlagBits::eBack},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill},
-                                                         .bDepthTest{true},
-                                                         .bDepthWrite{true},
-                                                         .DepthCompareOp{vk::CompareOp::eLessOrEqual}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "CascadedShadowMaps", .PipelineOptions = gpo, .Shader = csmShader};
-            m_CSMPipeline                             = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "LightClustersAssignment",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(
+                        m_GfxContext->GetDevice(),
+                        GfxShaderDescription{.Path = "../Assets/Shaders/clustered_shading/light_clusters_assignment.slang"})};
+                m_LightClustersAssignmentPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto depthPrePassShader =
-                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/DepthPrePass.slang"});
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eD32Sfloat},
-                                                         .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
-                                                         .CullMode{vk::CullModeFlagBits::eBack},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill},
-                                                         .bDepthTest{true},
-                                                         .bDepthWrite{true},
-                                                         .DepthCompareOp{vk::CompareOp::eGreaterOrEqual}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "DepthPrePass", .PipelineOptions = gpo, .Shader = depthPrePassShader};
-            m_DepthPrePassPipeline                    = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto depthPrePassShader                   = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                                GfxShaderDescription{.Path = "../Assets/Shaders/depth_pre_pass.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eD32Sfloat},
+                                                             .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
+                                                             .CullMode{vk::CullModeFlagBits::eBack},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill},
+                                                             .bDepthTest{true},
+                                                             .bDepthWrite{true},
+                                                             .DepthCompareOp{vk::CompareOp::eGreaterOrEqual}};
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "depth_pre_pass", .PipelineOptions = gpo, .Shader = depthPrePassShader};
+                m_DepthPrePassPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            // NOTE: To not create many pipelines for objects, I switch depth compare op based on AlphaMode of object.
-            auto pbrShader = MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/PBR.slang"});
-            const GfxGraphicsPipelineOptions gpo = {
-                .RenderingFormats{vk::Format::eR16G16B16A16Sfloat, vk::Format::eD32Sfloat},
-                .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology, vk::DynamicState::eDepthCompareOp},
-                .CullMode{vk::CullModeFlagBits::eBack},
-                .FrontFace{vk::FrontFace::eCounterClockwise},
-                .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                .PolygonMode{vk::PolygonMode::eFill},
-                .bDepthTest{true},
-                .bDepthWrite{false},
-                .DepthCompareOp{vk::CompareOp::eEqual},
-                .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ALPHA}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "PBR", .PipelineOptions = gpo, .Shader = pbrShader};
-            m_PBRPipeline                             = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                // NOTE: To not create many pipelines for objects, I switch depth compare op based on AlphaMode of object.
+                auto pbrShader =
+                    MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/PBR.slang"});
+                const GfxGraphicsPipelineOptions gpo = {
+                    .RenderingFormats{vk::Format::eR16G16B16A16Sfloat, vk::Format::eD32Sfloat},
+                    .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology, vk::DynamicState::eDepthCompareOp},
+                    .CullMode{vk::CullModeFlagBits::eBack},
+                    .FrontFace{vk::FrontFace::eCounterClockwise},
+                    .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                    .PolygonMode{vk::PolygonMode::eFill},
+                    .bDepthTest{true},
+                    .bDepthWrite{false},
+                    .DepthCompareOp{vk::CompareOp::eEqual},
+                    .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ALPHA}};
+                const GfxPipelineDescription pipelineDesc = {.DebugName = "PBR", .PipelineOptions = gpo, .Shader = pbrShader};
+                m_PBRPipeline                             = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto finalPassShader =
-                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/final.slang"});
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eA2B10G10R10UnormPack32},
-                                                         .CullMode{vk::CullModeFlagBits::eNone},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "FinalPass", .PipelineOptions = gpo, .Shader = finalPassShader};
-            m_FinalPassPipeline                       = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto finalPassShader =
+                    MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/final.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eA2B10G10R10UnormPack32},
+                                                             .CullMode{vk::CullModeFlagBits::eNone},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill}};
+                const GfxPipelineDescription pipelineDesc = {.DebugName = "FinalPass", .PipelineOptions = gpo, .Shader = finalPassShader};
+                m_FinalPassPipeline                       = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto sssShader = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                   GfxShaderDescription{.Path = "../Assets/Shaders/sss/screen_space_shadows.slang"});
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "SSS",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/sss/screen_space_shadows.slang"})};
+                m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "SSS", .PipelineOptions = GfxComputePipelineOptions{}, .Shader = sssShader};
-            m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto ssaoShader =
+                    MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/ssao/ssao.slang"});
 
-        {
-            auto ssaoShader =
-                MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/ssao/ssao.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR8Unorm},
+                                                             .CullMode{vk::CullModeFlagBits::eNone},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill}};
+                const GfxPipelineDescription pipelineDesc = {.DebugName = "SSAO", .PipelineOptions = gpo, .Shader = ssaoShader};
+                m_SSAOPipeline                            = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR8Unorm},
-                                                         .CullMode{vk::CullModeFlagBits::eNone},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "SSAO", .PipelineOptions = gpo, .Shader = ssaoShader};
-            m_SSAOPipeline                            = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto ssaoBoxBlurShader = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                               GfxShaderDescription{.Path = "../Assets/Shaders/ssao/ssao_box_blur.slang"});
 
-        {
-            auto ssaoBoxBlurShader = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                           GfxShaderDescription{.Path = "../Assets/Shaders/ssao/ssao_box_blur.slang"});
-
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR8Unorm},
-                                                         .CullMode{vk::CullModeFlagBits::eNone},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill}};
-            const GfxPipelineDescription pipelineDesc = {.DebugName = "SSAOBoxBlur", .PipelineOptions = gpo, .Shader = ssaoBoxBlurShader};
-            m_SSAOBoxBlurPipeline                     = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR8Unorm},
+                                                             .CullMode{vk::CullModeFlagBits::eNone},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill}};
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "SSAOBoxBlur", .PipelineOptions = gpo, .Shader = ssaoBoxBlurShader};
+                m_SSAOBoxBlurPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
         // Default bloom
-        {
-            auto bloomDownsampleShader = MakeShared<GfxShader>(
-                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/pbr_bloom_downsample.slang"});
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
-                                                         .CullMode{vk::CullModeFlagBits::eNone},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill}};
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "BloomDownsample", .PipelineOptions = gpo, .Shader = bloomDownsampleShader};
-            m_BloomDownsamplePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto bloomDownsampleShader = MakeShared<GfxShader>(
+                    m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/pbr_bloom_downsample.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
+                                                             .CullMode{vk::CullModeFlagBits::eNone},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill}};
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "BloomDownsample", .PipelineOptions = gpo, .Shader = bloomDownsampleShader};
+                m_BloomDownsamplePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto bloomUpsampleBlurShader = MakeShared<GfxShader>(
-                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/pbr_bloom_upsample_blur.slang"});
-            const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
-                                                         .CullMode{vk::CullModeFlagBits::eNone},
-                                                         .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                         .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                         .PolygonMode{vk::PolygonMode::eFill},
-                                                         .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ADDITIVE}};
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "BloomUpsampleBlur", .PipelineOptions = gpo, .Shader = bloomUpsampleBlurShader};
-            m_BloomUpsampleBlurPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto bloomUpsampleBlurShader = MakeShared<GfxShader>(
+                    m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/pbr_bloom_upsample_blur.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eB10G11R11UfloatPack32},
+                                                             .CullMode{vk::CullModeFlagBits::eNone},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill},
+                                                             .BlendMode{GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ADDITIVE}};
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "BloomUpsampleBlur", .PipelineOptions = gpo, .Shader = bloomUpsampleBlurShader};
+                m_BloomUpsampleBlurPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
         // Compute optimized bloom
-        {
-            auto bloomDownsampleShader = MakeShared<GfxShader>(
-                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/bloom_downsample_compute.slang"});
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "BloomDownsample", .PipelineOptions = GfxComputePipelineOptions{}, .Shader = bloomDownsampleShader};
-            m_BloomDownsamplePipelineOptimized = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "BloomDownsample",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(
+                        m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/bloom_downsample_compute.slang"})};
+                m_BloomDownsamplePipelineOptimized = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        {
-            auto bloomUpsampleBlurShader = MakeShared<GfxShader>(
-                m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/bloom/bloom_upsample_blur_compute.slang"});
-            const GfxPipelineDescription pipelineDesc = {
-                .DebugName = "BloomUpsampleBlur", .PipelineOptions = GfxComputePipelineOptions{}, .Shader = bloomUpsampleBlurShader};
-            m_BloomUpsampleBlurPipelineOptimized = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-        }
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "BloomUpsampleBlur",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader =
+                        MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                              GfxShaderDescription{.Path = "../Assets/Shaders/bloom/bloom_upsample_blur_compute.slang"})};
+                m_BloomUpsampleBlurPipelineOptimized = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
 
-        m_LightData.Sun.Direction   = {0.0f, 0.8f, 0.5f};
-        m_LightData.Sun.Intensity   = 1.0f;
-        m_LightData.Sun.Color       = Shaders::PackUnorm4x8(glm::vec4(1.0f));
-        m_LightData.PointLightCount = MAX_POINT_LIGHT_COUNT;
-        constexpr f32 radius        = 2.5f;
+        const auto pipelineCreateBegin = Timer::Now();
+        for (auto& pipeline : pipelinesToCreate)
+        {
+            pipeline.get();
+        }
+        LOG_INFO("Time taken to create {} pipelines: {} seconds.", pipelinesToCreate.size(),
+                 Timer::GetElapsedSecondsFromNow(pipelineCreateBegin));
+
+        m_LightData.Sun.bCastShadows = 1;
+        m_LightData.Sun.Direction    = {0.0f, 0.8f, 0.5f};
+        m_LightData.Sun.Intensity    = 1.0f;
+        m_LightData.Sun.Color        = Shaders::PackUnorm4x8(glm::vec4(1.0f));
+        m_LightData.PointLightCount  = MAX_POINT_LIGHT_COUNT;
+        constexpr f32 radius         = 2.5f;
+        constexpr f32 intensity      = 1.2f;
         for (auto& pl : m_LightData.PointLights)
         {
             pl.sphere.Origin = glm::linearRand(s_MinPointLightPos, s_MaxPointLightPos);
-            pl.sphere.Radius = radius;
-            pl.Intensity     = 1.1f;
+            pl.sphere.Radius = glm::linearRand(0.1f, radius);
+            pl.Intensity     = glm::linearRand(0.8f, intensity);
             pl.Color         = Shaders::PackUnorm4x8(glm::vec4(glm::linearRand(glm::vec3(0.001f), glm::vec3(1.0f)), 1.0f));
         }
 
@@ -235,9 +289,8 @@ namespace Radiant
             m_PBRPipeline->HotReload();
             m_FinalPassPipeline->HotReload();
 
-            m_CSMPipeline->HotReload();
-
-            // m_LightClustersBuildPipeline->HotReload();
+            m_LightClustersBuildPipeline->HotReload();
+            m_LightClustersDetectActivePipeline->HotReload();
             m_LightClustersAssignmentPipeline->HotReload();
             // m_SSSPipeline->HotReload();
             // m_SSAOPipeline->HotReload();
@@ -267,7 +320,6 @@ namespace Radiant
                       return lhs.AlphaMode < rhs.AlphaMode;
                   });
 
-        static bool s_bUpdateLights{true};
         struct FramePreparePassData
         {
             RGResourceID CameraBuffer;
@@ -309,13 +361,166 @@ namespace Radiant
                 lightUBO->SetData(&m_LightData, sizeof(m_LightData));
             });
 
+        const auto GetLightSpaceViewProjectionMatrixFunc = [&](const f32 zNear, const f32 zFar) noexcept
+        {
+            const auto GetFrustumCornersWorldSpaceFunc = [](const glm::mat4& projection, const glm::mat4& view) noexcept
+            {
+                const auto invViewProj = glm::inverse(projection * view);
+                std::vector<glm::vec3> frustumCornersWS;
+                for (u32 x{}; x < 2; ++x)
+                {
+                    for (u32 y{}; y < 2; ++y)
+                    {
+                        for (u32 z{}; z < 2; ++z)
+                        {
+                            const auto cornerWS = invViewProj * glm::vec4(x * 2.0f - 1.0f, y * 2.0f - 1.0f, (f32)z, 1.0f);
+                            frustumCornersWS.emplace_back(cornerWS / cornerWS.w);
+                        }
+                    }
+                }
+
+                return frustumCornersWS;
+            };
+
+            const auto subfrustumProjectionMatrix =
+                glm::perspective(glm::radians(m_MainCamera->GetZoom()), m_MainCamera->GetAspectRatio(), zNear, zFar);
+            const auto frustumCornersWS = GetFrustumCornersWorldSpaceFunc(subfrustumProjectionMatrix, m_MainCamera->GetViewMatrix());
+            glm::vec3 frustumCenter{0.0f};
+            for (const auto& frustumCornerWS : frustumCornersWS)
+                frustumCenter += frustumCornerWS;
+
+            frustumCenter /= frustumCornersWS.size();
+
+            const auto lightViewMatrix = glm::lookAt(frustumCenter + m_LightData.Sun.Direction, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::vec3 minPointLVS{std::numeric_limits<f32>::max()};
+            glm::vec3 maxPointLVS{std::numeric_limits<f32>::lowest()};
+            for (const auto& frustumCornerWS : frustumCornersWS)
+            {
+                const auto pointLVS = glm::vec3(lightViewMatrix * glm::vec4(frustumCornerWS, 1.0f));
+                minPointLVS         = glm::min(minPointLVS, pointLVS);
+                maxPointLVS         = glm::max(maxPointLVS, pointLVS);
+            }
+
+            // Tune this parameter according to the scene
+            constexpr float zMult = 10.0f;
+            if (minPointLVS.z < 0)
+                minPointLVS.z *= zMult;
+            else
+                minPointLVS.z /= zMult;
+
+            if (maxPointLVS.z < 0)
+                maxPointLVS.z /= zMult;
+            else
+                maxPointLVS.z *= zMult;
+
+            glm::vec3 leftBottomZnear{minPointLVS};
+            glm::vec3 rightTopZfar{maxPointLVS};
+
+            f32 actualSize{0.0f};
+            if (s_bKeepCascadeConstantSize)
+            {  // keep constant world-size resolution, side length = diagonal of largest face of frustum
+                // the other option looks good at high resolutions, but can result in shimmering as you look in different directions and the
+                // cascade changes size
+                float farFaceDiagonal = glm::length(glm::vec3(frustumCornersWS[7]) - glm::vec3(frustumCornersWS[1]));
+                float forwardDiagonal = glm::length(glm::vec3(frustumCornersWS[7]) - glm::vec3(frustumCornersWS[0]));
+                actualSize            = std::max(farFaceDiagonal, forwardDiagonal);
+            }
+            else
+            {
+                actualSize = glm::max(rightTopZfar.x - leftBottomZnear.x, rightTopZfar.y - leftBottomZnear.y);
+            }
+
+            if (s_bKeepCascadeSquared)
+            {
+                const f32 W = rightTopZfar.x - leftBottomZnear.x, H = rightTopZfar.y - leftBottomZnear.y;
+                float diff = actualSize - H;
+                if (diff > 0)
+                {
+                    rightTopZfar.y += diff / 2.0f;
+                    leftBottomZnear.y -= diff / 2.0f;
+                }
+                diff = actualSize - W;
+                if (diff > 0)
+                {
+                    rightTopZfar.x += diff / 2.0f;
+                    leftBottomZnear.x -= diff / 2.0f;
+                }
+            }
+
+            if (s_bRoundCascadeToPixelSize)
+            {
+                float pixelSize   = actualSize / SHADOW_MAP_CASCADE_SIZE;
+                leftBottomZnear.x = glm::ceil(leftBottomZnear.x / pixelSize) * pixelSize;
+                rightTopZfar.x    = glm::ceil(rightTopZfar.x / pixelSize) * pixelSize;
+                leftBottomZnear.y = glm::ceil(leftBottomZnear.y / pixelSize) * pixelSize;
+                rightTopZfar.y    = glm::ceil(rightTopZfar.y / pixelSize) * pixelSize;
+            }
+
 #if 0
+            glm::vec3 leftBottomZnear{minPointLVS.x, minPointLVS.y, minPointLVS.z};
+            glm::vec3 rightTopZfar{maxPointLVS.x, maxPointLVS.y, maxPointLVS.z};
+
+            const f32 maxLeftRightSide = glm::max(glm::abs(minPointLVS.x), glm::abs(maxPointLVS.x));
+            const f32 maxBottomTopSide = glm::max(glm::abs(minPointLVS.y), glm::abs(maxPointLVS.y));
+            f32 actualSize             = glm::max(maxLeftRightSide, maxBottomTopSide);
+            if (s_bKeepCascadeConstantSize)
+            {
+                float farFaceDiagonal = glm::length(glm::vec3(frustumCornersWS[7]) - glm::vec3(frustumCornersWS[1]));
+                float forwardDiagonal = glm::length(glm::vec3(frustumCornersWS[7]) - glm::vec3(frustumCornersWS[0]));
+                actualSize            = std::max(farFaceDiagonal, forwardDiagonal);
+
+                /*            glm::vec3 minPointWS{std::numeric_limits<f32>::max()};
+                                        glm::vec3 maxPointWS{std::numeric_limits<f32>::lowest()};
+                                        for (const auto& frustumCornerWS : frustumCornersWS)
+                                        {
+                                            minPointWS = glm::min(minPointWS, frustumCornerWS);
+                                            maxPointWS = glm::max(maxPointWS, frustumCornerWS);
+                                        }
+                                        const f32 diagonalLength = glm::distance(minPointWS, maxPointWS);
+                                        leftBottomZnear          = minPointWS;
+                                        rightTopZfar             = maxPointWS;*/
+            }
+
+            if (s_bKeepCascadeSquared)
+            {
+                leftBottomZnear.x = -actualSize;
+                leftBottomZnear.y = -actualSize;
+                rightTopZfar.x    = actualSize;
+                rightTopZfar.y    = actualSize;
+            }
+
+            if (s_bRoundCascadeToPixelSize)
+            {
+                const f32 csmPixelSize = actualSize / SHADOW_MAP_CASCADE_SIZE;
+                leftBottomZnear.x      = glm::round(leftBottomZnear.x / csmPixelSize) * csmPixelSize;
+                leftBottomZnear.y      = glm::round(leftBottomZnear.y / csmPixelSize) * csmPixelSize;
+                rightTopZfar.x         = glm::round(rightTopZfar.x / csmPixelSize) * csmPixelSize;
+                rightTopZfar.y         = glm::round(rightTopZfar.y / csmPixelSize) * csmPixelSize;
+            }
+#endif
+
+            const auto lightOrthoProjectionMatrix =
+                glm::ortho(leftBottomZnear.x, rightTopZfar.x, leftBottomZnear.y, rightTopZfar.y, rightTopZfar.z, leftBottomZnear.z) *
+                glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
+            return lightOrthoProjectionMatrix * lightViewMatrix;
+        };
+
+        // reversed z
+        std::vector<f32> shadowCascadeLevels{m_MainCamera->GetZFar(), m_MainCamera->GetZNear() / 50.0f, m_MainCamera->GetZNear() / 10.0f,
+                                             m_MainCamera->GetZNear() / 2.0f, m_MainCamera->GetZNear()};
+
+        Shaders::CascadedShadowMapsData csmShaderData = {};
+        for (u32 k{}; k < shadowCascadeLevels.size() - 1; ++k)
+        {
+            csmShaderData.ViewProjectionMatrix[k] =
+                GetLightSpaceViewProjectionMatrixFunc(shadowCascadeLevels[k], shadowCascadeLevels[k + 1]);
+        }
         struct CascadedShadowMapsPassData
         {
-            RGResourceID CameraBuffer;
+            RGResourceID CSMDataBuffer;
         };
-        std::vector<CascadedShadowMapsPassData> csmData(SHADOW_MAP_CASCADE_COUNT);
-        for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
+        std::vector<CascadedShadowMapsPassData> csmPassDatas(SHADOW_MAP_CASCADE_COUNT);
+        for (u32 cascadeIndex{}; cascadeIndex < csmPassDatas.size(); ++cascadeIndex)
         {
             const auto passName    = "CSM" + std::to_string(cascadeIndex);
             const auto textureName = "CSMTexture" + std::to_string(cascadeIndex);
@@ -323,62 +528,90 @@ namespace Radiant
                 passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
                 [&](RenderGraphResourceScheduler& scheduler)
                 {
-                    /* csmData[cascadeIndex].CameraBuffer =
-                         scheduler.WriteBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);*/
+                    if (cascadeIndex == 0)
+                    {
+                        scheduler.CreateBuffer(ResourceNames::CSMDataBuffer,
+                                               GfxBufferDescription(sizeof(Shaders::CascadedShadowMapsData),
+                                                                    sizeof(Shaders::CascadedShadowMapsData),
+                                                                    vk::BufferUsageFlagBits::eUniformBuffer,
+                                                                    EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                        csmPassDatas[cascadeIndex].CSMDataBuffer =
+                            scheduler.WriteBuffer(ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
+                    }
+                    else
+                    {
+                        csmPassDatas[cascadeIndex].CSMDataBuffer = scheduler.ReadBuffer(
+                            ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
+                                                              EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
+                    }
 
                     // NOTE: Here I can create 1 texture with multiple mips or multiple textures,
                     // I went with multiple textures, don't want to bother with mips cuz memory aliaser will make things.
-                    scheduler.CreateTexture(
-                        textureName,
-                        GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(SHADOW_MAP_DIMENSIONS, SHADOW_MAP_DIMENSIONS, 1.0f),
-                                              vk::Format::eD24UnormS8Uint, vk::ImageUsageFlagBits::eDepthStencilAttachment));
+                    scheduler.CreateTexture(textureName,
+                                            GfxTextureDescription(vk::ImageType::e2D,
+                                                                  glm::uvec3(SHADOW_MAP_CASCADE_SIZE, SHADOW_MAP_CASCADE_SIZE, 1),
+                                                                  vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                                                  vk::SamplerCreateInfo()
+                                                                      .setAddressModeU(vk::SamplerAddressMode::eClampToBorder)
+                                                                      .setAddressModeV(vk::SamplerAddressMode::eClampToBorder)
+                                                                      .setAddressModeW(vk::SamplerAddressMode::eClampToBorder)
+                                                                      .setMagFilter(vk::Filter::eNearest)
+                                                                      .setMinFilter(vk::Filter::eNearest)
+                                                                      .setBorderColor(vk::BorderColor::eFloatOpaqueBlack)));
                     scheduler.WriteDepthStencil(textureName, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                                vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(1.0f).setStencil(0));
+                                                vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0));
 
                     scheduler.SetViewportScissors(
-                        vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(SHADOW_MAP_DIMENSIONS).setHeight(SHADOW_MAP_DIMENSIONS),
-                        vk::Rect2D().setExtent(vk::Extent2D().setWidth(SHADOW_MAP_DIMENSIONS).setHeight(SHADOW_MAP_DIMENSIONS)));
+                        vk::Viewport()
+                            .setMinDepth(0.0f)
+                            .setMaxDepth(1.0f)
+                            .setWidth(SHADOW_MAP_CASCADE_SIZE)
+                            .setHeight(SHADOW_MAP_CASCADE_SIZE),
+                        vk::Rect2D().setExtent(vk::Extent2D().setWidth(SHADOW_MAP_CASCADE_SIZE).setHeight(SHADOW_MAP_CASCADE_SIZE)));
                 },
-                [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                [&, cascadeIndex](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
                 {
-                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
-                    pipelineStateCache.Bind(cmd, m_CSMPipeline.get());
+                    if (!m_LightData.Sun.bCastShadows) return;
 
-                    //  auto& cameraUBO = scheduler.GetBuffer(depthPrePassData.CameraBuffer);
+                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                    pipelineStateCache.Bind(cmd, m_DepthPrePassPipeline.get());
+
+                    auto& csmDataUBO = scheduler.GetBuffer(csmPassDatas[cascadeIndex].CSMDataBuffer);
+                    if (cascadeIndex == 0)
+                        csmDataUBO->SetData(&csmShaderData, sizeof(csmShaderData));  // NOTE: will be used further in main pass
+
                     for (const auto& ro : m_DrawContext.RenderObjects)
                     {
                         if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
 
                         struct PushConstantBlock
                         {
-                            glm::vec3 scale{1.f};
-                            glm::vec3 translation{0.f};
-                            float4 orientation{1};
+                            glm::vec3 scale{1.0f};
+                            glm::vec3 translation{0.0f};
+                            float4 orientation{1.0f};
+                            glm::mat4 ViewProjectionMatrix{1.f};
                             const VertexPosition* VtxPositions{nullptr};
-                            const Shaders::CameraData* CameraData{nullptr};
                         } pc = {};
-
                         glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
                         glm::vec3 decomposePlaceholder0{1.0f};
                         glm::vec4 decomposePlaceholder1{1.0f};
                         glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-                        pc.scale /= 100.0f;
+                        pc.scale *= s_MeshScale;
                         pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
-                        pc.CameraData   = (const Shaders::CameraData*)cameraUBO->GetBDA();
-                        pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
+                        pc.VtxPositions         = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
+                        pc.ViewProjectionMatrix = csmShaderData.ViewProjectionMatrix[cascadeIndex];
 
                         pipelineStateCache.Set(cmd, ro.CullMode);
                         pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
                         cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
-                        pipelineStateCache.Bind(cmd, ro.IndexBuffer.get());
+                        pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                         cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
                     }
                 });
         }
-#endif
 
         struct DepthPrePassData
         {
@@ -391,7 +624,14 @@ namespace Radiant
                 scheduler.CreateTexture(ResourceNames::GBufferDepth,
                                         GfxTextureDescription(vk::ImageType::e2D,
                                                               glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                              vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment));
+                                                              vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                                              vk::SamplerCreateInfo()
+                                                                  .setAddressModeU(vk::SamplerAddressMode::eClampToBorder)
+                                                                  .setAddressModeV(vk::SamplerAddressMode::eClampToBorder)
+                                                                  .setAddressModeW(vk::SamplerAddressMode::eClampToBorder)
+                                                                  .setMagFilter(vk::Filter::eNearest)
+                                                                  .setMinFilter(vk::Filter::eNearest)
+                                                                  .setBorderColor(vk::BorderColor::eFloatOpaqueBlack)));
                 scheduler.WriteDepthStencil(ResourceNames::GBufferDepth, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
                                             vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0));
 
@@ -417,7 +657,7 @@ namespace Radiant
                         glm::vec3 scale{1.f};
                         glm::vec3 translation{0.f};
                         float4 orientation{1};
-                        const Shaders::CameraData* CameraData{nullptr};
+                        glm::mat4 ViewProjectionMatrix{1.f};
                         const VertexPosition* VtxPositions{nullptr};
                     } pc = {};
 
@@ -425,18 +665,18 @@ namespace Radiant
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
                     glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-                    pc.scale /= 100.0f;
+                    pc.scale *= s_MeshScale;
                     pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
-                    pc.CameraData   = (const Shaders::CameraData*)cameraUBO->GetBDA();
-                    pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
+                    pc.VtxPositions         = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
+                    pc.ViewProjectionMatrix = m_MainCamera->GetViewProjectionMatrix();
 
                     pipelineStateCache.Set(cmd, ro.CullMode);
                     pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
                     cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
-                    pipelineStateCache.Bind(cmd, ro.IndexBuffer.get());
+                    pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
                 }
             });
@@ -450,7 +690,7 @@ namespace Radiant
             "LightClustersBuildPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
             [&](RenderGraphResourceScheduler& scheduler)
             {
-                constexpr u64 lcbCapacity = sizeof(AABB) * Shaders::s_LIGHT_CLUSTER_COUNT;
+                constexpr u64 lcbCapacity = sizeof(AABB) * LIGHT_CLUSTERS_COUNT;
                 scheduler.CreateBuffer(ResourceNames::LightClusterBuffer,
                                        GfxBufferDescription(lcbCapacity, sizeof(AABB), vk::BufferUsageFlagBits::eStorageBuffer,
                                                             EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT));
@@ -480,10 +720,68 @@ namespace Radiant
 
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
-                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.x / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
-                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.y / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
-                             glm::ceil(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE));
+                cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_X / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_Y / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
+                             glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_Z / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE));
             });
+
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+        struct LightClustersDetectActivePassData
+        {
+            RGResourceID CameraBuffer;
+            RGResourceID DepthTexture;
+            RGResourceID LightClusterBuffer;
+            RGResourceID LightClusterDetectActiveBuffer;
+        } lcdaPassData = {};
+        m_RenderGraph->AddPass(
+            "LightClustersDetectActive", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+            [&](RenderGraphResourceScheduler& scheduler)
+            {
+                scheduler.CreateBuffer(ResourceNames::LightClusterDetectActiveBuffer,
+                                       GfxBufferDescription(sizeof(Shaders::LightClusterActiveList),
+                                                            sizeof(Shaders::LightClusterActiveList),
+                                                            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT));
+                lcdaPassData.LightClusterDetectActiveBuffer = scheduler.WriteBuffer(
+                    ResourceNames::LightClusterDetectActiveBuffer,
+                    EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT | EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+
+                lcdaPassData.CameraBuffer =
+                    scheduler.ReadBuffer(ResourceNames::CameraBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+
+                lcdaPassData.LightClusterBuffer = scheduler.ReadBuffer(ResourceNames::LightClusterBuffer,
+                                                                       EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT |
+                                                                           EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+
+                lcdaPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, MipSet::FirstMip(),
+                                                                  EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+            },
+            [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            {
+                auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                pipelineStateCache.Bind(cmd, m_LightClustersDetectActivePipeline.get());
+
+                struct PushConstantBlock
+                {
+                    u32 DepthTextureID;
+                    const Shaders::CameraData* CameraData;
+                    const AABB* Clusters;
+                    Shaders::LightClusterActiveList* ActiveLightClusters;
+                } pc = {};
+
+                pc.DepthTextureID = scheduler.GetTexture(lcdaPassData.DepthTexture)->GetBindlessTextureID();
+                pc.CameraData     = (const Shaders::CameraData*)scheduler.GetBuffer(lcdaPassData.CameraBuffer)->GetBDA();
+                pc.Clusters       = (const AABB*)scheduler.GetBuffer(lcdaPassData.LightClusterBuffer)->GetBDA();
+                pc.ActiveLightClusters =
+                    (Shaders::LightClusterActiveList*)scheduler.GetBuffer(lcdaPassData.LightClusterDetectActiveBuffer)->GetBDA();
+
+                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                                                     0, pc);
+                cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_X / (f32)LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_X),
+                             glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_Y / (f32)LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_Y), 1);
+            });
+#endif
 
         struct LightClustersAssignmentPassData
         {
@@ -491,13 +789,14 @@ namespace Radiant
             RGResourceID LightClusterBuffer;
             RGResourceID LightClusterListBuffer;
             RGResourceID LightBuffer;
+            RGResourceID LightClusterDetectActiveBuffer;
         } lcaPassData = {};
         m_RenderGraph->AddPass(
             "LightClustersAssignmentPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateBuffer(ResourceNames::LightClusterListBuffer,
-                                       GfxBufferDescription(sizeof(Shaders::LightClusterList) * Shaders::s_LIGHT_CLUSTER_COUNT,
+                                       GfxBufferDescription(sizeof(Shaders::LightClusterList) * LIGHT_CLUSTERS_COUNT,
                                                             sizeof(Shaders::LightClusterList), vk::BufferUsageFlagBits::eStorageBuffer,
                                                             EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT));
                 lcaPassData.LightClusterListBuffer = scheduler.WriteBuffer(
@@ -512,6 +811,11 @@ namespace Radiant
                 lcaPassData.LightBuffer =
                     scheduler.ReadBuffer(ResourceNames::LightBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
                                                                          EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+                lcaPassData.LightClusterDetectActiveBuffer = scheduler.ReadBuffer(
+                    ResourceNames::LightClusterDetectActiveBuffer,
+                    EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT | EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+#endif
             },
             [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
@@ -528,16 +832,19 @@ namespace Radiant
                     u32 PointLightBatchOffset{0};
                     u32 PointLightBatchCount{0};
 #endif
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+                    const Shaders::LightClusterActiveList* ActiveLightClusters;
+#endif
                 } pc = {};
 
-                auto& cameraUBO              = scheduler.GetBuffer(lcaPassData.CameraBuffer);
-                pc.CameraData                = (const Shaders::CameraData*)cameraUBO->GetBDA();
-                auto& lightClusterSB         = scheduler.GetBuffer(lcaPassData.LightClusterBuffer);
-                pc.Clusters                  = (const AABB*)lightClusterSB->GetBDA();
-                auto& lightBuffer            = scheduler.GetBuffer(lcaPassData.LightBuffer);
-                pc.LightData                 = (const Shaders::LightData*)lightBuffer->GetBDA();
-                auto& lightClusterListBuffer = scheduler.GetBuffer(lcaPassData.LightClusterListBuffer);
-                pc.LightClusterList          = (Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
+                pc.CameraData       = (const Shaders::CameraData*)scheduler.GetBuffer(lcaPassData.CameraBuffer)->GetBDA();
+                pc.Clusters         = (const AABB*)scheduler.GetBuffer(lcaPassData.LightClusterBuffer)->GetBDA();
+                pc.LightData        = (const Shaders::LightData*)scheduler.GetBuffer(lcaPassData.LightBuffer)->GetBDA();
+                pc.LightClusterList = (Shaders::LightClusterList*)scheduler.GetBuffer(lcaPassData.LightClusterListBuffer)->GetBDA();
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+                pc.ActiveLightClusters =
+                    (Shaders::LightClusterActiveList*)scheduler.GetBuffer(lcaPassData.LightClusterDetectActiveBuffer)->GetBDA();
+#endif
 
 #if LIGHT_CLUSTERS_SPLIT_DISPATCHES
                 const u32 lightBatchCount =
@@ -551,14 +858,14 @@ namespace Radiant
 
                     cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
-                    cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
+                    cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
 
                     pc.PointLightBatchOffset += pointLightBatchCount;
                 }
 #else
                 cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
-                cmd.dispatch(glm::ceil(Shaders::s_LIGHT_CLUSTER_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
+                cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
 #endif
             });
 
@@ -614,7 +921,6 @@ namespace Radiant
             });
 #endif
 
-        static bool s_bComputeSSAO{false};
         struct SSAOPassData
         {
             RGResourceID CameraBuffer;
@@ -711,6 +1017,16 @@ namespace Radiant
                 });
         }
 
+        struct MainPassShaderData
+        {
+            u32 SSAOTextureID;
+            u32 SSSTextureID;
+            float2 ScaleBias;  // For clustered shading, x - scale, y - bias
+            const Shaders::CascadedShadowMapsData* CSMData;
+            u32 CSMTextureIDs[SHADOW_MAP_CASCADE_COUNT];
+            float PlaneDistances[SHADOW_MAP_CASCADE_COUNT];
+        };
+
         struct MainPassData
         {
             RGResourceID DepthTexture;
@@ -720,6 +1036,10 @@ namespace Radiant
             RGResourceID DebugDataBuffer;
             RGResourceID SSSTexture;
             RGResourceID SSAOTexture;
+
+            RGResourceID CSMTextures[SHADOW_MAP_CASCADE_COUNT];
+            RGResourceID CSMDataBuffer;
+            RGResourceID MainPassShaderDataBuffer;
         } mainPassData = {};
         m_RenderGraph->AddPass(
             "MainPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
@@ -748,6 +1068,25 @@ namespace Radiant
                     ResourceNames::LightClusterListBuffer, EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT |
                                                                EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
+                mainPassData.CSMDataBuffer =
+                    scheduler.ReadBuffer(ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                           EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+
+                scheduler.CreateBuffer(ResourceNames::MainPassShaderDataBuffer,
+                                       GfxBufferDescription(sizeof(MainPassShaderData), sizeof(MainPassShaderData),
+                                                            vk::BufferUsageFlagBits::eUniformBuffer,
+                                                            EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                mainPassData.MainPassShaderDataBuffer = scheduler.WriteBuffer(
+                    ResourceNames::MainPassShaderDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
+                                                                 EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+
+                for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
+                {
+                    const auto textureName                 = "CSMTexture" + std::to_string(cascadeIndex);
+                    mainPassData.CSMTextures[cascadeIndex] = scheduler.ReadTexture(
+                        textureName, MipSet::FirstMip(), EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                }
+
                 // mainPassData.SSSTexture = scheduler.ReadTexture(ResourceNames::SSSTexture,
                 // EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
 
@@ -766,10 +1105,34 @@ namespace Radiant
                 auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
                 pipelineStateCache.Bind(cmd, m_PBRPipeline.get());
 
-                // auto& sssTexture  = scheduler.GetTexture(mainPassData.SSSTexture);
                 auto& cameraUBO              = scheduler.GetBuffer(mainPassData.CameraBuffer);
                 auto& lightUBO               = scheduler.GetBuffer(mainPassData.LightBuffer);
                 auto& lightClusterListBuffer = scheduler.GetBuffer(mainPassData.LightClusterListBuffer);
+
+                auto& mainPassShaderDataBuffer = scheduler.GetBuffer(mainPassData.MainPassShaderDataBuffer);
+
+                MainPassShaderData mpsData = {};
+                for (u32 k{1}; k < shadowCascadeLevels.size(); ++k)
+                {
+                    mpsData.PlaneDistances[k - 1] = shadowCascadeLevels[k];
+                }
+                for (u32 k{}; k < SHADOW_MAP_CASCADE_COUNT; ++k)
+                {
+                    mpsData.CSMTextureIDs[k] = scheduler.GetTexture(mainPassData.CSMTextures[k])->GetBindlessTextureID();
+                }
+
+                const auto zFar   = m_MainCamera->GetZFar();
+                const auto zNear  = m_MainCamera->GetZNear();
+                mpsData.ScaleBias = {static_cast<f32>(LIGHT_CLUSTERS_SUBDIVISION_Z) / glm::log2(zFar / zNear),
+                                     -static_cast<f32>(LIGHT_CLUSTERS_SUBDIVISION_Z) * glm::log2(zNear) / glm::log2(zFar / zNear)};
+                mpsData.CSMData   = (const Shaders::CascadedShadowMapsData*)scheduler.GetBuffer(mainPassData.CSMDataBuffer)->GetBDA();
+                if (s_bComputeSSAO)
+                {
+                    mpsData.SSAOTextureID = scheduler.GetTexture(mainPassData.SSAOTexture)->GetBindlessTextureID();
+                }
+                //   mpsData.SSSTextureID  = scheduler.GetTexture(mainPassData.SSSTexture)->GetBindlessTextureID();
+
+                mainPassShaderDataBuffer->SetData(&mpsData, sizeof(mpsData));
 
                 for (const auto& ro : m_DrawContext.RenderObjects)
                 {
@@ -784,31 +1147,21 @@ namespace Radiant
                         const Shaders::GLTFMaterial* MaterialData{nullptr};
                         const Shaders::LightData* LightData{nullptr};
                         const Shaders::LightClusterList* LightClusterList{nullptr};
-                        u32 SSAOTextureID{0};
-                        u32 SSSTextureID{0};
-                        float2 ScaleBias{0.0f};
+                        const MainPassShaderData* MPSData{nullptr};
                     } pc = {};
 
-                    if (s_bComputeSSAO)
-                    {
-                        pc.SSAOTextureID = scheduler.GetTexture(mainPassData.SSAOTexture)->GetBindlessTextureID();
-                    }
-                    //   pc.SSSTextureID  = sssTexture->GetBindlessTextureID();
+                    pc.MPSData = (const MainPassShaderData*)mainPassShaderDataBuffer->GetBDA();
+
                     pc.LightData        = (const Shaders::LightData*)lightUBO->GetBDA();
                     pc.LightClusterList = (const Shaders::LightClusterList*)lightClusterListBuffer->GetBDA();
                     pc.CameraData       = (const Shaders::CameraData*)cameraUBO->GetBDA();
-                    const auto zFar     = m_MainCamera->GetZFar();
-                    const auto zNear    = m_MainCamera->GetZNear();
-                    pc.ScaleBias        = {static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z) / glm::log2(zFar / zNear),
-                                           -static_cast<f32>(Shaders::s_LIGHT_CLUSTER_SUBDIVISIONS.z) * glm::log2(zNear) /
-                                               glm::log2(zFar / zNear)};
 
                     glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
                     glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
                     pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
-                    pc.scale /= 100.0f;
+                    pc.scale *= s_MeshScale;
                     pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
                     pc.VtxPositions  = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
@@ -823,12 +1176,11 @@ namespace Radiant
 
                     cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
-                    pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, vk::IndexType::eUint32);
+                    pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
                 }
             });
 
-        static bool s_bBloomComputeBased{false};
         static constexpr u32 s_BloomMipCount{6};
         struct BloomMipChainData
         {
@@ -866,15 +1218,15 @@ namespace Radiant
                         if (i == 0)
                         {
                             scheduler.CreateTexture(
-                                textureName,
-                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                      vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eColorAttachment,
-                                                      vk::SamplerCreateInfo()
-                                                          .setMinFilter(vk::Filter::eLinear)
-                                                          .setMagFilter(vk::Filter::eLinear)
-                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
-                                                      1, vk::SampleCountFlagBits::e1, /* bExposeMips */ true));
+                                textureName, GfxTextureDescription(
+                                                 vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                 vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eColorAttachment,
+                                                 vk::SamplerCreateInfo()
+                                                     .setMinFilter(vk::Filter::eLinear)
+                                                     .setMagFilter(vk::Filter::eLinear)
+                                                     .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                     .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
+                                                 1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT));
 
                             bdPassDatas[i].SrcTexture =
                                 scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
@@ -929,16 +1281,16 @@ namespace Radiant
                         if (i == 0)
                         {
                             scheduler.CreateTexture(
-                                textureName,
-                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                      vk::Format::eB10G11R11UfloatPack32,
-                                                      vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eStorage,
-                                                      vk::SamplerCreateInfo()
-                                                          .setMinFilter(vk::Filter::eLinear)
-                                                          .setMagFilter(vk::Filter::eLinear)
-                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
-                                                      1, vk::SampleCountFlagBits::e1, /* bExposeMips */ true));
+                                textureName, GfxTextureDescription(
+                                                 vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                 vk::Format::eB10G11R11UfloatPack32,
+                                                 vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eStorage,
+                                                 vk::SamplerCreateInfo()
+                                                     .setMinFilter(vk::Filter::eLinear)
+                                                     .setMagFilter(vk::Filter::eLinear)
+                                                     .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                     .setAddressModeV(vk::SamplerAddressMode::eClampToEdge),
+                                                 1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT));
 
                             bdPassDatas[i].SrcTexture =
                                 scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
@@ -1154,8 +1506,19 @@ namespace Radiant
 
                     ImGui::Separator();
                     ImGui::Text("Renderer: %s", m_GfxContext->GetDevice()->GetGPUProperties().deviceName);
-                    ImGui::Separator();
 
+                    if (ImGui::TreeNodeEx("Bindless Resources Statistics", ImGuiTreeNodeFlags_Framed))
+                    {
+                        ImGui::Text("Storage Images and Textures can overlap.");
+                        const auto bindlessStatistics = m_GfxContext->GetDevice()->GetBindlessStatistics();
+                        ImGui::Text("Storage Images Used: %zu", bindlessStatistics.ImagesUsed);
+                        ImGui::Text("Textures Used: %zu", bindlessStatistics.TexturesUsed);
+                        ImGui::Text("Samplers Used: %zu", bindlessStatistics.SamplersUsed);
+
+                        ImGui::TreePop();
+                    }
+
+                    ImGui::Separator();
                     if (ImGui::TreeNodeEx("RenderGraph Statistics", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen))
                     {
                         ImGui::Text("Build Time: [%.3f] ms", m_RenderGraphStats.BuildTime);
@@ -1170,21 +1533,35 @@ namespace Radiant
                     ImGui::Separator();
                     ImGui::Text("Camera Position: %s", glm::to_string(m_MainCamera->GetShaderData().Position).data());
 
-                    ImGui::SeparatorText("Sun Parameters");
-                    ImGui::DragFloat3("Direction", (f32*)&m_LightData.Sun.Direction, 0.05f, -1.0f, 1.0f);
+                    if (ImGui::TreeNodeEx("Sun Parameters", ImGuiTreeNodeFlags_Framed))
+                    {
+                        ImGui::DragFloat3("Direction", (f32*)&m_LightData.Sun.Direction, 0.01f, -1.0f, 1.0f);
 
-                    ImGui::DragFloat("Intensity", &m_LightData.Sun.Intensity, 0.05f, 0.0f, 5.0f);
-                    ImGui::Checkbox("Cast Shadows", &m_LightData.Sun.bCastShadows);
+                        ImGui::DragFloat("Intensity", &m_LightData.Sun.Intensity, 0.01f, 0.0f, 5.0f);
+                        ImGui::Checkbox("Cast Shadows", &m_LightData.Sun.bCastShadows);
 
-                    glm::vec3 sunColor{Shaders::UnpackUnorm4x8(m_LightData.Sun.Color)};
-                    if (ImGui::DragFloat3("Radiance", (f32*)&sunColor, 0.05f, 0.0f, 1.0f))
-                        m_LightData.Sun.Color = Shaders::PackUnorm4x8(glm::vec4(sunColor, 1.0f));
+                        glm::vec3 sunColor{Shaders::UnpackUnorm4x8(m_LightData.Sun.Color)};
+                        if (ImGui::DragFloat3("Radiance", (f32*)&sunColor, 0.01f, 0.0f, 1.0f))
+                            m_LightData.Sun.Color = Shaders::PackUnorm4x8(glm::vec4(sunColor, 1.0f));
+
+                        ImGui::TreePop();
+                    }
                 }
 
                 ImGui::Separator();
                 ImGui::Checkbox("Bloom Use Compute", &s_bBloomComputeBased);
                 ImGui::Checkbox("Compute SSAO", &s_bComputeSSAO);
                 ImGui::Checkbox("Update Lights", &s_bUpdateLights);
+
+                if (ImGui::TreeNodeEx("Cascaded Shadow Maps", ImGuiTreeNodeFlags_Framed))
+                {
+                    ImGui::Checkbox("Compute Tight Frustums (SDSM)", &s_bComputeTightFrustums);
+                    ImGui::Checkbox("Keep Cascades at Constant Size", &s_bKeepCascadeConstantSize);
+                    ImGui::Checkbox("Keep Cascades Squared", &s_bKeepCascadeSquared);
+                    ImGui::Checkbox("Round Cascades to Pixel Size", &s_bRoundCascadeToPixelSize);
+                    ImGui::DragFloat("Cascade Split Delta", &s_CascadeSplitDelta, 0.01f, 0.0f, 1.0f);
+                    ImGui::TreePop();
+                }
 
                 ImGui::End();
             });

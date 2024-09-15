@@ -186,6 +186,7 @@ namespace Radiant
             return m_Objects[poolID];
         }
 
+        NODISCARD FORCEINLINE const auto GetPresentObjectsSize() const noexcept { return m_Objects.size() - m_FreeIDs.size(); }
         NODISCARD FORCEINLINE const auto GetSize() const noexcept { return m_Objects.size(); }
         NODISCARD FORCEINLINE bool IsPresent(const PoolID& poolID) const noexcept
         {

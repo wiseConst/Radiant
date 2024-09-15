@@ -16,6 +16,7 @@ namespace Radiant
         Shared<GfxBuffer> VertexPositionBuffer{nullptr};
         Shared<GfxBuffer> VertexAttributeBuffer{nullptr};
         Shared<GfxBuffer> IndexBuffer{nullptr};
+        vk::IndexType IndexType{vk::IndexType::eUint16};
         u32 IndexCount{0};
         u32 FirstIndex{0};
         Shared<GfxBuffer> MaterialBuffer{nullptr};
@@ -44,6 +45,7 @@ namespace Radiant
     {
         std::string Name{s_DEFAULT_STRING};
         std::vector<GeometryData> Surfaces;
+        vk::IndexType IndexType{vk::IndexType::eNoneKHR};
         u32 IndexBufferID{};
         u32 VertexPositionBufferID{};
         u32 VertexAttributeBufferID{};
@@ -74,9 +76,9 @@ namespace Radiant
                 for (const auto& surface : MeshAsset->Surfaces)
                 {
                     const auto& materialBuffer = materialBuffers[surface.MaterialID];
-                    drawContext.RenderObjects.emplace_back(modelMatrix, vertexPosBuffer, vertexAttribBuffer, indexBuffer, surface.Count,
-                                                           surface.StartIndex, materialBuffer, surface.PrimitiveTopology, surface.CullMode,
-                                                           surface.AlphaMode);
+                    drawContext.RenderObjects.emplace_back(modelMatrix, vertexPosBuffer, vertexAttribBuffer, indexBuffer,
+                                                           MeshAsset->IndexType, surface.Count, surface.StartIndex, materialBuffer,
+                                                           surface.PrimitiveTopology, surface.CullMode, surface.AlphaMode);
                 }
             }
 

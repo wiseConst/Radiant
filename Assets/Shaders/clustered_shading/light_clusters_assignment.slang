@@ -13,6 +13,9 @@ struct PushConstantBlock
     uint PointLightBatchOffset;
     uint PointLightBatchCount;
 #endif
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+    const Shaders::LightClusterActiveList *ActiveLightClusters;
+#endif
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
@@ -53,6 +56,14 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupInde
     }
 #endif
 
+#if LIGHT_CLUSTERS_DETECT_ACTIVE
+    const uint froxelBitmaskIndex = uint(froxelIndex * Shaders::s_INV_LIGHT_CLUSTERS_WORD_SIZE);
+    const uint froxelBit = 1u << (froxelIndex % LIGHT_CLUSTERS_WORD_SIZE);
+    const bool bIsClusterActive = (u_PC.ActiveLightClusters.ActiveClusters[froxelBitmaskIndex] & froxelBit) > 0;
+#else
+    const bool bIsClusterActive = true;
+#endif
+
 #if LIGHT_CLUSTERS_SPLIT_DISPATCHES
     uint globalLightOffset = u_PC.PointLightBatchOffset;
     const uint pointLightBatchCount = (u_PC.PointLightBatchCount + LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS - 1) / LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS;
@@ -79,7 +90,7 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupInde
 #else
         const uint writtenPointLightCount = min(LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS, u_PC.LightData->PointLightCount - LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS * lightBatchIndex);
 #endif
-        for (uint lightIndex = 0; lightIndex < writtenPointLightCount; ++lightIndex)
+        for (uint lightIndex = 0; lightIndex < writtenPointLightCount && bIsClusterActive; ++lightIndex)
         {
             Sphere plVS = lds_PointLightData[lightIndex];
             if (!TestSphereAABB(plVS, u_PC.Clusters[froxelIndex])) continue;

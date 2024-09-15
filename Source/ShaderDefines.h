@@ -16,7 +16,7 @@ namespace Radiant
 
 #endif
 
-#define MAX_POINT_LIGHT_COUNT 1024
+#define MAX_POINT_LIGHT_COUNT 128
 
 // NOTE: AMD iGPU doesn't support storagePushConstant8/16, but I wanna preserve them on my NV dGPU so I can fastly transfer quantized data.
 #define RENDER_FORCE_IGPU 0
@@ -61,11 +61,12 @@ namespace Radiant
         float Distance;
     };
 
+    // TODO: Use alpha for bCastShadows
     struct DirectionalLight
     {
         float3 Direction;
-        uint32_t Color;   // NOTE: Packed color, alpha is not touched
-        float Intensity;  // TODO: Sign bit used for detecting if a shadow caster
+        uint32_t Color;  // NOTE: Packed color, alpha is not touched
+        float Intensity;
         bool bCastShadows;
     };
 
@@ -84,13 +85,13 @@ namespace Radiant
 
         static const uint32_t s_RAINBOW_COLOR_COUNT                 = 8;
         static const float4 s_RAINBOW_COLORS[s_RAINBOW_COLOR_COUNT] = {
-            float4(0.5f, 0.5f, 0.5f, 1.0f),  // Gray
-            float4(0.0f, 0.0f, 1.0f, 1.0f),  // Blue
+            float4(1.0f, 0.0f, 0.0f, 1.0f),  // Red 
             float4(0.0f, 1.0f, 0.0f, 1.0f),  // Green
-            float4(0.0f, 1.0f, 1.0f, 1.0f),  // Turquoise
-            float4(1.0f, 0.0f, 0.0f, 1.0f),  // Red
-            float4(1.0f, 0.0f, 1.0f, 1.0f),  // Purple
+            float4(0.0f, 0.0f, 1.0f, 1.0f),  // Blue
             float4(1.0f, 1.0f, 0.0f, 1.0f),  // Yellow
+            float4(0.5f, 0.5f, 0.5f, 1.0f),  // Gray
+            float4(0.0f, 1.0f, 1.0f, 1.0f),  // Turquoise
+            float4(1.0f, 0.0f, 1.0f, 1.0f),  // Purple
             float4(1.0f, 1.0f, 1.0f, 1.0f)   // White
         };
 
@@ -149,9 +150,11 @@ namespace Radiant
 #ifndef __cplusplus
 
         [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_F1[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float2> RWImage2D_Heap_F2[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_F3[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_F4[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] Sampler2D Texture_Heap[s_MAX_BINDLESS_TEXTURES];
+        [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] SamplerCube Texture_Cube_Heap[s_MAX_BINDLESS_TEXTURES];
         [vk::binding(s_BINDLESS_SAMPLER_BINDING, 0)] SamplerState Sampler_Heap[s_MAX_BINDLESS_SAMPLERS];
 
         float3 RotateByQuat(const float3 v, const float4 quat /* x yzw = w xyz */)
@@ -184,6 +187,11 @@ namespace Radiant
         bool is_saturated(const float2 uv)
         {
             return uv.x >= 0.0f && uv.x <= 1.0f && uv.y >= 0.0f && uv.y <= 1.0f;
+        }
+
+        bool is_saturated(const float3 uvw)
+        {
+            return uvw.x >= 0.0f && uvw.x <= 1.0f && uvw.y >= 0.0f && uvw.y <= 1.0f && uvw.z >= 0.0f && uvw.z <= 1.0f;
         }
 
         float4 ScreenSpaceToView(const float2 uv, const float z, const float4x4 invProjectionMatrix)

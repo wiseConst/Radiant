@@ -357,19 +357,13 @@ namespace Radiant
             // NEXT STATE
             if (nextState & EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT)
             {
-                if (nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT)
+                if (nextState & EResourceStateBits::RESOURCE_STATE_READ_BIT &&
+                    (currentState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT ||
+                     currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT ||
+                     currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT))
                 {
-                    if (currentState & EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT ||
-                        currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT ||
-                        currentState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT)
-                    {
-                        outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-                        dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
-                    }
-                    else
-                    {
-                        dstAccessMask |= vk::AccessFlagBits2::eShaderStorageRead;
-                    }
+                    outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                    dstAccessMask |= vk::AccessFlagBits2::eShaderSampledRead;
                 }
 
                 if (nextState & EResourceStateBits::RESOURCE_STATE_WRITE_BIT)
@@ -379,6 +373,8 @@ namespace Radiant
                 }
 
                 // NOTE: In case we failed to determine next layout, fallback to eShaderReadOnlyOptimal, cuz first if-statement is weak.
+                // Also here I assume that you don't Load() STORAGE image contents if you don't write to it,
+                // so that's why layout is shader_read_only_optimal, so you can directly sample texel.
                 if (outNextLayout == vk::ImageLayout::eUndefined)
                 {
                     outNextLayout = vk::ImageLayout::eShaderReadOnlyOptimal;

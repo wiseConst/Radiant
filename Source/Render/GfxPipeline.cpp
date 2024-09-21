@@ -137,10 +137,10 @@ namespace Radiant
             const auto shaderStages = m_Description.Shader->GetShaderStages();
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
                 m_Device->GetPipelineCache(), vk::GraphicsPipelineCreateInfo()
+                                                  .setPNext(&dynamicRenderingInfo)
                                                   .setLayout(*m_Device->GetBindlessPipelineLayout())
                                                   .setStages(shaderStages)
                                                   .setPDepthStencilState(&depthStencilStateCI)
-                                                  .setPNext(&dynamicRenderingInfo)
                                                   .setPInputAssemblyState(gpo->bMeshShading ? nullptr : &inputAssemblyStateCI)
                                                   .setPVertexInputState(gpo->bMeshShading ? nullptr : &vtxInputStateCI)
                                                   .setPColorBlendState(&blendStateCI)

@@ -296,7 +296,7 @@ namespace Radiant
         constexpr auto validationFeatureToEnable = vk::ValidationFeatureEnableEXT::eDebugPrintf;
         const auto validationInfo                = vk::ValidationFeaturesEXT().setEnabledValidationFeatures(validationFeatureToEnable);
         m_Instance                               = vk::createInstanceUnique(vk::InstanceCreateInfo()
-                                                                                .setPNext(s_bForceGfxValidation ? &validationInfo : nullptr)
+                                                                                .setPNext(s_bShaderDebugPrintf ? &validationInfo : nullptr)
                                                                                 .setPApplicationInfo(&appInfo)
                                                                                 .setEnabledExtensionCount(enabledInstanceExtensions.size())
                                                                                 .setPEnabledExtensionNames(enabledInstanceExtensions)
@@ -483,8 +483,12 @@ namespace Radiant
                 ? vk::CompositeAlphaFlagBitsKHR::eInherit
                 : vk::CompositeAlphaFlagBitsKHR::eOpaque;
 
-        // The FIFO present mode is guaranteed by the spec.
-        const auto presentMode = vk::PresentModeKHR::eFifo;
+        m_SupportedPresentModes = m_Device->GetPhysicalDevice().getSurfacePresentModesKHR(*m_Surface);
+        if (std::find(m_SupportedPresentModes.cbegin(), m_SupportedPresentModes.cend(), m_PresentMode) == m_SupportedPresentModes.cend())
+        {
+            // The FIFO present mode is guaranteed by the spec.
+            m_PresentMode = vk::PresentModeKHR::eFifo;
+        }
 
         m_SwapchainImageFormat = imageFormat;
         auto swapchainCI =
@@ -494,7 +498,7 @@ namespace Radiant
                 .setQueueFamilyIndexCount(1)
                 .setPQueueFamilyIndices(&m_Device->GetGeneralQueue().QueueFamilyIndex.value())
                 .setCompositeAlpha(compositeAlpha)
-                .setPresentMode(presentMode)
+                .setPresentMode(m_PresentMode)
                 .setImageFormat(imageFormat)
                 .setImageExtent(m_SwapchainExtent)
                 .setImageArrayLayers(1)

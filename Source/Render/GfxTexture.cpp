@@ -16,13 +16,17 @@ namespace Radiant
         {
             RDNT_ASSERT(!imagePath.empty(), "Invalid image path!");
 
-            void* imageData = stbi_load(imagePath.data(), &width, &height, &channels, requestedChannels);
-            RDNT_ASSERT(imageData, "Failed to load image data!");
+            void* imageData{nullptr};
+            if (stbi_is_hdr(imagePath.data()))
+                imageData = stbi_loadf(imagePath.data(), &width, &height, &channels, requestedChannels);
+            else
+                imageData = stbi_load(imagePath.data(), &width, &height, &channels, requestedChannels);
 
-            if (channels != 4)
+            RDNT_ASSERT(imageData, "Failed to load image data!");
+            if (requestedChannels > 0)
             {
                 //   LOG_INFO("Overwriting loaded image's channels to 4! Previous: {}", channels);
-                channels = 4;
+                channels = requestedChannels;
             }
 
             return imageData;
@@ -147,12 +151,7 @@ namespace Radiant
                         .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader)));
 
                 executionContext.CommandBuffer.end();
-
-                {
-                    std::scoped_lock lock(GfxContext::Get().GetMutex());  // Synchronizing access to single queue
-                    executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
-                    executionContext.Queue.waitIdle();
-                }
+                GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
 
                 m_Device->PushBindlessThing(vk::DescriptorImageInfo()
                                                 .setImageView(*m_MipChain[baseMipLevel].ImageView)
@@ -187,12 +186,7 @@ namespace Radiant
                         .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader)));
 
                 executionContext.CommandBuffer.end();
-
-                {
-                    std::scoped_lock lock(GfxContext::Get().GetMutex());  // Synchronizing access to single queue
-                    executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
-                    executionContext.Queue.waitIdle();
-                }
+                GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
 
                 m_Device->PushBindlessThing(
                     vk::DescriptorImageInfo().setImageView(*m_MipChain[baseMipLevel].ImageView).setImageLayout(vk::ImageLayout::eGeneral),
@@ -228,13 +222,13 @@ namespace Radiant
         u32 mipWidth = m_Description.Dimensions.x, mipHeight = m_Description.Dimensions.y;
         for (u32 baseMipLevel{1}; baseMipLevel < mipLevelCount; ++baseMipLevel)
         {
-            imageMemoryBarrier.subresourceRange.baseMipLevel = baseMipLevel - 1;
-            imageMemoryBarrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
-            imageMemoryBarrier.srcAccessMask                 = vk::AccessFlagBits2::eTransferWrite;
-            imageMemoryBarrier.newLayout                     = vk::ImageLayout::eTransferSrcOptimal;
-            imageMemoryBarrier.dstAccessMask                 = vk::AccessFlagBits2::eTransferRead;
-            imageMemoryBarrier.srcStageMask                  = vk::PipelineStageFlagBits2::eAllTransfer;
-            imageMemoryBarrier.dstStageMask                  = vk::PipelineStageFlagBits2::eBlit;
+            imageMemoryBarrier.subresourceRange.setBaseMipLevel(baseMipLevel - 1);
+            imageMemoryBarrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+                .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+                .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+                .setDstAccessMask(vk::AccessFlagBits2::eTransferRead)
+                .setDstStageMask(vk::PipelineStageFlagBits2::eBlit);
             cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
 
             const auto previousMipSubresourceLayers = vk::ImageSubresourceLayers()
@@ -263,12 +257,12 @@ namespace Radiant
                             .setDstOffsets({vk::Offset3D(), vk::Offset3D(static_cast<i32>(mipWidth > 1 ? mipWidth / 2 : 1),
                                                                          static_cast<i32>(mipHeight > 1 ? mipHeight / 2 : 1), 1)})));
 
-            imageMemoryBarrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
-            imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits2::eTransferRead;
-            imageMemoryBarrier.srcStageMask  = vk::PipelineStageFlagBits2::eBlit;
-            imageMemoryBarrier.newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal;
-            imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead;
-            imageMemoryBarrier.dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
+            imageMemoryBarrier.setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
+                .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                .setSrcAccessMask(vk::AccessFlagBits2::eTransferRead)
+                .setSrcStageMask(vk::PipelineStageFlagBits2::eBlit)
+                .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
+                .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader);
             cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
 
             mipWidth  = mipWidth > 1 ? mipWidth / 2 : 1;
@@ -276,13 +270,13 @@ namespace Radiant
         }
 
         // NOTE: Last mip level isn't covered by being the blit SRC!
-        imageMemoryBarrier.subresourceRange.baseMipLevel = mipLevelCount - 1;
-        imageMemoryBarrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
-        imageMemoryBarrier.srcAccessMask                 = vk::AccessFlagBits2::eTransferWrite;
-        imageMemoryBarrier.srcStageMask                  = vk::PipelineStageFlagBits2::eAllTransfer;
-        imageMemoryBarrier.newLayout                     = vk::ImageLayout::eShaderReadOnlyOptimal;
-        imageMemoryBarrier.dstAccessMask                 = vk::AccessFlagBits2::eShaderSampledRead;
-        imageMemoryBarrier.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
+        imageMemoryBarrier.subresourceRange.setBaseMipLevel(mipLevelCount - 1);
+        imageMemoryBarrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+            .setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer)
+            .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
+            .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader);
         cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(imageMemoryBarrier));
     }
 

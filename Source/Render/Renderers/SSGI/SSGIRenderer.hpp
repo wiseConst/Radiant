@@ -2,7 +2,7 @@
 
 #include <Render/Renderers/Renderer.hpp>
 
-#include <radiance_cascades_defines.hpp>
+#include <radiance_cascades/radiance_cascades_defines.hpp>
 
 namespace Radiant
 {

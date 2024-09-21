@@ -4,7 +4,7 @@
 #include "../FullScreenQuad.slang"
 
 // Precalculated hemisphere kernel(TBN space)
-static const uint KERNEL_SIZE = 32;
+static const uint8_t KERNEL_SIZE = 32;
 static const float3 g_Kernel[KERNEL_SIZE] = {
     float3(-0.668154f, -0.084296f, 0.219458f), float3(-0.092521f, 0.141327f, 0.505343f),
     float3(-0.041960f, 0.700333f, 0.365754f),  float3(0.722389f, -0.015338f, 0.084357f),
@@ -25,18 +25,19 @@ static const float3 g_Kernel[KERNEL_SIZE] = {
 };
 
 // Samples from crysis's 4x4 rotation texture
-static const uint32_t ROT_SIZE = 16;
+static const uint8_t ROT_SIZE = 16;
 static const float3 g_RotationVectors[ROT_SIZE] = {
     float3(0.42745, 0.35686, 0.97255), float3(0.26667, 0.28235, 0.67843),
-    float3(0.26275, 0.38431, 0.35294), float3(0.35294, 0.60, 0.17647),
+    float3(0.26275, 0.38431, 0.35294), float3(0.35294, 0.60,    0.17647),
     float3(0.10588, 0.62745, 0.63922), float3(0.24314, 0.74118, 0.67059),
-    float3(0.19216, 0.61961, 0.62882), float3(0.3451, 0.54902, 0.4),
-    float3(0.4902, 0.60392, 0.29804),  float3(0.74902, 0.61176, 0.56863),
+    float3(0.19216, 0.61961, 0.62882), float3(0.3451, 0.54902,  0.4    ),
+    float3(0.4902, 0.60392,  0.29804), float3(0.74902, 0.61176, 0.56863),
     float3(0.62745, 0.54118, 0.89412), float3(0.56078, 0.46275, 0.51373),
     float3(0.96471, 0.06275, 0.27059), float3(0.95686, 0.20784, 0.52157),
     float3(0.75686, 0.10588, 0.81961), float3(0.44706, 0.08627, 0.36471)
 };
-static const uint32_t g_SampleCount = 16;
+static constexpr uint32_t g_SampleCount = 11;
+static constexpr float g_SampleCountInv = 1.0f / g_SampleCount;
 
 struct PushConstantBlock
 {
@@ -46,8 +47,8 @@ struct PushConstantBlock
 [vk::push_constant] PushConstantBlock u_PC;
 
 static const float g_SampleRadius = 0.25f;
-static const float g_SampleBias = 0.0285f;
-static const uint g_SSAOStrength = 2;
+static const float g_SampleBias = 0.025f;
+static const uint8_t g_SSAOStrength = 2;
 
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
@@ -66,18 +67,14 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     for (uint32_t i = 0; i < g_SampleCount; ++i)
     {
         const float3 sample = viewPos + mul(TBN, g_Kernel[i]) * g_SampleRadius;
-        
-        float4 offsetUV = float4(sample, 1.0f);
-        offsetUV = mul(u_PC.CameraData->ProjectionMatrix, offsetUV);
+
+        float4 offsetUV = mul(u_PC.CameraData->ProjectionMatrix, float4(sample, 1.0f));
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;
         
-       // if (Shaders::is_saturated(offsetUV.xy)) continue;
-
         const float sampledDepth = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(offsetUV.xy).r, u_PC.CameraData->DepthUnpackConsts);
         const float rangeCheck = smoothstep(0.0f, 1.0f, g_SampleRadius / abs(viewPos.z - sampledDepth));
         ao += step(sample.z + g_SampleBias, sampledDepth) * rangeCheck;
     }
-    ao /= (float)g_SampleCount;
-    // return saturate(1.0f - ao);
+    ao *= g_SampleCountInv;
     return pow(ao, g_SSAOStrength);
 }

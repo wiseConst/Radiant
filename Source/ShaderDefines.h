@@ -16,10 +16,9 @@ namespace Radiant
 
 #endif
 
-#define MAX_POINT_LIGHT_COUNT 128
+    static constexpr uint32_t s_IrradianceCubeMapSize = 64;
 
-// NOTE: AMD iGPU doesn't support storagePushConstant8/16, but I wanna preserve them on my NV dGPU so I can fastly transfer quantized data.
-#define RENDER_FORCE_IGPU 0
+#define MAX_POINT_LIGHT_COUNT 256
 
     struct VertexPosition
     {
@@ -85,7 +84,7 @@ namespace Radiant
 
         static const uint32_t s_RAINBOW_COLOR_COUNT                 = 8;
         static const float4 s_RAINBOW_COLORS[s_RAINBOW_COLOR_COUNT] = {
-            float4(1.0f, 0.0f, 0.0f, 1.0f),  // Red 
+            float4(1.0f, 0.0f, 0.0f, 1.0f),  // Red
             float4(0.0f, 1.0f, 0.0f, 1.0f),  // Green
             float4(0.0f, 0.0f, 1.0f, 1.0f),  // Blue
             float4(1.0f, 1.0f, 0.0f, 1.0f),  // Yellow
@@ -149,13 +148,40 @@ namespace Radiant
 
 #ifndef __cplusplus
 
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_F1[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float2> RWImage2D_Heap_F2[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_F3[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_F4[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<unorm float> RWImage2D_Heap_R8UNORM[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_R32F[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float2> RWImage2D_Heap_RG32F[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_RGB32F[s_MAX_BINDLESS_IMAGES];
+        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_RGBA32F[s_MAX_BINDLESS_IMAGES];
         [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] Sampler2D Texture_Heap[s_MAX_BINDLESS_TEXTURES];
         [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] SamplerCube Texture_Cube_Heap[s_MAX_BINDLESS_TEXTURES];
         [vk::binding(s_BINDLESS_SAMPLER_BINDING, 0)] SamplerState Sampler_Heap[s_MAX_BINDLESS_SAMPLERS];
+
+        // converting from 2D array index to 1D array index
+        inline uint flatten2D(const uint2 coords, const uint2 dim)
+        {
+            return coords.x + coords.y * dim.x;
+        }
+
+        // converting from 1D array index to 2D array index
+        inline uint2 unflatten2D(const uint idx, const uint2 dim)
+        {
+            return uint2(idx % dim.x, idx / dim.x);
+        }
+
+        // converting from 3D array index to 1D array index
+        inline uint flatten3D(const uint3 coords, const uint3 dim)
+        {
+            return flatten2D(coords.xy, dim.xy) + coords.z * dim.y * dim.x;
+        }
+
+        // converting from 1D array index to 3D array index
+        inline uint3 unflatten3D(uint idx, const uint3 dim)
+        {
+            const uint z = idx / (dim.x * dim.y);
+            idx -= (z * dim.x * dim.y);  // think of it, like we remove the height
+            return uint3(unflatten2D(idx, dim.xy), z);
+        }
 
         float3 RotateByQuat(const float3 v, const float4 quat /* x yzw = w xyz */)
         {
@@ -196,7 +222,7 @@ namespace Radiant
 
         float4 ScreenSpaceToView(const float2 uv, const float z, const float4x4 invProjectionMatrix)
         {
-            float4 p = mul(invProjectionMatrix, float4(uv * 2.0f - 1.0f, z, 1.0f));
+            const float4 p = mul(invProjectionMatrix, float4(uv * 2.0f - 1.0f, z, 1.0f));
             return p / p.w;
         }
 
@@ -282,11 +308,11 @@ namespace Radiant
             return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
         }
 
-        // FresnelSchlick, evaluating ratio of base reflectivity looking perpendicularly towards surface
-        float3 EvaluateFresnel(const float HdotV, const float3 F0)
+        // FresnelSchlick (IBL version optional), evaluating ratio of base reflectivity looking perpendicularly towards surface
+        float3 EvaluateFresnel(const float NdotV, const float3 F0, /*const float roughness,*/ const float3 F90 = float3(1.0f))
         {
-            static constexpr float F90 = 1.0f;
-            return F0 + (F90 - F0) * pow(1.0f - HdotV, 5.0f);
+            return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
+            //  return F0 + (max(float3(1.0f - roughness), F0) - F0) * pow(1.0f - NdotV, 5.0f);
         }
 
 #else

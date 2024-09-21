@@ -10,6 +10,8 @@ struct PushConstantBlock
 [vk::push_constant] PushConstantBlock u_PC;
 
 static const int32_t g_BlurSize = 2;
+static const int32_t g_SamplesInOneDimension = 2 * g_BlurSize + 1;
+static const float g_TotalSampleCountInv = 1.0f / (g_SamplesInOneDimension * g_SamplesInOneDimension);
 
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
@@ -19,7 +21,6 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     const float2 rcpTexDim = 1.0f / float2(width, height);
 
     float ao = 0.f;
-    uint accumulatedCount = 0;
     [unroll]
     for (int x = -g_BlurSize; x <= g_BlurSize; ++x)
     {
@@ -27,9 +28,8 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
         {
             const float2 offsetUV = rcpTexDim * float2(x, y);
             ao += Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(fsInput.uv + offsetUV).r;
-            ++accumulatedCount;
         }
     }
-    ao /= (float)accumulatedCount;
+    ao *= g_TotalSampleCountInv;
     return ao;
 }

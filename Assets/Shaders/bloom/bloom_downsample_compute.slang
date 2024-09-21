@@ -1,6 +1,7 @@
 // bloom_downsample_compute.slang
 
 #include "../../../Source/ShaderDefines.h"
+#include <bloom_defines.hpp>
 
 // This shader performs downsampling on a texture,
 // as taken from Call Of Duty method, presented at ACM Siggraph 2014.
@@ -19,29 +20,24 @@ struct PushConstantBlock
 };
 [[vk::push_constant]] PushConstantBlock u_PC;
 
-#define BLOOM_DOWNSAMPLE_WG_SIZE_X 8
-#define BLOOM_DOWNSAMPLE_WG_SIZE_Y 8
-#define BLOOM_DOWNSAMPLE_RADIUS 3
+static const uint TILE_SIZE_X = BLOOM_WG_SIZE_X + Shaders::s_DOWNSAMPLE_TILE_BORDER * 2;
+static const uint TILE_SIZE_Y = BLOOM_WG_SIZE_Y + Shaders::s_DOWNSAMPLE_TILE_BORDER * 2;
+static const uint2 TILE_SIZE = uint2(TILE_SIZE_X, TILE_SIZE_Y);
+groupshared float3 gs_SRC_TEXTURE_CACHE[TILE_SIZE_X * TILE_SIZE_Y];
 
-float RGBToLuminance(const float3 sRGBColor)
-{
-    return dot(sRGBColor, float3(0.299f, 0.587f, 0.114f));
-}
-
-float KarisAverage(const float3 color)
-{
-    // Formula is 1 / (1 + luma)
-    const float luma = RGBToLuminance(Shaders::Linear2sRGB(float4(color, 0.0f)).rgb);
-    return 1.0f / (1.0f + luma);
-}
-
-//groupshared float3 gs_texture_cache[(BLOOM_DOWNSAMPLE_WG_SIZE_X + 2) * (BLOOM_DOWNSAMPLE_WG_SIZE_Y + 2)];
-
-[numthreads(BLOOM_DOWNSAMPLE_WG_SIZE_X, BLOOM_DOWNSAMPLE_WG_SIZE_Y, 1)]
+[numthreads(BLOOM_WG_SIZE_X, BLOOM_WG_SIZE_Y, 1)]
 [shader("compute")]
-void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid: SV_GroupID, uint d : SV_GroupThreadID)
-{ 
-   // for(uint i = )
+void computeMain(uint3 DTid: SV_DispatchThreadID, const uint3 Gid: SV_GroupID, const uint3 GTid : SV_GroupThreadID, const uint GroupIndex : SV_GroupIndex)
+{
+    const int2 tileUpperLeft = Gid.xy * Shaders::g_BLOOM_WG_SIZE - Shaders::s_DOWNSAMPLE_TILE_BORDER;
+    [loop]
+    for (uint t = GroupIndex; t < TILE_SIZE_X * TILE_SIZE_Y; t += BLOOM_WG_SIZE_X * BLOOM_WG_SIZE_Y)
+    {
+        const uint2 pixelCorner = tileUpperLeft + Shaders::unflatten2D(t, TILE_SIZE);
+        const float2 uv = (pixelCorner + 0.5f) * u_PC.SrcTexelSize; // + 0.5f to make UV match pixel center
+        gs_SRC_TEXTURE_CACHE[t] = Shaders::Texture_Heap[u_PC.SrcTextureID].SampleLevel(uv, 0).rgb;
+    }
+    GroupMemoryBarrierWithGroupSync();
 
     // Take 13 samples around current texel:
     // a - b - c
@@ -50,30 +46,49 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid: SV_GroupID, uint d :
     // - l - m -
     // g - h - i
     // === ('e' is the current texel) ===
-    const float x = u_PC.SrcTexelSize.x;
-    const float y = u_PC.SrcTexelSize.y;
+    const uint2 baseTileIdx = GTid.xy + Shaders::s_DOWNSAMPLE_TILE_BORDER;
+    const uint gsCoords[13] = {
+        Shaders::flatten2D(baseTileIdx - int2(Shaders::s_DOWNSAMPLE_TILE_BORDER), TILE_SIZE),    // a
+        Shaders::flatten2D(baseTileIdx - int2(0, Shaders::s_DOWNSAMPLE_TILE_BORDER), TILE_SIZE), // b
+        Shaders::flatten2D(baseTileIdx + int2(Shaders::s_DOWNSAMPLE_TILE_BORDER, -Shaders::s_DOWNSAMPLE_TILE_BORDER), TILE_SIZE), // c
 
-    const float3 a = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 0));
-    const float3 b = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 0));
-    const float3 c = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 0));
+        Shaders::flatten2D(baseTileIdx - int2(int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f)), TILE_SIZE), // j
+        Shaders::flatten2D(baseTileIdx + int2(int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f), -int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f)), TILE_SIZE), // k
 
-    const float3 d = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, y));
-    const float3 e = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, y));
-    const float3 f = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, y));
+        Shaders::flatten2D(baseTileIdx - int2(Shaders::s_DOWNSAMPLE_TILE_BORDER, 0), TILE_SIZE), // d
+        Shaders::flatten2D(baseTileIdx, TILE_SIZE),                                              // e
+        Shaders::flatten2D(baseTileIdx + int2(Shaders::s_DOWNSAMPLE_TILE_BORDER, 0), TILE_SIZE), // f
 
-    const float3 g = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0, 2 * y));
-    const float3 h = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(x, 2 * y));
-    const float3 i = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(2 * x, 2 * y));
+        Shaders::flatten2D(baseTileIdx + int2(-int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f), int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f)), TILE_SIZE),  // l
+        Shaders::flatten2D(baseTileIdx + int2(int(Shaders::s_DOWNSAMPLE_TILE_BORDER * 0.5f)), TILE_SIZE), // m
 
-    const float3 j = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 0.5 * y));
-    const float3 k = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 1.5 * y));
-    const float3 l = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(0.5 * x, 1.5 * y));
-    const float3 m = Shaders::RWImage2D_Heap_F3[u_PC.SrcTextureID].Load(int2(DTid.xy) + int2(1.5 * x, 1.5 * y));
+        Shaders::flatten2D(baseTileIdx + int2(-Shaders::s_DOWNSAMPLE_TILE_BORDER, Shaders::s_DOWNSAMPLE_TILE_BORDER), TILE_SIZE),       // g    
+        Shaders::flatten2D(baseTileIdx + int2(0, Shaders::s_DOWNSAMPLE_TILE_BORDER), TILE_SIZE),        // h 
+        Shaders::flatten2D(baseTileIdx + int2(Shaders::s_DOWNSAMPLE_TILE_BORDER, 0), TILE_SIZE), // i
+    };
+
+    const float3 a = gs_SRC_TEXTURE_CACHE[gsCoords[0]];
+    const float3 b = gs_SRC_TEXTURE_CACHE[gsCoords[1]];
+    const float3 c = gs_SRC_TEXTURE_CACHE[gsCoords[2]];
+
+    const float3 j = gs_SRC_TEXTURE_CACHE[gsCoords[3]];
+    const float3 k = gs_SRC_TEXTURE_CACHE[gsCoords[4]];
+
+    const float3 d = gs_SRC_TEXTURE_CACHE[gsCoords[5]];
+    const float3 e = gs_SRC_TEXTURE_CACHE[gsCoords[6]];
+    const float3 f = gs_SRC_TEXTURE_CACHE[gsCoords[7]];
+
+    const float3 l = gs_SRC_TEXTURE_CACHE[gsCoords[8]];
+    const float3 m = gs_SRC_TEXTURE_CACHE[gsCoords[9]];
+
+    const float3 g = gs_SRC_TEXTURE_CACHE[gsCoords[10]];
+    const float3 h = gs_SRC_TEXTURE_CACHE[gsCoords[11]];
+    const float3 i = gs_SRC_TEXTURE_CACHE[gsCoords[12]];
     
     float3 finalColor = 0.0f;
     if (u_PC.MipLevel == 0)
     {
-        // NOTE: Fix firefly effect show in 166 slide in pptx https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
+        // NOTE: Fix firefly effect shown in 166 slide in pptx https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
 
         // We are reading mip 0, so we need to apply Karis average to each block
         // of 4 samples to prevent fireflies (very bright subpixels, leads to pulsating
@@ -85,8 +100,8 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid: SV_GroupID, uint d :
             (e + f + h + i) * 0.25f,
             (j + k + l + m) * 0.25f,
         };
-        const float kw[5] = { KarisAverage(groups[0]), KarisAverage(groups[1]), KarisAverage(groups[2]),
-                              KarisAverage(groups[3]), KarisAverage(groups[4]) };
+        const float kw[5] = { Shaders::KarisAverage(groups[0]), Shaders::KarisAverage(groups[1]), Shaders::KarisAverage(groups[2]),
+                              Shaders::KarisAverage(groups[3]), Shaders::KarisAverage(groups[4]) };
 
         // NOTE: Energy conserving, renormalizing the Karis average weights themselves to avoid the bloom becoming noticeably darker.
         finalColor = (kw[0] * groups[0] + kw[1] * groups[1] + kw[2] * groups[2] + kw[3] * groups[3] + kw[4] * groups[4]) / (kw[0] + kw[1] + kw[2] + kw[3] + kw[4]);
@@ -112,5 +127,5 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid: SV_GroupID, uint d :
 
     // NOTE: To get rid of black boxes.
     finalColor = max(finalColor, Shaders::s_KINDA_SMALL_NUMBER);
-    Shaders::RWImage2D_Heap_F3[u_PC.DstTextureID][DTid.xy] = finalColor;
+    Shaders::RWImage2D_Heap_RGBA32F[u_PC.DstTextureID][DTid.xy] = float4(finalColor, 1.0f);
 }

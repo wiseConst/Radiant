@@ -96,5 +96,5 @@ void computeMain(uint3 gid : SV_DispatchThreadID)
 
     const float3 viewPos = Shaders::ScreenSpaceToView(uv, Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(uv, 0).r, u_PC.CameraData->InvProjectionMatrix).xyz;
     const float3 lightDir = u_PC.SunDirection;                    // Vector from origin to sun
-    Shaders::RWImage2D_Heap_F1[u_PC.SSSTextureID][gid.xy] = 1.0f;//1.0f - ScreenSpaceShadows(uv, viewPos, lightDir);
+    Shaders::RWImage2D_Heap_R32F[u_PC.SSSTextureID][gid.xy] = 1.0f;//1.0f - ScreenSpaceShadows(uv, viewPos, lightDir);
 }

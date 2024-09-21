@@ -2,6 +2,7 @@
 
 #include "../../../Source/ShaderDefines.h"
 #include "../FullScreenQuad.slang"
+#include <bloom_defines.hpp>
 
 // This shader performs downsampling on a texture,
 // as taken from Call Of Duty method, presented at ACM Siggraph 2014.
@@ -14,22 +15,10 @@
 struct PushConstantBlock
 {
     uint32_t SrcTextureID;
-    float2 SrcTexelSize; // rcp(SrcTextureResolution)
     uint32_t mipLevel;
+    float2 SrcTexelSize; // rcp(SrcTextureResolution)
 };
 [vk::push_constant] PushConstantBlock u_PC;
-
-float RGBToLuminance(const float3 colorSRGB)
-{
-    return dot(colorSRGB, float3(0.299f, 0.587f, 0.114f));
-}
-
-float KarisAverage(const float3 color)
-{ 
-    // Formula is 1 / (1 + luma)
-    const float luma = RGBToLuminance(Shaders::Linear2sRGB(float4(color, 0.0f)).rgb);
-    return 1.0f / (1.0f + luma);
-}
 
 [shader("fragment")]
 float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
@@ -64,7 +53,7 @@ float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     float3 finalColor = 0.0f;
     if (u_PC.mipLevel == 0)
     {
-        // NOTE: Fix firefly effect show in 166 slide in pptx https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
+        // NOTE: Fix firefly effect shown in 166 slide in pptx https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
 
         // We are reading mip 0, so we need to apply Karis average to each block
         // of 4 samples to prevent fireflies (very bright subpixels, leads to pulsating
@@ -76,8 +65,8 @@ float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
             (e + f + h + i) * 0.25f,
             (j + k + l + m) * 0.25f,
         };
-        const float kw[5] = { KarisAverage(groups[0]), KarisAverage(groups[1]), KarisAverage(groups[2]), 
-            KarisAverage(groups[3]), KarisAverage(groups[4]) };
+        const float kw[5] = { Shaders::KarisAverage(groups[0]), Shaders::KarisAverage(groups[1]), Shaders::KarisAverage(groups[2]), 
+                              Shaders::KarisAverage(groups[3]), Shaders::KarisAverage(groups[4]) };
 
         // NOTE: Energy conserving, renormalizing the Karis average weights themselves to avoid the bloom becoming noticeably darker.
         finalColor = (kw[0] * groups[0] + kw[1] * groups[1] + kw[2] * groups[2] + kw[3] * groups[3] + kw[4] * groups[4]) / (kw[0] + kw[1] + kw[2] + kw[3] + kw[4]);

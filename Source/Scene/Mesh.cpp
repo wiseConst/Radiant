@@ -176,15 +176,14 @@ namespace Radiant
                             std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap by loading actual texture
                             loadedTexture = MakeShared<GfxTexture>(
                                 gfxContext->GetDevice(),
-                                GfxTextureDescription(vk::ImageType::e2D, {width, height, 1}, vk::Format::eR8G8B8A8Unorm,
-                                                      vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
-                                                      samplerCI, 1, vk::SampleCountFlagBits::e1,
+                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1), vk::Format::eR8G8B8A8Unorm,
+                                                      vk::ImageUsageFlagBits::eTransferDst, samplerCI, 1, vk::SampleCountFlagBits::e1,
                                                       EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
-                        const auto imageSize = static_cast<u64>(width * height * channels);
+                        const auto imageSize = static_cast<u64>(width * height * channels * sizeof(u8));
                         auto stagingBuffer   = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
                                                                    GfxBufferDescription(imageSize, /* placeholder */ 1,
                                                                                           vk::BufferUsageFlagBits::eTransferSrc,
@@ -246,12 +245,7 @@ namespace Radiant
                         }
 
                         executionContext.CommandBuffer.end();
-
-                        {
-                            std::scoped_lock lock(gfxContext->GetMutex());  // Synchronizing access to single queue
-                            executionContext.Queue.submit(vk::SubmitInfo().setCommandBuffers(executionContext.CommandBuffer));
-                            executionContext.Queue.waitIdle();
-                        }
+                        GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
 
                         GfxTextureUtils::UnloadImage(imageData);
                     },
@@ -482,10 +476,11 @@ namespace Radiant
                 {
                     const auto& indicesAccessor = asset->accessors[*primitive.indicesAccessor];
 
-                    const auto parsedIndexType  = (indicesAccessor.componentType == fastgltf::ComponentType::UnsignedByte ||
-                                                  indicesAccessor.componentType == fastgltf::ComponentType::UnsignedShort)
-                                                      ? vk::IndexType::eUint16
-                                                      : vk::IndexType::eUint32;
+                    const auto parsedIndexType =
+                        indicesAccessor.componentType == fastgltf::ComponentType::UnsignedByte
+                            ? vk::IndexType::eUint8EXT
+                            : (indicesAccessor.componentType == fastgltf::ComponentType::UnsignedShort ? vk::IndexType::eUint16
+                                                                                                       : vk::IndexType::eUint32);
                     currentMeshAsset->IndexType = currentMeshAsset->IndexType == vk::IndexType::eNoneKHR
                                                       ? parsedIndexType
                                                       : std::max(currentMeshAsset->IndexType, parsedIndexType);
@@ -495,10 +490,13 @@ namespace Radiant
                                                    [&](u32 idx)
                                                    {
                                                        indicesUint32.emplace_back(initialVertexIndex + idx);
-                                                       // NOTE: Check if index > u16::max() and then switch to index type u32.
-                                                       currentMeshAsset->IndexType = indicesUint32.back() > std::numeric_limits<u16>::max()
-                                                                                         ? vk::IndexType::eUint32
-                                                                                         : currentMeshAsset->IndexType;
+
+                                                       // NOTE: Check if index > u16/u8::max() and then switch to index type u32/u16.
+                                                       if (indicesUint32.back() > std::numeric_limits<u8>::max())
+                                                           currentMeshAsset->IndexType = vk::IndexType::eUint16;
+
+                                                       if (indicesUint32.back() > std::numeric_limits<u16>::max())
+                                                           currentMeshAsset->IndexType = vk::IndexType::eUint32;
                                                    });
                 }
 
@@ -561,20 +559,41 @@ namespace Radiant
             currentMeshAsset->VertexPositionBufferID  = VertexPositionBuffers.size();
             currentMeshAsset->VertexAttributeBufferID = VertexAttributeBuffers.size();
 
-            // NOTE:
             // I store indices as uint32, but in case index type is different, then encoding also different.
-            // For now I do expose only u16/u32, in future will be u8 as well.
+            // Handle indices with different types.
+            u64 ibElementSize{sizeof(indicesUint32[0])};
+            u64 ibSize{indicesUint32.size() * ibElementSize};
+            void* ibData{indicesUint32.data()};
             std::vector<u16> indicesUint16{};
-            if (currentMeshAsset->IndexType != vk::IndexType::eUint32)
+            std::vector<u8> indicesUint8{};
+            if (currentMeshAsset->IndexType == vk::IndexType::eUint32)
+            {
+                MeshoptimizerUtils::OptimizeMesh(indicesUint32, vertexPositions, vertexAttributes);
+            }
+            else if (currentMeshAsset->IndexType == vk::IndexType::eUint16)
             {
                 indicesUint16.reserve(indicesUint32.size());
                 std::transform(indicesUint32.begin(), indicesUint32.end(), std::back_inserter(indicesUint16),
                                [](const u32 indexUint32) noexcept { return static_cast<u16>(indexUint32); });
                 indicesUint32.clear();  // Clear to save memory footprint.
                 MeshoptimizerUtils::OptimizeMesh(indicesUint16, vertexPositions, vertexAttributes);
+
+                ibElementSize = sizeof(indicesUint16[0]);
+                ibSize        = indicesUint16.size() * ibElementSize;
+                ibData        = indicesUint16.data();
             }
-            else
-                MeshoptimizerUtils::OptimizeMesh(indicesUint32, vertexPositions, vertexAttributes);
+            else if (currentMeshAsset->IndexType == vk::IndexType::eUint8EXT)
+            {
+                indicesUint8.reserve(indicesUint32.size());
+                std::transform(indicesUint32.begin(), indicesUint32.end(), std::back_inserter(indicesUint8),
+                               [](const u32 indexUint32) noexcept { return static_cast<u16>(indexUint32); });
+                indicesUint32.clear();  // Clear to save memory footprint.
+                MeshoptimizerUtils::OptimizeMesh(indicesUint8, vertexPositions, vertexAttributes);
+
+                ibElementSize = sizeof(indicesUint8[0]);
+                ibSize        = indicesUint8.size() * ibElementSize;
+                ibData        = indicesUint8.data();
+            }
 
             const auto [cmd, queue] =
                 gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT);
@@ -608,22 +627,15 @@ namespace Radiant
             cmd->copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
                             vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
 
-            // Handle indices with different types.
-            const auto ibBufferElementSize =
-                currentMeshAsset->IndexType == vk::IndexType::eUint32 ? sizeof(indicesUint32[0]) : sizeof(indicesUint16[0]);
-            const auto ibBufferSize = currentMeshAsset->IndexType == vk::IndexType::eUint32 ? indicesUint32.size() * ibBufferElementSize
-                                                                                            : indicesUint16.size() * ibBufferElementSize;
-            auto ibStagingBuffer    = MakeUnique<GfxBuffer>(
-                gfxContext->GetDevice(), GfxBufferDescription(ibBufferSize, ibBufferElementSize, vk::BufferUsageFlagBits::eTransferSrc,
-                                                                 EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
-            ibStagingBuffer->SetData(currentMeshAsset->IndexType == vk::IndexType::eUint32 ? (const void*)indicesUint32.data()
-                                                                                           : (const void*)indicesUint16.data(),
-                                     ibBufferSize);
+            auto ibStagingBuffer = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
+                                                         GfxBufferDescription(ibSize, ibElementSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                              EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
+            ibStagingBuffer->SetData(ibData, ibSize);
 
             auto& ibBuffer = IndexBuffers.emplace_back(MakeShared<GfxBuffer>(
-                gfxContext->GetDevice(), GfxBufferDescription(ibBufferSize, ibBufferElementSize, vk::BufferUsageFlagBits::eIndexBuffer,
+                gfxContext->GetDevice(), GfxBufferDescription(ibSize, ibElementSize, vk::BufferUsageFlagBits::eIndexBuffer,
                                                               EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
-            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(ibBufferSize));
+            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(ibSize));
 
             cmd->end();
             queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));

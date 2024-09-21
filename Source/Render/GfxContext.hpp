@@ -101,7 +101,7 @@ namespace Radiant
     {
         vk::UniqueCommandPool CommandPool{};
         vk::CommandBuffer CommandBuffer{};
-        vk::Queue Queue{};
+        ECommandBufferTypeBits CommandBufferType{};
     };
 
     class GfxContext final : private Uncopyable, private Unmovable
@@ -112,6 +112,16 @@ namespace Radiant
 
         bool BeginFrame() noexcept;
         void EndFrame() noexcept;
+
+        NODISCARD FORCEINLINE const auto& GetSupportedPresentModesList() const noexcept { return m_SupportedPresentModes; }
+        FORCEINLINE void SetPresentMode(const vk::PresentModeKHR newPresentMode) noexcept
+        {
+            if (newPresentMode == m_PresentMode) return;
+
+            m_PresentMode           = newPresentMode;
+            m_bSwapchainNeedsResize = true;
+        }
+        NODISCARD FORCEINLINE const auto GetPresentMode() const noexcept { return m_PresentMode; }
 
         NODISCARD FORCEINLINE auto& GetCurrentFrameData() const noexcept { return m_FrameData[m_CurrentFrameIndex]; }
         NODISCARD FORCEINLINE const auto& GetInstance() const noexcept { return m_Instance; }
@@ -139,7 +149,7 @@ namespace Radiant
             {
                 case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
                 {
-                    context.Queue = m_Device->GetGeneralQueue().Handle;
+                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT;
                     context.CommandPool =
                         logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
                                                                    .setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex)
@@ -148,7 +158,7 @@ namespace Radiant
                 }
                 case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
                 {
-                    context.Queue = m_Device->GetComputeQueue().Handle;
+                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT;
                     context.CommandPool =
                         logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
                                                                    .setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex)
@@ -158,7 +168,7 @@ namespace Radiant
                 }
                 case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
                 {
-                    context.Queue = m_Device->GetTransferQueue().Handle;
+                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT;
                     context.CommandPool =
                         logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
                                                                    .setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex)
@@ -176,6 +186,34 @@ namespace Radiant
                                                                      .setCommandBufferCount(1))
                                         .back();
             return context;
+        }
+
+        void SubmitImmediateExecuteContext(const GfxImmediateExecuteContext& ieContext) const noexcept
+        {
+            vk::Queue queue{};
+            switch (ieContext.CommandBufferType)
+            {
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
+                {
+                    queue = m_Device->GetGeneralQueue().Handle;
+                    break;
+                }
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
+                {
+                    queue = m_Device->GetComputeQueue().Handle;
+                    break;
+                }
+                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
+                {
+                    queue = m_Device->GetTransferQueue().Handle;
+                    break;
+                }
+                default: RDNT_ASSERT(false, "Unknown command buffer type!");
+            }
+
+            std::scoped_lock lock(m_Mtx);  // Synchronizing access to single queue
+            queue.submit(vk::SubmitInfo().setCommandBuffers(ieContext.CommandBuffer));
+            queue.waitIdle();
         }
 
         NODISCARD std::tuple<vk::UniqueCommandBuffer, vk::Queue> AllocateSingleUseCommandBufferWithQueue(
@@ -280,6 +318,8 @@ namespace Radiant
         vk::Format m_SwapchainImageFormat{};
         vk::UniqueSurfaceKHR m_Surface{};
         vk::UniqueSwapchainKHR m_Swapchain{};
+        vk::PresentModeKHR m_PresentMode{vk::PresentModeKHR::eFifo};
+        std::vector<vk::PresentModeKHR> m_SupportedPresentModes;
         u32 m_CurrentFrameIndex{0};
         u32 m_CurrentImageIndex{0};
         std::vector<vk::UniqueImageView> m_SwapchainImageViews;

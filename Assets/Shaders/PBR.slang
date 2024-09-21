@@ -23,8 +23,9 @@ struct VSOutput
 
 struct MainPassShaderData
 {
-    uint32_t SSAOTextureID;
-    uint32_t SSSTextureID;
+    uint EnvironmentMapTextureCubeID;
+    uint SSAOTextureID;
+    uint SSSTextureID;
     float2 ScaleBias; // For clustered shading, x - scale, y - bias
     const Shaders::CascadedShadowMapsData *CSMData;
     uint CSMTextureIDs[SHADOW_MAP_CASCADE_COUNT];
@@ -58,7 +59,7 @@ VSOutput vertexMain(uint32_t vertexID: SV_VertexID)
     output.sv_position = mul(u_PC.CameraData->ViewProjectionMatrix, float4(worldPos, 1.0f));
     output.FSInput.FragPosVS = mul(u_PC.CameraData->ViewMatrix, float4(worldPos, 1.0f)).xyz;
 
-    const float3x3 normalMatrix = Shaders::QuatToRotMat3(u_PC.orientation);
+    const float3x3 normalMatrix = transpose(Shaders::QuatToRotMat3(u_PC.orientation)); // NOTE: idk if I need transpose(), cuz I use CR, but slang constructs matrices in RC layout
     output.FSInput.Normal = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Normal)));
     
     float3 T = normalize(mul(normalMatrix, Shaders::DecodeOct(u_PC.VtxAttributes[vertexID].Tangent)));
@@ -81,21 +82,21 @@ float3 EvaluateNormalMap(const float3 T, const float3 B, const float3 N, const f
 }
 
 // NOTE: Input: normalized vectors V, L, N.
-float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 L, const float3 N)
+float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 albedoOverPi, const float2 metallicRoughness, const float3 V, const float3 L, const float3 N)
 {
     const float3 H = normalize(V + L);
 
-    const float NdotH = max(dot(N, H), 0.0f);
-    const float NdotV = max(dot(N, V), 0.0f);
-    const float NdotL = max(dot(N, L), 0.0f);
-    const float HdotV = max(dot(H, V), 0.0f);
+    const float NdotH = max(dot(N, H), Shaders::s_KINDA_SMALL_NUMBER);
+    const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
+    const float NdotL = max(dot(N, L), Shaders::s_KINDA_SMALL_NUMBER);
+    const float HdotV = max(dot(H, V), Shaders::s_KINDA_SMALL_NUMBER);
 
-    const float3 F = Shaders::EvaluateFresnel(HdotV, F0); // kS
+    const float3 F = Shaders::EvaluateFresnel(NdotV, F0/*, metallicRoughness.y*/); // kS
     const float3 DFG = Shaders::EvaluateDistributionGGX(NdotH, metallicRoughness.y) * Shaders::EvaluateGeometrySmith(NdotV, NdotL, metallicRoughness.y) * F;
-    const float denom = max(4 * NdotV * NdotL, Shaders::s_KINDA_SMALL_NUMBER);
+    const float denom = 4 * NdotV * NdotL;
     const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
 
-    return NdotL * lightColor * (Shaders::s_RcpPI * kD * albedo + DFG / denom);
+    return NdotL * lightColor * (albedoOverPi * kD + DFG / denom);
 }
 
 #define VISUALIZE_LIGHT_CLUSTERS_SUBDIVISION 0
@@ -121,16 +122,16 @@ float4 Heatmap(uint lightCount)
 }
 #endif
 
-void ProcessSinglePointLight(const uint pointLightIndex, inout float3 irradiance, const float3 fragPosWS, const float3 F0, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 N)
+void ProcessSinglePointLight(const uint pointLightIndex, inout float3 irradiance, const float3 fragPosWS, const float3 F0, const float3 albedoOverPi, const float2 metallicRoughness, const float3 V, const float3 N)
 {
     PointLight pl = u_PC.LightData->PointLights[pointLightIndex];
     const float lightToFragDistance = length(pl.sphere.Origin - fragPosWS);
     const float att = max(min(1.0f - pow(lightToFragDistance / pl.sphere.Radius, 4), 1.0f), 0.0f) / pow(lightToFragDistance, 2);
     const float3 L = normalize(pl.sphere.Origin - fragPosWS);
-    irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedo, metallicRoughness, V, L, N);
+    irradiance += att * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(pl.Color).xyz * pl.Intensity, albedoOverPi, metallicRoughness, V, L, N);
 }
 
-void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const float3 fragPosWS, const float3 F0, const float3 albedo, const float2 metallicRoughness, const float3 V, const float3 N)
+void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const float3 fragPosWS, const float3 F0, const float3 albedoOverPi, const float2 metallicRoughness, const float3 V, const float3 N)
 {
     // Read range of words of visibility bits.
     for (uint bitmaskIndex = 0; bitmaskIndex < LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE; ++bitmaskIndex)
@@ -140,7 +141,7 @@ void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const f
         {
             const uint lightBitIndex = firstbitlow(currentBitmask);
             const uint lightIndex = bitmaskIndex * LIGHT_CLUSTERS_WORD_SIZE + lightBitIndex;
-            ProcessSinglePointLight(lightIndex, irradiance, fragPosWS, F0, albedo, metallicRoughness, V, N);
+            ProcessSinglePointLight(lightIndex, irradiance, fragPosWS, F0, albedoOverPi, metallicRoughness, V, N);
             currentBitmask ^= (1u << lightBitIndex); // Remove(xor) processed light.
         }
     }
@@ -151,7 +152,7 @@ uint GetLightClusterIndex(const float2 fullResolution, const uint3 lightClusterS
     // Locating which cluster this fragment is part of.
     const float2 froxelSize = fullResolution * invLightClusterSubdivisions.xy;
     const uint3 froxelID = uint3(uint2(fragCoord.xy / froxelSize), slice);
-    return froxelID.x + froxelID.y * lightClusterSubdivisions.x + froxelID.z * lightClusterSubdivisions.x * lightClusterSubdivisions.y;
+    return Shaders::flatten3D(froxelID, lightClusterSubdivisions);
 }
 
 [shader("fragment")]
@@ -166,16 +167,14 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     return Shaders::s_RAINBOW_COLORS[slice % Shaders::s_RAINBOW_COLOR_COUNT] * float4(float3(0.8f), 1.0f);
 #endif
 
-    // return float4(float3(Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(globalUV).r), 1.0f);
-    // return float4( float3(Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r), 1.0f);
+   // return float4(float3(Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r), 1.0f);
+   //  return float4( float3(Shaders::Texture_Heap[u_PC.MPSData.SSSTextureIDD].Sample(globalUV).r), 1.0f);
 
     const Shaders::GLTFMaterial *materialData = u_PC.MaterialData;
     const float4 albedo = fsInput.Color * Shaders::UnpackUnorm4x8(materialData->PbrData.BaseColorFactor) * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->PbrData.AlbedoTextureID].Sample(fsInput.UV));
 
     const float3 emissive = materialData->EmissiveFactor * Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-    const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-    const float3 ambient = float3(0.03f) * albedo.rgb * ao;
-    float3 irradiance = ambient + emissive;
+    float3 irradiance = emissive;
 
     const float3 V = normalize(u_PC.CameraData->Position - fsInput.FragPosWS);
     const float3 N = EvaluateNormalMap(fsInput.Tangent, fsInput.Bitangent, fsInput.Normal, fsInput.UV, materialData);
@@ -216,7 +215,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
                 for (int y = -1; y <= 1; ++y)
                 {
                     const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[layer]].Sample(projCoords.xy + float2(x,y) * texelSize).r;
-                    shadow += (currentDepth + bias) > sampledDepth ? 1.0 : 0.0;
+                    shadow += (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
                 }
             }
             shadow /= 9.0f;
@@ -227,10 +226,11 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
         }
     }
 
-    irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ (1.0f - shadow) * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedo.rgb, metallicRoughness, V, dirL, N);
+    const float3 albedoOverPi = albedo.rgb * Shaders::s_RcpPI;
+    irradiance += /*Shaders::Texture_Heap[u_PC.SSSTextureID].Sample(globalUV).r **/ (1.0f - shadow) * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedoOverPi, metallicRoughness, V, dirL, N);
 
     const uint froxelIndex = GetLightClusterIndex( u_PC.CameraData.FullResolution, uint3(LIGHT_CLUSTERS_SUBDIVISION_X, LIGHT_CLUSTERS_SUBDIVISION_Y, LIGHT_CLUSTERS_SUBDIVISION_Z), Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS, slice, fragCoord.xy);
-    ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedo.rgb, metallicRoughness, V, N);
+    ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedoOverPi, metallicRoughness, V, N);
 
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
     uint heatmapPointLightCount = 0;
@@ -247,6 +247,21 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     }
     return lerp(Heatmap(heatmapPointLightCount), float4(irradiance, albedo.a), 0.3f);
 #endif
+
+    // Ambient / indirect part
+    if (u_PC.MPSData.EnvironmentMapTextureCubeID != 0) {
+        const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.EnvironmentMapTextureCubeID].Sample(N).rgb;
+        const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
+        const float3 kD = 1.0f - Shaders::EvaluateFresnel(NdotV, F0);
+        const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+        const float3 ambient = kD * cubemapIrradiance * albedo.rgb * ao;
+        irradiance += ambient;
+    } 
+    //else {
+    //    const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+    //    const float3 ambient = 0.03f * albedo.rgb * ao;
+    //    irradiance += ambient;
+    //}
 
     if (albedo.a < materialData->AlphaCutoff) discard;
     return float4(irradiance, albedo.a);

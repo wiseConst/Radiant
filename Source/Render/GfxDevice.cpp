@@ -11,16 +11,27 @@
 
 namespace Radiant
 {
+#if RDNT_DEBUG
+    static constexpr const char* s_PipelineCacheName = "pso_cache_debug.bin";
+#elif RDNT_RELEASE
+    static constexpr const char* s_PipelineCacheName = "pso_cache_release.bin";
+#else
+#error Unknown build type!
+#endif
+
+#define RENDER_FORCE_IGPU 0
+
     void GfxDevice::Init(const vk::UniqueInstance& instance, const vk::UniqueSurfaceKHR& surface) noexcept
     {
         std::vector<const char*> requiredDeviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,                 // For rendering into OS-window
             VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,  // To neglect viewport state definition on pipeline creation
             VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,             // Provides query for current memory usage and budget.
-#if RDNT_DEBUG
-            VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,  // debugPrintEXT shaders
-#endif
+            VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME,          // uint8 index buffer
         };
+
+        // debugPrintEXT shaders
+        if constexpr (s_bShaderDebugPrintf) requiredDeviceExtensions.emplace_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
 
         if constexpr (s_bRequireMeshShading) requiredDeviceExtensions.emplace_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
@@ -47,31 +58,27 @@ namespace Radiant
         // The train starts here...
         void** paravozik = &vkFeatures13.pNext;
 
-        auto vkFeatures12 = vk::PhysicalDeviceVulkan12Features()
-                                .setBufferDeviceAddress(vk::True)
-                                .setScalarBlockLayout(vk::True)
-#if !RENDER_FORCE_IGPU
-                                .setStoragePushConstant8(vk::True)
-#endif
-                                .setShaderInt8(vk::True)
-                                .setShaderFloat16(vk::True)
-                                .setTimelineSemaphore(vk::True)
-                                .setHostQueryReset(vk::True)
-                                .setDescriptorIndexing(vk::True)
-                                .setDescriptorBindingPartiallyBound(vk::True)
-                                .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
-                                .setDescriptorBindingStorageImageUpdateAfterBind(vk::True)
-                                .setDescriptorBindingUpdateUnusedWhilePending(vk::True)
-                                .setRuntimeDescriptorArray(vk::True);
+        auto vkFeatures12 =
+            vk::PhysicalDeviceVulkan12Features()
+                .setBufferDeviceAddress(vk::True)
+                .setScalarBlockLayout(vk::True)
+                .setShaderInt8(vk::True)
+                .setShaderFloat16(vk::True)
+                .setShaderOutputLayer(vk::True)  // Used for transforming equirectangular map to cube map(instance rendering cube 6 times).
+                .setTimelineSemaphore(vk::True)
+                .setHostQueryReset(vk::True)
+                .setDescriptorIndexing(vk::True)
+                .setDescriptorBindingPartiallyBound(vk::True)
+                .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
+                .setDescriptorBindingStorageImageUpdateAfterBind(vk::True)
+                .setDescriptorBindingUpdateUnusedWhilePending(vk::True)
+                .setRuntimeDescriptorArray(vk::True);
 
         *paravozik = &vkFeatures12;
         paravozik  = &vkFeatures12.pNext;
 
         auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features()
                                 .setShaderDrawParameters(vk::True)
-#if !RENDER_FORCE_IGPU
-                                .setStoragePushConstant16(vk::True)
-#endif
                                 .setVariablePointers(vk::True)                // NOTE: Fucking slang requires it
                                 .setVariablePointersStorageBuffer(vk::True);  // NOTE: Fucking slang requires it
 
@@ -101,19 +108,22 @@ namespace Radiant
             paravozik  = &meshShaderFeaturesEXT.pNext;
         }
 
-        constexpr vk::PhysicalDeviceFeatures requiredDeviceFeatures =
-            vk::PhysicalDeviceFeatures()
-                .setShaderInt16(vk::True)
-                .setShaderInt64(vk::True)
-                .setFillModeNonSolid(vk::True)
-                .setMultiDrawIndirect(vk::True)
-                .setSamplerAnisotropy(vk::True)
-                .setPipelineStatisticsQuery(vk::True)
-                // .setGeometryShader(vk::True)
-                // TODO: Integrate AMD Compressonator .setTextureCompressionBC(vk::True)
-                .setShaderStorageImageArrayDynamicIndexing(vk::True)
-                .setShaderSampledImageArrayDynamicIndexing(vk::True);
-        SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, requiredDeviceFeatures, &vkFeatures13);
+        auto indexTypeUint8FeaturesEXT = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT().setIndexTypeUint8(vk::True);
+        *paravozik                     = &indexTypeUint8FeaturesEXT;
+        paravozik                      = &indexTypeUint8FeaturesEXT.pNext;
+
+        constexpr vk::PhysicalDeviceFeatures vkFeatures10 = vk::PhysicalDeviceFeatures()
+                                                                .setShaderInt16(vk::True)
+                                                                .setShaderInt64(vk::True)
+                                                                .setFillModeNonSolid(vk::True)
+                                                                .setMultiDrawIndirect(vk::True)
+                                                                .setSamplerAnisotropy(vk::True)
+                                                                .setPipelineStatisticsQuery(vk::True)
+                                                                // .setGeometryShader(vk::True)
+                                                                // TODO: Integrate AMD Compressonator .setTextureCompressionBC(vk::True)
+                                                                .setShaderStorageImageArrayDynamicIndexing(vk::True)
+                                                                .setShaderSampledImageArrayDynamicIndexing(vk::True);
+        SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, vkFeatures10, &vkFeatures13);
 
         InitVMA(instance);
         LoadPipelineCache();
@@ -312,9 +322,10 @@ namespace Radiant
     {
         auto pipelineCacheCI = vk::PipelineCacheCreateInfo();
         std::vector<u8> pipelineCacheBlob;
-        if (std::filesystem::exists("pso_cache.bin"))
+
+        if (std::filesystem::exists(s_PipelineCacheName))
         {
-            pipelineCacheBlob = CoreUtils::LoadData<u8>("pso_cache.bin");
+            pipelineCacheBlob = CoreUtils::LoadData<u8>(s_PipelineCacheName);
 
             // Validate retrieved pipeline cache.
             vk::PipelineCacheHeaderVersionOne pipelineCacheHeader{};
@@ -455,7 +466,8 @@ namespace Radiant
                                    VmaAllocation& allocation) const noexcept
     {
         const bool bIsReBARRequired = extraBufferFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT;
-        const bool bIsDeviceLocal   = extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT;
+        const bool bIsDeviceLocal   = (extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT) &&
+                                    !(extraBufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT);
 
         VkMemoryPropertyFlags requiredFlags{0};
         VmaAllocationCreateFlags allocationCreateFlags{0};
@@ -533,7 +545,7 @@ namespace Radiant
             PopBindlessThing(samplerPair.second, Shaders::s_BINDLESS_SAMPLER_BINDING);
 
         vmaDestroyAllocator(m_Allocator);
-        CoreUtils::SaveData("pso_cache.bin", m_Device->getPipelineCacheData(*m_PipelineCache));
+        CoreUtils::SaveData(s_PipelineCacheName, m_Device->getPipelineCacheData(*m_PipelineCache));
     }
 
 }  // namespace Radiant

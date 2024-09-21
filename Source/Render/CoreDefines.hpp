@@ -12,6 +12,7 @@ namespace Radiant
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr bool s_bRequireRayTracing         = false;
     static constexpr bool s_bRequireMeshShading        = false;
+    static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
 
     enum class ECommandBufferTypeBits : u8
     {

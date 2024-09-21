@@ -69,23 +69,23 @@ endif()
 # ============= ThirdParty =============
 
 # AMD compressonator(currently WINDOWS only)
-set(AMD_COMPRESSONATOR_VERSION 4.5.52)
-set(AMD_COMPRESSONATOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Compressonator_${AMD_COMPRESSONATOR_VERSION}")
-target_include_directories(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/include)
-
-if (WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/lib/Compressonator_MT_DLL.lib)
-
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
-    )
-
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
-    )
-endif()
+#set(AMD_COMPRESSONATOR_VERSION 4.5.52)
+#set(AMD_COMPRESSONATOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Compressonator_${AMD_COMPRESSONATOR_VERSION}")
+#target_include_directories(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/include)
+#
+#if (WIN32)
+#    target_link_libraries(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/lib/Compressonator_MT_DLL.lib)
+#
+#    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#        COMMAND ${CMAKE_COMMAND} -E copy_directory
+#         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
+#    )
+#
+#    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#        COMMAND ${CMAKE_COMMAND} -E copy_directory
+#         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
+#    )
+#endif()
 
 # graphviz
 set(GRAPHVIZ_VERSION 12.1.0)

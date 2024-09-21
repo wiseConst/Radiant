@@ -44,10 +44,9 @@ namespace Radiant
         // NOTE: This count defines how many lights can be processed in a single workgroup, better to be a multiple of shared light count!
 #define LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT 6144
 
-
 #define LIGHT_CLUSTERS_DETECT_ACTIVE 0
 #define LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_X 8
-#define LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_Y 8
+#define LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_Y 4
 #define LIGHT_CLUSTERS_ACTIVE_CLUSTERS_BITMASK_ARRAY_SIZE ((LIGHT_CLUSTERS_COUNT + LIGHT_CLUSTERS_WORD_SIZE - 1) / LIGHT_CLUSTERS_WORD_SIZE)
         struct LightClusterActiveList
         {

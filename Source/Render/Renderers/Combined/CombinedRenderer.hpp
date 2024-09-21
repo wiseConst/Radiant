@@ -17,6 +17,7 @@ namespace Radiant
         void RenderFrame() noexcept final override;
 
       private:
+        // clustered light culling
         Unique<GfxPipeline> m_LightClustersBuildPipeline{nullptr};
         Unique<GfxPipeline> m_LightClustersDetectActivePipeline{nullptr};
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
@@ -25,18 +26,26 @@ namespace Radiant
         Unique<GfxPipeline> m_PBRPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};
 
+        // Screen-space shadows
         Unique<GfxPipeline> m_SSSPipeline{nullptr};
 
-        Unique<GfxPipeline> m_SSAOPipeline{nullptr};
+        // Screen-space ambient occlusion
+        Unique<GfxPipeline> m_SSAOPipelineGraphics{nullptr};
+        Unique<GfxPipeline> m_SSAOPipelineCompute{nullptr};  // better normal reconstruction
         Unique<GfxPipeline> m_SSAOBoxBlurPipeline{nullptr};
 
-        Unique<GfxPipeline> m_BloomDownsamplePipeline{nullptr};
-        Unique<GfxPipeline> m_BloomUpsampleBlurPipeline{nullptr};
+        // Bloom from Call of Duty Advanced Warfare, ACM Siggraph '14,
+        Unique<GfxPipeline> m_BloomDownsamplePipelineGraphics{nullptr};
+        Unique<GfxPipeline> m_BloomUpsampleBlurPipelineGraphics{nullptr};
+        // compute version is optimized
+        Unique<GfxPipeline> m_BloomDownsamplePipelineCompute{nullptr};
+        Unique<GfxPipeline> m_BloomUpsampleBlurPipelineCompute{nullptr};
 
-        Unique<GfxPipeline> m_BloomDownsamplePipelineOptimized{nullptr};
-        Unique<GfxPipeline> m_BloomUpsampleBlurPipelineOptimized{nullptr};
+        Unique<GfxPipeline> m_EnvMapSkyboxPipeline{nullptr};
+        Unique<GfxPipeline> m_DebugTextureViewPipeline{nullptr};
 
         RenderGraphStatistics m_RenderGraphStats = {};
+        Unique<GfxTexture> m_EnvMapTexture{nullptr};
 
         Shaders::LightData m_LightData = {};
     };

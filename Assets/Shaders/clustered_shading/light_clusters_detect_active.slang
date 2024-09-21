@@ -15,9 +15,11 @@ struct PushConstantBlock
 // NOTE: Each thread processes all clusters along Z axis.
 // process clusters v pryamougol'nikax, so you read X*Y times depth texture and don't read it X*Y*Z.
 
-[shader("compute")]
+// peredelat' nado, 
+
 [numthreads(LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_X, LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_Y, 1)]
-void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid : SV_GroupID)
+[shader("compute")]
+void computeMain(const uint3 DTid: SV_DispatchThreadID, const uint Gid : SV_GroupID)
 {
     const float2 uv = DTid.xy * u_PC.CameraData.InvFullResolution;
     const float depthVS = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].Load(DTid).r, u_PC.CameraData.DepthUnpackConsts);
@@ -25,7 +27,10 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint Gid : SV_GroupID)
     // TODO: Add in rendergraph ability ClearOnExecute() in c++ side.
     for (uint z = 0; z < LIGHT_CLUSTERS_SUBDIVISION_Z; ++z)
     {
-        const uint froxelIndex = DTid.x + DTid.y * LIGHT_CLUSTERS_SUBDIVISION_X + LIGHT_CLUSTERS_SUBDIVISION_X * LIGHT_CLUSTERS_SUBDIVISION_Y * z;
+        // TODO: remap Z, cuz it sucks
+        // Z needs to be offseted to be like DTid? DTid.z?
+        const uint globalOffsetZ = /*Gid **/ z;
+        const uint froxelIndex = Shaders::flatten3D( uint3(DTid.xy, globalOffsetZ), uint3(LIGHT_CLUSTERS_SUBDIVISION_X, LIGHT_CLUSTERS_SUBDIVISION_Y, LIGHT_CLUSTERS_SUBDIVISION_Z));
         if (froxelIndex >= LIGHT_CLUSTERS_COUNT) continue;
         const AABB cluster = u_PC.Clusters[froxelIndex];
 

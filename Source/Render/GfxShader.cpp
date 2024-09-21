@@ -8,8 +8,13 @@
 
 namespace Radiant
 {
-
-    static constexpr const char* s_ShaderCacheDir = "ShaderCache/";
+#if RDNT_DEBUG
+    static constexpr const char* s_ShaderCacheDir = "shader_cache_debug/";
+#elif RDNT_RELEASE
+    static constexpr const char* s_ShaderCacheDir = "shader_cache_optimized/";
+#else
+#error Unknown build type!
+#endif
 
     namespace SlangUtils
     {
@@ -189,8 +194,7 @@ namespace Radiant
         RDNT_ASSERT(m_Description.Path.ends_with(".slang"), "Shader name doesn't contain <.slang> in the end!");
         RDNT_ASSERT(!m_Description.Path.empty(), "Shader path is invalid!");
 
-        if (!std::filesystem::exists(s_ShaderCacheDir))
-            std::filesystem::create_directory(s_ShaderCacheDir);
+        if (!std::filesystem::exists(s_ShaderCacheDir)) std::filesystem::create_directory(s_ShaderCacheDir);
 
         static constexpr std::array<vk::ShaderStageFlagBits, 16> shaderStagesVK = {vk::ShaderStageFlagBits::eVertex,
                                                                                    vk::ShaderStageFlagBits::eTessellationControl,

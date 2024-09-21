@@ -20,6 +20,12 @@ namespace Radiant
             float4x4 ViewProjectionMatrix[SHADOW_MAP_CASCADE_COUNT];
         };
 
+        struct SDSMBounds
+        {
+            float minZ;
+            float maxZ;
+        };
+
     }  // namespace Shaders
 
 #ifdef __cplusplus

@@ -29,12 +29,12 @@ float3 IntersectSegmentPlane(const float3 startPoint, const float3 endPoint, con
 [numthreads(LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE, LIGHT_CLUSTERS_BUILD_WG_SIZE)]
 void computeMain(uint3 DTid: SV_DispatchThreadID)
 {
-    const uint froxelIndex = DTid.x + DTid.y * LIGHT_CLUSTERS_SUBDIVISION_X + DTid.z * LIGHT_CLUSTERS_SUBDIVISION_Y * LIGHT_CLUSTERS_SUBDIVISION_X;
+    const uint froxelIndex = Shaders::flatten3D(DTid, uint3(LIGHT_CLUSTERS_SUBDIVISION_X, LIGHT_CLUSTERS_SUBDIVISION_Y, LIGHT_CLUSTERS_SUBDIVISION_Z));
     if (froxelIndex >= LIGHT_CLUSTERS_COUNT) return;
     
     // Calculate the min and max points of a tile in screen space(not kind of screen space tbh).
     const float2 minPosSS = Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * DTid.xy;
-    const float2 maxPosSS = Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * (DTid.xy + 1) ;
+    const float2 maxPosSS = Shaders::s_INV_LIGHT_CLUSTER_SUBDIVISIONS.xy * (DTid.xy + 1);
 
     // Convert them to view space sitting on the near plane.
     const float3 minPosVS = Shaders::ScreenSpaceToView(minPosSS, 1.0f, u_PC.CameraData->InvProjectionMatrix).xyz;

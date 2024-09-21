@@ -12,17 +12,15 @@
 struct PushConstantBlock
 {
     uint32_t SrcTextureID;
-    float2 SampleFilterRadius; // NOTE: Make sure aspect ratio is taken into account!
+    float2 SrcTexelSize; // rcp(SrcTextureResolution)
 };
 [vk::push_constant] PushConstantBlock u_PC;
 
 [shader("fragment")]
 float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
-{ 
-    // The filter kernel is applied with a radius, specified in texture
-    // coordinates, so that the radius will vary across mip resolutions.
-    const float x = u_PC.SampleFilterRadius.x;
-    const float y = u_PC.SampleFilterRadius.y;
+{
+    const float x = u_PC.SrcTexelSize.x;
+    const float y = u_PC.SrcTexelSize.y;
 
     // Take 9 samples around current texel:
     // a - b - c

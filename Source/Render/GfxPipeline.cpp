@@ -138,7 +138,7 @@ namespace Radiant
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
                 m_Device->GetPipelineCache(), vk::GraphicsPipelineCreateInfo()
                                                   .setPNext(&dynamicRenderingInfo)
-                                                  .setLayout(*m_Device->GetBindlessPipelineLayout())
+                                                  .setLayout(m_Device->GetBindlessPipelineLayout())
                                                   .setStages(shaderStages)
                                                   .setPDepthStencilState(&depthStencilStateCI)
                                                   .setPInputAssemblyState(gpo->bMeshShading ? nullptr : &inputAssemblyStateCI)
@@ -155,7 +155,7 @@ namespace Radiant
         {
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createComputePipelineUnique(
                 m_Device->GetPipelineCache(), vk::ComputePipelineCreateInfo()
-                                                  .setLayout(*m_Device->GetBindlessPipelineLayout())
+                                                  .setLayout(m_Device->GetBindlessPipelineLayout())
                                                   .setStage(m_Description.Shader->GetShaderStages().back()));
             RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to create COMPUTE pipeline!");
 
@@ -181,7 +181,6 @@ namespace Radiant
         {
             if (m_Handle) m_Device->PushObjectToDelete(std::move(m_Handle));
             m_Handle = std::move(m_Dummy);
-            m_Dummy  = {};
             m_bCanSwitchHotReloadedDummy.store(false);
         }
 

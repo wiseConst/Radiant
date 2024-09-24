@@ -60,8 +60,8 @@ namespace Radiant
 
         auto vkFeatures12 =
             vk::PhysicalDeviceVulkan12Features()
-                .setBufferDeviceAddress(vk::True)
-                .setScalarBlockLayout(vk::True)
+                .setBufferDeviceAddress(vk::True)  // GPU buffer pointers via uint64_t
+                .setScalarBlockLayout(vk::True)    // Solving shader data alignment issues.
                 .setShaderInt8(vk::True)
                 .setShaderFloat16(vk::True)
                 .setShaderOutputLayer(vk::True)  // Used for transforming equirectangular map to cube map(instance rendering cube 6 times).
@@ -78,6 +78,7 @@ namespace Radiant
         paravozik  = &vkFeatures12.pNext;
 
         auto vkFeatures11 = vk::PhysicalDeviceVulkan11Features()
+                                .setStorageBuffer16BitAccess(vk::True)
                                 .setShaderDrawParameters(vk::True)
                                 .setVariablePointers(vk::True)                // NOTE: Fucking slang requires it
                                 .setVariablePointersStorageBuffer(vk::True);  // NOTE: Fucking slang requires it
@@ -420,7 +421,8 @@ namespace Radiant
     void GfxDevice::AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,
                                    const vk::MemoryPropertyFlags preferredFlags) noexcept
     {
-        const VmaAllocationCreateInfo allocationCI = {.flags = VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT,
+        const VmaAllocationCreateInfo allocationCI = {.flags =
+                                                          VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT/* | VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT*/,
                                                       /*.usage          = VMA_MEMORY_USAGE_AUTO,*/
                                                       .preferredFlags = (VkMemoryPropertyFlags)preferredFlags};
 
@@ -520,12 +522,8 @@ namespace Radiant
             if (!bImmediate && framesPast >= m_CurrentFrameNumber) continue;
 
             deletionQueue.Flush();
-
             for (auto it = deletionQueue.BufferHandlesDeque.rbegin(); it != deletionQueue.BufferHandlesDeque.rend(); ++it)
-            {
                 DeallocateBuffer((VkBuffer&)it->first, (VmaAllocation&)it->second);
-            }
-            deletionQueue.BufferHandlesDeque.clear();
 
             queuesToRemove.emplace(frameNumber);
         }

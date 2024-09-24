@@ -10,6 +10,7 @@ namespace Radiant
     using float4   = glm::float4;
 
     using u16vec2 = glm::u16vec2;
+    using u16vec4 = glm::u16vec4;
 
     using uint2 = glm::uvec2;
     using uint3 = glm::uvec3;
@@ -18,7 +19,9 @@ namespace Radiant
 
     static constexpr uint32_t s_IrradianceCubeMapSize = 64;
 
-#define MAX_POINT_LIGHT_COUNT 256
+#define MAX_POINT_LIGHT_COUNT 128
+    // TODO: Implement spot lights
+#define MAX_SPOT_LIGHT_COUNT 256
 
     struct VertexPosition
     {
@@ -40,6 +43,20 @@ namespace Radiant
     half2 UV;
 #endif
         int16_t TSign;  // NOTE: Maybe put in the last tangent's bit?
+    };
+
+    struct ObjectInstanceData
+    {
+        float3 scale;
+        float3 translation;
+        // x - real part, yzw - imaginary part.
+        // TODO: on c++ side convert from range[-1. 1] to [0,1] (*0.5 + 0.5) and then halfPackUnorm
+        // unpacking *2-1
+#ifdef __cplusplus
+        u16vec4 orientation;
+#else
+    half4 orientation;
+#endif
     };
 
     struct Sphere
@@ -311,7 +328,10 @@ namespace Radiant
         // FresnelSchlick (IBL version optional), evaluating ratio of base reflectivity looking perpendicularly towards surface
         float3 EvaluateFresnel(const float NdotV, const float3 F0, /*const float roughness,*/ const float3 F90 = float3(1.0f))
         {
-            return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
+            // From filament if F90 = 1
+             const float f = pow(1.0 - NdotV, 5.0);
+             return f + F0 * (1.0 - f);
+            //return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
             //  return F0 + (max(float3(1.0f - roughness), F0) - F0) * pow(1.0f - NdotV, 5.0f);
         }
 

@@ -133,7 +133,7 @@ namespace Radiant
                 pc.Points         = (const Point2D*)point2dUBO->GetBDA();
                 pc.FullResolution = m_MainCamera->GetShaderData().FullResolution;
 
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
                 cmd.draw(3, m_Points.size(), 0, 0);
             });

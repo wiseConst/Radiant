@@ -16,6 +16,117 @@
 namespace Radiant
 {
 
+    namespace MeshUtils
+    {
+        static AABB GenerateAABB(const std::vector<VertexPosition>& positions) noexcept
+        {
+            RDNT_ASSERT(!positions.empty(), "Can't generate AABB from empty positions vector!");
+            glm::vec3 min{0.0f};
+            glm::vec3 max{0.0f};
+
+            // NOTE: It assumes AVX2 instructions are supported.
+#define AABB_GENERATOR_USE_AVX2 1
+#if _MSC_VER && AABB_GENERATOR_USE_AVX2
+            size_t i       = 0;
+            __m256 minVecX = _mm256_set1_ps(FLT_MAX), minVecY = _mm256_set1_ps(FLT_MAX), minVecZ = _mm256_set1_ps(FLT_MAX);
+            __m256 maxVecX = _mm256_set1_ps(FLT_MIN), maxVecY = _mm256_set1_ps(FLT_MIN), maxVecZ = _mm256_set1_ps(FLT_MIN);
+
+            const size_t alignedDataSize = (positions.size() & ~7);
+            for (i = 0; i < alignedDataSize; i += 8)
+            {
+                const auto* pointPtr = &positions[i];
+
+                const __m256 pointX =
+                    _mm256_set_ps(pointPtr[7].Position.x, pointPtr[6].Position.x, pointPtr[5].Position.x, pointPtr[4].Position.x,
+                                  pointPtr[3].Position.x, pointPtr[2].Position.x, pointPtr[1].Position.x, pointPtr[0].Position.x);
+                const __m256 pointY =
+                    _mm256_set_ps(pointPtr[7].Position.y, pointPtr[6].Position.y, pointPtr[5].Position.y, pointPtr[4].Position.y,
+                                  pointPtr[3].Position.y, pointPtr[2].Position.y, pointPtr[1].Position.y, pointPtr[0].Position.y);
+                const __m256 pointZ =
+                    _mm256_set_ps(pointPtr[7].Position.z, pointPtr[6].Position.z, pointPtr[5].Position.z, pointPtr[4].Position.z,
+                                  pointPtr[3].Position.z, pointPtr[2].Position.z, pointPtr[1].Position.z, pointPtr[0].Position.z);
+
+                minVecX = _mm256_min_ps(minVecX, pointX);
+                minVecY = _mm256_min_ps(minVecY, pointY);
+                minVecZ = _mm256_min_ps(minVecZ, pointZ);
+
+                maxVecX = _mm256_max_ps(maxVecX, pointX);
+                maxVecY = _mm256_max_ps(maxVecY, pointY);
+                maxVecZ = _mm256_max_ps(maxVecZ, pointZ);
+            }
+
+            // Gather results and prepare them.
+            float minX[8] = {0.0f}, minY[8] = {0.0f}, minZ[8] = {0.0f};
+            _mm256_storeu_ps(minX, minVecX);
+            _mm256_storeu_ps(minY, minVecY);
+            _mm256_storeu_ps(minZ, minVecZ);
+
+            float maxX[8] = {0.0f}, maxY[8] = {0.0f}, maxZ[8] = {0.0f};
+            _mm256_storeu_ps(maxX, maxVecX);
+            _mm256_storeu_ps(maxY, maxVecY);
+            _mm256_storeu_ps(maxZ, maxVecZ);
+
+            min = glm::vec3(minX[0], minY[0], minZ[0]);
+            max = glm::vec3(maxX[0], maxY[0], maxZ[0]);
+            for (i = 1; i < 8; ++i)
+            {
+                min = glm::min(min, glm::vec3{minX[i], minY[i], minZ[i]});
+                max = glm::max(max, glm::vec3{maxX[i], maxY[i], maxZ[i]});
+            }
+
+            // Take into account the remainder.
+            for (i = alignedDataSize; i < positions.size(); ++i)
+            {
+                min = glm::min(positions[i].Position, min);
+                max = glm::max(positions[i].Position, max);
+            }
+#else
+            min = glm::vec3(FLT_MAX);
+            max = glm::vec3(FLT_MIN);
+            for (const auto& point : points)
+            {
+                min = glm::min(point.Position, min);
+                max = glm::max(point.Position, max);
+            }
+#endif
+
+            return {.Min = min, .Max = max};
+        }
+
+        static Sphere GenerateBoundingSphere(const std::vector<VertexPosition>& positions) noexcept
+        {
+            RDNT_ASSERT(!positions.empty(), "Can't generate bounding sphere from empty positions vector!");
+
+            // First pass - find averaged vertex pos.
+            glm::vec3 averagedVertexPos(0.0f);
+            for (const auto& point : positions)
+                averagedVertexPos += point.Position;
+
+            averagedVertexPos /= positions.size();
+            const auto aabb       = GenerateAABB(positions);
+            const auto aabbCenter = (aabb.Max + aabb.Min) * 0.5f;
+
+            // Second pass - find farthest vertices for both averaged vertex position and AABB centroid.
+            glm::vec3 farthestVtx[2] = {positions[0].Position, positions[0].Position};
+            for (const auto& point : positions)
+            {
+                if (glm::distance2(averagedVertexPos, point.Position) > glm::distance2(averagedVertexPos, farthestVtx[0]))
+                    farthestVtx[0] = point.Position;
+                if (glm::distance2(aabbCenter, point.Position) > glm::distance2(aabbCenter, farthestVtx[1]))
+                    farthestVtx[1] = point.Position;
+            }
+
+            const float averagedVtxToFarthestDistance  = glm::distance(farthestVtx[0], averagedVertexPos);
+            const float aabbCentroidToFarthestDistance = glm::distance(farthestVtx[1], aabbCenter);
+
+            const Sphere sphere = {.Origin =
+                                       averagedVtxToFarthestDistance < aabbCentroidToFarthestDistance ? averagedVertexPos : aabbCenter,
+                                   .Radius = glm::min(averagedVtxToFarthestDistance, aabbCentroidToFarthestDistance)};
+            return sphere;
+        }
+
+    }  // namespace MeshUtils
+
     namespace MeshoptimizerUtils
     {
 
@@ -433,6 +544,7 @@ namespace Radiant
 
         std::vector<std::string> meshAssetLUT{};
         MeshAssetMap.reserve(asset->meshes.size());
+        std::vector<VertexPosition> vertexPositionsPerPrimitive;  // Used only for bounding sphere generation.
         for (const auto& fastgltfMesh : asset->meshes)
         {
             RDNT_ASSERT(!fastgltfMesh.name.empty(), "fastgltf: Mesh has no name!");
@@ -458,6 +570,7 @@ namespace Radiant
                 RDNT_ASSERT(positionIt != primitive.attributes.end(),
                             "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
 
+                vertexPositionsPerPrimitive.clear();
                 currentMeshAsset->Surfaces.emplace_back(
                     static_cast<u32>(indicesUint32.size()), static_cast<u32>(asset->accessors[*primitive.indicesAccessor].count), Sphere{},
                     primitive.materialIndex.value_or(0), FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitive.type));
@@ -503,14 +616,20 @@ namespace Radiant
                 // Load vertex positions.
                 {
                     const auto& posAccessor = asset->accessors[positionIt->accessorIndex];
+                    vertexPositionsPerPrimitive.resize(posAccessor.count);
+                    fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), posAccessor,
+                                                                  [&](const glm::vec3& v, const u64 index)
+                                                                  { vertexPositionsPerPrimitive[index].Position = v; });
+                    currentMeshAsset->Surfaces.back().Bounds = MeshUtils::GenerateBoundingSphere(vertexPositionsPerPrimitive);
 
                     // Extend current vertex buffers
                     vertexPositions.resize(vertexPositions.size() + posAccessor.count);
                     vertexAttributes.resize(vertexAttributes.size() + posAccessor.count);
 
-                    fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), posAccessor,
-                                                                  [&](const glm::vec3& v, const u64 index)
-                                                                  { vertexPositions[initialVertexIndex + index].Position = v; });
+                    for (u64 vtxIndex{}; vtxIndex < posAccessor.count; ++vtxIndex)
+                    {
+                        vertexPositions[initialVertexIndex + vtxIndex].Position = vertexPositionsPerPrimitive[vtxIndex].Position;
+                    }
                 }
 
                 // Load vertex attributes.

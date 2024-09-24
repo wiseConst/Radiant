@@ -2,34 +2,28 @@
 
 #include "../../../Source/ShaderDefines.h"
 #include "../FullScreenQuad.slang"
+#include <ssao_defines.hpp>
 
 struct PushConstantBlock
 {
     uint SSAOTextureID;
+    float2 SrcTexelSize; // rcp(SSAOTextureResolution.xy)
 };
 [vk::push_constant] PushConstantBlock u_PC;
-
-static const int32_t g_BlurSize = 2;
-static const int32_t g_SamplesInOneDimension = 2 * g_BlurSize + 1;
-static const float g_TotalSampleCountInv = 1.0f / (g_SamplesInOneDimension * g_SamplesInOneDimension);
 
 [shader("fragment")]
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
-    uint width = 1, height = 1;
-    Shaders::Texture_Heap[u_PC.SSAOTextureID].GetDimensions(width, height);
-    const float2 rcpTexDim = 1.0f / float2(width, height);
-
     float ao = 0.f;
     [unroll]
-    for (int x = -g_BlurSize; x <= g_BlurSize; ++x)
+    for (int x = -SSAO_BOX_BLUR_SIZE; x <= SSAO_BOX_BLUR_SIZE; ++x)
     {
-        for (int y = -g_BlurSize; y <= g_BlurSize; ++y)
+        for (int y = -SSAO_BOX_BLUR_SIZE; y <= SSAO_BOX_BLUR_SIZE; ++y)
         {
-            const float2 offsetUV = rcpTexDim * float2(x, y);
+            const float2 offsetUV = float2(x, y) * u_PC.SrcTexelSize;
             ao += Shaders::Texture_Heap[u_PC.SSAOTextureID].Sample(fsInput.uv + offsetUV).r;
         }
     }
-    ao *= g_TotalSampleCountInv;
+    ao *= Shaders::g_TotalSampleCountInv;
     return ao;
 }

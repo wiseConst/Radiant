@@ -1,4 +1,4 @@
-// screen_space_shadows.slang
+// sss.slang
 
 #include "../../../Source/ShaderDefines.h"
 

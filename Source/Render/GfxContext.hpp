@@ -39,8 +39,33 @@ namespace Radiant
         void Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept;
 
+        void Invalidate() noexcept
+        {
+            LastBoundPipeline = nullptr;
+
+            LastBoundIndexBuffer       = nullptr;
+            LastBoundIndexBufferOffset = std::nullopt;
+            LastBoundIndexType         = std::nullopt;
+
+            CullMode          = std::nullopt;
+            FrontFace         = std::nullopt;
+            PrimitiveTopology = std::nullopt;
+            PolygonMode       = std::nullopt;
+
+            Back         = std::nullopt;
+            Front        = std::nullopt;
+            bStencilTest = false;
+
+            bDepthClamp    = false;
+            bDepthTest     = false;
+            bDepthWrite    = false;
+            DepthCompareOp = std::nullopt;
+
+            DepthBounds = glm::vec2{0.f};
+        }
+
       private:
-        GfxPipeline* LastBoundPipeline{nullptr};
+        GfxPipeline* LastBoundPipeline{nullptr};  // Main object, if it changes, whole state is invalidated.
         GfxBuffer* LastBoundIndexBuffer{nullptr};
         std::optional<vk::DeviceSize> LastBoundIndexBufferOffset{std::nullopt};
         std::optional<vk::IndexType> LastBoundIndexType{std::nullopt};
@@ -333,7 +358,7 @@ namespace Radiant
         void CreateSurface() noexcept;
         void InvalidateSwapchain() noexcept;
         void CreateFrameResources() noexcept;
-        void Shutdown() noexcept { LOG_INFO("{}", __FUNCTION__); }
+        void Shutdown() noexcept;
     };
 
 }  // namespace Radiant

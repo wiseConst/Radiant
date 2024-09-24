@@ -81,8 +81,8 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, const uint3 Gid: SV_GroupID, c
     float3 srcColor = float3(0.0f);
     if (u_PC.MipLevel > 0)
     {
-        srcColor = Shaders::RWImage2D_Heap_RGBA32F[u_PC.DstTextureID].Load(DTid.xy).rgb;
+        srcColor = Shaders::RWImage2D_Heap_RGB32F[u_PC.DstTextureID].Load(DTid.xy);
     }
 
-    Shaders::RWImage2D_Heap_RGBA32F[u_PC.DstTextureID][DTid.xy] = float4(finalColor + srcColor, 1.0f);
+    Shaders::RWImage2D_Heap_RGB32F[u_PC.DstTextureID][DTid.xy] = finalColor + srcColor;
 }

@@ -32,7 +32,8 @@ namespace Radiant
         // Screen-space ambient occlusion
         Unique<GfxPipeline> m_SSAOPipelineGraphics{nullptr};
         Unique<GfxPipeline> m_SSAOPipelineCompute{nullptr};  // better normal reconstruction
-        Unique<GfxPipeline> m_SSAOBoxBlurPipeline{nullptr};
+        Unique<GfxPipeline> m_SSAOBoxBlurPipelineGraphics{nullptr};
+        Unique<GfxPipeline> m_SSAOBoxBlurPipelineCompute{nullptr};
 
         // Bloom from Call of Duty Advanced Warfare, ACM Siggraph '14,
         Unique<GfxPipeline> m_BloomDownsamplePipelineGraphics{nullptr};

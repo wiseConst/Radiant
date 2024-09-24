@@ -216,35 +216,33 @@ namespace Radiant
             ++m_GlobalFrameNumber;
             m_CurrentFrameIndex = m_GlobalFrameNumber % s_BufferedFrameCount;
 
-            for (u32 i{}; i < m_Textures.size();)
+            for (auto it = m_Textures.begin(); it != m_Textures.end();)
             {
-                const u64 framesPast = m_Textures[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
+                const u64 framesPast = it->LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                 if (framesPast < m_GlobalFrameNumber)
                 {
-                    std::swap(m_Textures[i], m_Textures.back());
-                    m_Textures.pop_back();
+                    it = m_Textures.erase(it);
                 }
                 else
                 {
-                    m_Textures[i].Handle->ResetState();
-                    ++i;
+                    it->Handle->ResetState();
+                    ++it;
                 }
             }
 
             constexpr auto BufferTickFunc = [](GfxBufferVector& bufferVector, const u64 globalFrameNumber) noexcept
             {
-                for (u32 i{}; i < bufferVector.size();)
+                for (auto it = bufferVector.begin(); it != bufferVector.end();)
                 {
-                    const u64 framesPast = bufferVector[i].LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
+                    const u64 framesPast = it->LastUsedFrameIndex + static_cast<u64>(s_BufferedFrameCount);
                     if (framesPast < globalFrameNumber)
                     {
-                        std::swap(bufferVector[i], bufferVector.back());
-                        bufferVector.pop_back();
+                        it = bufferVector.erase(it);
                     }
                     else
                     {
-                        bufferVector[i].Handle->ResetState();
-                        ++i;
+                        it->Handle->ResetState();
+                        ++it;
                     }
                 }
             };

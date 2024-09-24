@@ -281,6 +281,7 @@ namespace Radiant
                 {
                     oldLayout = vk::ImageLayout::eGeneral;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
+                    srcAccessMask ^= vk::AccessFlagBits2::eShaderSampledRead;
                 }
 
                 srcStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
@@ -685,7 +686,7 @@ namespace Radiant
         const auto& frameData = m_GfxContext->GetCurrentFrameData();
         frameData.GeneralCommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-        const auto& pipelineLayout    = *m_GfxContext->GetDevice()->GetBindlessPipelineLayout();
+        const auto& pipelineLayout    = m_GfxContext->GetDevice()->GetBindlessPipelineLayout();
         const auto& bindlessResources = m_GfxContext->GetDevice()->GetCurrentFrameBindlessResources();
         frameData.GeneralCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0,
                                                           bindlessResources.DescriptorSet, {});
@@ -712,19 +713,24 @@ namespace Radiant
 
         frameData.GeneralCommandBuffer.end();
 
-        // NOTE: In future I might upscale(compute) or load into swapchain image or render into so here's optimal flags.
-        const vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                                                        vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader |
-                                                        vk::PipelineStageFlagBits::eEarlyFragmentTests |
-                                                        vk::PipelineStageFlagBits::eLateFragmentTests;
-
         const auto& presentQueue = m_GfxContext->GetDevice()->GetPresentQueue().Handle;
-        presentQueue.submit(vk::SubmitInfo()
-                                .setCommandBuffers(frameData.GeneralCommandBuffer)
-                                .setSignalSemaphores(*frameData.RenderFinishedSemaphore)
-                                .setWaitSemaphores(*frameData.ImageAvailableSemaphore)
-                                .setWaitDstStageMask(waitDstStageMask),
-                            *frameData.RenderFinishedFence);
+        presentQueue.submit2(
+            vk::SubmitInfo2()
+                .setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(frameData.GeneralCommandBuffer))
+                .setSignalSemaphoreInfos(
+                    vk::SemaphoreSubmitInfo()
+                        .setSemaphore(*frameData.RenderFinishedSemaphore)
+                        .setValue(1)
+                        .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput | vk::PipelineStageFlagBits2::eTransfer |
+                                      vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eLateFragmentTests |
+                                      vk::PipelineStageFlagBits2::eEarlyFragmentTests))
+                .setWaitSemaphoreInfos(vk::SemaphoreSubmitInfo()
+                                           .setSemaphore(*frameData.ImageAvailableSemaphore)
+                                           .setValue(1)
+                                           // NOTE: somebody in discord said eTopOfPipe is deprecated and we should use eAllCommands, but
+                                           // layers are angry about that.
+                                           .setStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)),
+            *frameData.RenderFinishedFence);
     }
 
     void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept

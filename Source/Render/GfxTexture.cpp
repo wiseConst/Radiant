@@ -7,6 +7,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <compressonator.h>
+
 namespace Radiant
 {
 
@@ -108,7 +110,7 @@ namespace Radiant
         m_MipChain.resize(bExposeMips ? mipLevelCount : 1);
         for (u32 baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
         {
-            m_MipChain[baseMipLevel].ImageView = m_Device->GetLogicalDevice()->createImageViewUnique(
+            m_MipChain[baseMipLevel].ImageView = m_Device->GetLogicalDevice()->createImageView(
                 vk::ImageViewCreateInfo()
                     .setComponents(vk::ComponentMapping()
                                        .setR(vk::ComponentSwizzle::eR)
@@ -154,7 +156,7 @@ namespace Radiant
                 GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
 
                 m_Device->PushBindlessThing(vk::DescriptorImageInfo()
-                                                .setImageView(*m_MipChain[baseMipLevel].ImageView)
+                                                .setImageView(m_MipChain[baseMipLevel].ImageView)
                                                 .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
                                                 .setSampler(m_Description.SamplerCreateInfo.has_value()
                                                                 ? m_Device->GetSampler(*m_Description.SamplerCreateInfo).first
@@ -189,7 +191,7 @@ namespace Radiant
                 GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
 
                 m_Device->PushBindlessThing(
-                    vk::DescriptorImageInfo().setImageView(*m_MipChain[baseMipLevel].ImageView).setImageLayout(vk::ImageLayout::eGeneral),
+                    vk::DescriptorImageInfo().setImageView(m_MipChain[baseMipLevel].ImageView).setImageLayout(vk::ImageLayout::eGeneral),
                     m_MipChain[baseMipLevel].BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
             }
         }
@@ -307,6 +309,8 @@ namespace Radiant
                     GfxContext::Get().GetDevice()->PopBindlessThing(nonConstMipInfo.BindlessTextureID, Shaders::s_BINDLESS_TEXTURE_BINDING);
                     if (mipInfo.BindlessImageID.has_value())
                         GfxContext::Get().GetDevice()->PopBindlessThing(nonConstMipInfo.BindlessImageID, Shaders::s_BINDLESS_IMAGE_BINDING);
+
+                    GfxContext::Get().GetDevice()->GetLogicalDevice()->destroyImageView(nonConstMipInfo.ImageView);
                 }
 
                 if (bResourceMemoryAliasingControlledByRenderGraph)

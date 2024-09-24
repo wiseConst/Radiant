@@ -11,6 +11,10 @@ namespace Radiant
     namespace Shaders
     {
 
+#define SSAO_BOX_BLUR_SIZE 2
+        static const int32_t g_SamplesInOneDimension = 2 * SSAO_BOX_BLUR_SIZE + 1;
+        static const float g_TotalSampleCountInv     = 1.0f / (g_SamplesInOneDimension * g_SamplesInOneDimension);
+
 #define SSAO_WG_SIZE_X 16
 #define SSAO_WG_SIZE_Y 16
 #define USE_THREAD_GROUP_TILING_X 0
@@ -37,12 +41,12 @@ namespace Radiant
         // Samples from crysis's 4x4 rotation texture
         static const uint8_t ROT_SIZE                   = 16;
         static const float3 g_RotationVectors[ROT_SIZE] = {
-            float3(0.42745, 0.35686, 0.97255), float3(0.26667, 0.28235, 0.67843), float3(0.26275, 0.38431, 0.35294),
-            float3(0.35294, 0.60, 0.17647),    float3(0.10588, 0.62745, 0.63922), float3(0.24314, 0.74118, 0.67059),
-            float3(0.19216, 0.61961, 0.62882), float3(0.3451, 0.54902, 0.4),      float3(0.4902, 0.60392, 0.29804),
-            float3(0.74902, 0.61176, 0.56863), float3(0.62745, 0.54118, 0.89412), float3(0.56078, 0.46275, 0.51373),
-            float3(0.96471, 0.06275, 0.27059), float3(0.95686, 0.20784, 0.52157), float3(0.75686, 0.10588, 0.81961),
-            float3(0.44706, 0.08627, 0.36471)};
+            float3(0.42745f, 0.35686f, 0.97255f), float3(0.26667f, 0.28235f, 0.67843f), float3(0.26275f, 0.38431f, 0.35294f),
+            float3(0.35294f, 0.60f, 0.17647f),    float3(0.10588f, 0.62745f, 0.63922f), float3(0.24314f, 0.74118f, 0.67059f),
+            float3(0.19216f, 0.61961f, 0.62882f), float3(0.3451f, 0.54902f, 0.4f),      float3(0.4902f, 0.60392f, 0.29804f),
+            float3(0.74902f, 0.61176f, 0.56863f), float3(0.62745f, 0.54118f, 0.89412f), float3(0.56078f, 0.46275f, 0.51373f),
+            float3(0.96471f, 0.06275f, 0.27059f), float3(0.95686f, 0.20784f, 0.52157f), float3(0.75686f, 0.10588f, 0.81961f),
+            float3(0.44706f, 0.08627f, 0.36471f)};
         static constexpr uint32_t g_SampleCount = 11;
         static constexpr float g_SampleCountInv = 1.0f / g_SampleCount;
 

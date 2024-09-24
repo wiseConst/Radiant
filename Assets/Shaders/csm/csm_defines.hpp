@@ -22,8 +22,7 @@ namespace Radiant
 
         struct SDSMBounds
         {
-            float minZ;
-            float maxZ;
+            float2 MinMaxZ;
         };
 
     }  // namespace Shaders

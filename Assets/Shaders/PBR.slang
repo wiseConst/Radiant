@@ -249,19 +249,20 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
 #endif
 
     // Ambient / indirect part
-    if (u_PC.MPSData.EnvironmentMapTextureCubeID != 0) {
-        const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.EnvironmentMapTextureCubeID].Sample(N).rgb;
-        const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
-        const float3 kD = 1.0f - Shaders::EvaluateFresnel(NdotV, F0);
-        const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-        const float3 ambient = kD * cubemapIrradiance * albedo.rgb * ao;
-        irradiance += ambient;
-    } 
-    //else {
+    //if (u_PC.MPSData.EnvironmentMapTextureCubeID != 0) {
+    //    const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.EnvironmentMapTextureCubeID].Sample(N).rgb;
+    //    const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
+    //    const float3 kD = 1.0f - Shaders::EvaluateFresnel(NdotV, F0);
     //    const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-    //    const float3 ambient = 0.03f * albedo.rgb * ao;
+    //    const float3 ambient = kD * cubemapIrradiance * albedo.rgb * ao;
     //    irradiance += ambient;
-    //}
+    //} 
+    //else 
+    {
+        const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+        const float3 ambient = 0.03f * albedo.rgb * ao;
+        irradiance += ambient;
+    }
 
     if (albedo.a < materialData->AlphaCutoff) discard;
     return float4(irradiance, albedo.a);

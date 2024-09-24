@@ -26,12 +26,20 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 namespace Radiant
 {
 
+    // NOTE: Technically s_FreeTextureIndices is the same as bindless texture pool IDs.
+    // Resources used for lazy texture loading.
+    static std::vector<GfxTexture> s_TextureStorage = {};
+    static Pool<u32> s_FreeTextureIndices           = {};
+
     void GfxPipelineStateCache::Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept
     {
         RDNT_ASSERT(pipeline, "GfxPipelineStateCache: Pipeline is invalid!");
         RDNT_ASSERT(!std::holds_alternative<std::monostate>(pipeline->GetDescription().PipelineOptions),
                     "GfxPipelineStateCache: Pipeline holds invalid options!");
         if (LastBoundPipeline == pipeline) return;
+
+        // Need to invalidate the whole state!
+        Invalidate();
 
         vk::PipelineBindPoint pipelineBindPoint{vk::PipelineBindPoint::eGraphics};
         if (std::holds_alternative<GfxGraphicsPipelineOptions>(pipeline->GetDescription().PipelineOptions))
@@ -135,7 +143,7 @@ namespace Radiant
         m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPool);
         m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPool);
 
-        m_PipelineStateCache = {};
+        m_PipelineStateCache.Invalidate();
         currentFrameData.CPUProfilerData.clear();
         currentFrameData.GPUProfilerData.clear();
         currentFrameData.FrameStartTime = Timer::Now();
@@ -433,6 +441,14 @@ namespace Radiant
             queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
             queue.waitIdle();
         }
+    }
+
+    void GfxContext::Shutdown() noexcept
+    {
+        LOG_INFO("{}", __FUNCTION__);
+
+        s_TextureStorage.clear();
+        s_FreeTextureIndices = {};
     }
 
     void GfxContext::InvalidateSwapchain() noexcept

@@ -127,5 +127,5 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, const uint3 Gid: SV_GroupID, c
 
     // NOTE: To get rid of black boxes.
     finalColor = max(finalColor, Shaders::s_KINDA_SMALL_NUMBER);
-    Shaders::RWImage2D_Heap_RGBA32F[u_PC.DstTextureID][DTid.xy] = float4(finalColor, 1.0f);
+    Shaders::RWImage2D_Heap_RGB32F[u_PC.DstTextureID][DTid.xy] = finalColor;
 }

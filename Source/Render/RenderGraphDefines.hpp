@@ -43,9 +43,9 @@ namespace Radiant
     // RenderGraphPass
     enum class ERenderGraphPassType : u8
     {
+        RENDER_GRAPH_PASS_TYPE_GRAPHICS,
         RENDER_GRAPH_PASS_TYPE_COMPUTE,
         RENDER_GRAPH_PASS_TYPE_TRANSFER,
-        RENDER_GRAPH_PASS_TYPE_GRAPHICS,
 
         // TODO: Multiple queue submission
         RENDER_GRAPH_PASS_TYPE_ASYNC_COMPUTE,

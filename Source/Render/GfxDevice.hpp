@@ -157,7 +157,7 @@ namespace Radiant
             return GetSampler(defaultSamplerCI);
         }
 
-        NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return m_PipelineLayout; }
+        NODISCARD FORCEINLINE auto& GetBindlessPipelineLayout() const noexcept { return *m_PipelineLayout; }
         FORCEINLINE const auto GetMSAASamples() const noexcept { return m_MSAASamples; }
 
         void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
@@ -259,7 +259,7 @@ namespace Radiant
 
             FORCEINLINE void EmplaceBack(std::move_only_function<void() noexcept>&& func) noexcept
             {
-                Deque.emplace_back(std::forward<std::move_only_function<void() noexcept>>(func));
+                FunctionsDeque.emplace_back(std::forward<std::move_only_function<void() noexcept>>(func));
             }
 
             FORCEINLINE void EmplaceBack(vk::UniquePipeline&& pipeline) noexcept
@@ -275,18 +275,15 @@ namespace Radiant
             void Flush() noexcept
             {
                 // Reverse iterate the deletion queue to execute all the functions.
-                for (auto it = Deque.rbegin(); it != Deque.rend(); ++it)
+                for (auto it = FunctionsDeque.rbegin(); it != FunctionsDeque.rend(); ++it)
                     (*it)();
 
-                while (!PipelineHandlesDeque.empty())
-                    PipelineHandlesDeque.pop_front();
-
-                Deque.clear();
                 PipelineHandlesDeque.clear();
+                FunctionsDeque.clear();
             }
 
           private:
-            std::deque<std::move_only_function<void() noexcept>> Deque;  // In case something special happens.
+            std::deque<std::move_only_function<void() noexcept>> FunctionsDeque;  // In case something special happens.
 
             std::deque<vk::UniquePipeline> PipelineHandlesDeque;
             std::deque<std::pair<vk::Buffer, VmaAllocation>> BufferHandlesDeque;

@@ -35,6 +35,7 @@ namespace Radiant
 
     }  // namespace ResourceNames
 
+    static bool s_bEnableMSAA{false};
     static bool s_bEnableSSAO{false};
     static bool s_bSSAOComputeBased{false};
     static bool s_bBloomComputeBased{false};
@@ -102,7 +103,7 @@ namespace Radiant
             auto executionContext = m_GfxContext->CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
             executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
             executionContext.CommandBuffer.bindDescriptorSets(
-                vk::PipelineBindPoint::eGraphics, *m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), 0,
+                vk::PipelineBindPoint::eGraphics, m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), 0,
                 m_GfxContext->GetDevice()->GetCurrentFrameBindlessResources().DescriptorSet, {});
 
             // load equirectangular hdr texture
@@ -275,7 +276,7 @@ namespace Radiant
                 pc.SrcTextureID = equirectangularEnvMap->GetBindlessTextureID();
                 pc.ETCSData     = (const EquirectangularToCubemapShaderData*)etcsDataBuffer->GetBDA();
 
-                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                                                 vk::ShaderStageFlagBits::eAll, 0, pc);
                 executionContext.CommandBuffer.bindIndexBuffer(*indexBufferReBAR, 0, vk::IndexType::eUint8EXT);
                 executionContext.CommandBuffer.drawIndexed(cubeIndices.size(), 6, 0, 0, 0);
@@ -340,7 +341,7 @@ namespace Radiant
                 pc              = {};
                 pc.SrcTextureID = envCubeMap->GetBindlessTextureID();
                 pc.ETCSData     = (const EquirectangularToCubemapShaderData*)etcsDataBuffer->GetBDA();
-                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                                                 vk::ShaderStageFlagBits::eAll, 0, pc);
                 executionContext.CommandBuffer.bindIndexBuffer(*indexBufferReBAR, 0, vk::IndexType::eUint8EXT);
                 executionContext.CommandBuffer.drawIndexed(cubeIndices.size(), 6, 0, 0, 0);
@@ -492,8 +493,8 @@ namespace Radiant
                 const GfxPipelineDescription pipelineDesc = {
                     .DebugName       = "SSS",
                     .PipelineOptions = GfxComputePipelineOptions{},
-                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                    GfxShaderDescription{.Path = "../Assets/Shaders/sss/screen_space_shadows.slang"})};
+                    .Shader =
+                        MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/sss/sss.slang"})};
                 m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
@@ -535,8 +536,19 @@ namespace Radiant
                                                              .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
                                                              .PolygonMode{vk::PolygonMode::eFill}};
                 const GfxPipelineDescription pipelineDesc = {
-                    .DebugName = "SSAOBoxBlur", .PipelineOptions = gpo, .Shader = ssaoBoxBlurShader};
-                m_SSAOBoxBlurPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+                    .DebugName = "SSAOBoxBlur_Graphics", .PipelineOptions = gpo, .Shader = ssaoBoxBlurShader};
+                m_SSAOBoxBlurPipelineGraphics = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
+
+        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                auto ssaoBoxBlurShader = MakeShared<GfxShader>(
+                    m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/ssao/ssao_box_blur_cs.slang"});
+
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "SSAOBoxBlur_Compute", .PipelineOptions = GfxComputePipelineOptions{}, .Shader = ssaoBoxBlurShader};
+                m_SSAOBoxBlurPipelineCompute = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
         // Default bloom
@@ -639,7 +651,8 @@ namespace Radiant
             // m_SSSPipeline->HotReload();
             m_SSAOPipelineGraphics->HotReload();
             m_SSAOPipelineCompute->HotReload();
-            m_SSAOBoxBlurPipeline->HotReload();
+            m_SSAOBoxBlurPipelineGraphics->HotReload();
+            m_SSAOBoxBlurPipelineCompute->HotReload();
 
             m_BloomDownsamplePipelineGraphics->HotReload();
             m_BloomUpsampleBlurPipelineGraphics->HotReload();
@@ -950,7 +963,7 @@ namespace Radiant
                         pipelineStateCache.Set(cmd, ro.CullMode);
                         pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                         cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
@@ -1019,7 +1032,7 @@ namespace Radiant
                     pipelineStateCache.Set(cmd, ro.CullMode);
                     pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
-                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                    cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
                     pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
@@ -1063,7 +1076,7 @@ namespace Radiant
                 auto& lightClusterSB = scheduler.GetBuffer(lcbPassData.LightClusterBuffer);
                 pc.Clusters          = (AABB*)lightClusterSB->GetBDA();
 
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
                 cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_X / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
                              glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_Y / (f32)LIGHT_CLUSTERS_BUILD_WG_SIZE),
@@ -1121,7 +1134,7 @@ namespace Radiant
                 pc.ActiveLightClusters =
                     (Shaders::LightClusterActiveList*)scheduler.GetBuffer(lcdaPassData.LightClusterDetectActiveBuffer)->GetBDA();
 
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
                 cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_X / (f32)LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_X),
                              glm::ceil(LIGHT_CLUSTERS_SUBDIVISION_Y / (f32)LIGHT_CLUSTERS_DETECT_ACTIVE_WG_SIZE_Y), 1);
@@ -1201,14 +1214,14 @@ namespace Radiant
                                  m_LightData.PointLightCount - LIGHT_CLUSTERS_MAX_BATCH_LIGHT_COUNT * lightBatchIndex);
                     pc.PointLightBatchCount = pointLightBatchCount;
 
-                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                    cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
                     cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
 
                     pc.PointLightBatchOffset += pointLightBatchCount;
                 }
 #else
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
                 cmd.dispatch(glm::ceil(LIGHT_CLUSTERS_COUNT / (f32)LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE), 1, 1);
 #endif
@@ -1276,6 +1289,7 @@ namespace Radiant
         struct SSAOBoxBlurPassData
         {
             RGResourceID SSAOTexture;
+            RGResourceID SSAOTextureBlurred;
         } ssaoBoxBlurPassData = {};
 
         if (s_bEnableSSAO)
@@ -1289,7 +1303,13 @@ namespace Radiant
                         scheduler.CreateTexture(ResourceNames::SSAOTexture,
                                                 GfxTextureDescription(vk::ImageType::e2D,
                                                                       glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eStorage));
+                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eStorage,
+                                                                      vk::SamplerCreateInfo()
+                                                                          .setMinFilter(vk::Filter::eNearest)
+                                                                          .setMagFilter(vk::Filter::eNearest)
+                                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)));
 
                         ssaoPassData.SSAOTexture  = scheduler.WriteTexture(ResourceNames::SSAOTexture, MipSet::FirstMip(),
                                                                            EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
@@ -1324,9 +1344,53 @@ namespace Radiant
                         pc.DepthTextureID   = scheduler.GetTexture(ssaoPassData.DepthTexture)->GetBindlessTextureID();
                         pc.CameraData       = (const Shaders::CameraData*)scheduler.GetBuffer(ssaoPassData.CameraBuffer)->GetBDA();
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.dispatch(workGroupNum.x, workGroupNum.y, workGroupNum.z);
+                    });
+
+                m_RenderGraph->AddPass(
+                    "SSAOBoxBlurPassCompute", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    [&](RenderGraphResourceScheduler& scheduler)
+                    {
+                        scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
+                                                GfxTextureDescription(vk::ImageType::e2D,
+                                                                      glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eStorage,
+                                                                      vk::SamplerCreateInfo()
+                                                                          .setMinFilter(vk::Filter::eNearest)
+                                                                          .setMagFilter(vk::Filter::eNearest)
+                                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)));
+
+                        ssaoBoxBlurPassData.SSAOTextureBlurred =
+                            scheduler.WriteTexture(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(),
+                                                   EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+
+                        ssaoBoxBlurPassData.SSAOTexture = scheduler.ReadTexture(
+                            ResourceNames::SSAOTexture, MipSet::FirstMip(), EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
+                    },
+                    [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                    {
+                        auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                        pipelineStateCache.Bind(cmd, m_SSAOBoxBlurPipelineCompute.get());
+
+                        const auto& ssaoTexture = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTexture);
+                        struct PushConstantBlock
+                        {
+                            u32 SSAOBlurredTextureID{0};
+                            u32 SSAOTextureID{0};
+                            glm::vec2 SrcTexelSize{1.f};
+                        } pc                    = {};
+                        pc.SSAOBlurredTextureID = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTextureBlurred)->GetBindlessImageID();
+                        pc.SSAOTextureID        = ssaoTexture->GetBindlessTextureID();
+                        pc.SrcTexelSize         = 1.0f / glm::vec2(ssaoTexture->GetDescription().Dimensions);
+
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                             vk::ShaderStageFlagBits::eAll, 0, pc);
+                        cmd.dispatch(glm::ceil(m_ViewportExtent.width / (f32)SSAO_WG_SIZE_X),
+                                     glm::ceil(m_ViewportExtent.height / (f32)SSAO_WG_SIZE_Y), 1);
                     });
             }
             else
@@ -1338,7 +1402,13 @@ namespace Radiant
                         scheduler.CreateTexture(ResourceNames::SSAOTexture,
                                                 GfxTextureDescription(vk::ImageType::e2D,
                                                                       glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
+                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment,
+                                                                      vk::SamplerCreateInfo()
+                                                                          .setMinFilter(vk::Filter::eNearest)
+                                                                          .setMagFilter(vk::Filter::eNearest)
+                                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)));
 
                         scheduler.WriteRenderTarget(ResourceNames::SSAOTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
                                                     vk::AttachmentStoreOp::eStore,
@@ -1370,49 +1440,60 @@ namespace Radiant
                         pc.DepthTextureID = scheduler.GetTexture(ssaoPassData.DepthTexture)->GetBindlessTextureID();
                         pc.CameraData     = (const Shaders::CameraData*)scheduler.GetBuffer(ssaoPassData.CameraBuffer)->GetBDA();
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                             vk::ShaderStageFlagBits::eAll, 0, pc);
+                        cmd.draw(3, 1, 0, 0);
+                    });
+
+                m_RenderGraph->AddPass(
+                    "SSAOBoxBlurPassGraphics", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                    [&](RenderGraphResourceScheduler& scheduler)
+                    {
+                        scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
+                                                GfxTextureDescription(vk::ImageType::e2D,
+                                                                      glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                                      vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment,
+                                                                      vk::SamplerCreateInfo()
+                                                                          .setMinFilter(vk::Filter::eNearest)
+                                                                          .setMagFilter(vk::Filter::eNearest)
+                                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)));
+
+                        scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                                    vk::AttachmentStoreOp::eStore,
+                                                    vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
+
+                        ssaoBoxBlurPassData.SSAOTexture =
+                            scheduler.ReadTexture(ResourceNames::SSAOTexture, MipSet::FirstMip(),
+                                                  EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+
+                        scheduler.SetViewportScissors(vk::Viewport()
+                                                          .setMinDepth(0.0f)
+                                                          .setMaxDepth(1.0f)
+                                                          .setWidth(m_ViewportExtent.width)
+                                                          .setHeight(m_ViewportExtent.height),
+                                                      vk::Rect2D().setExtent(m_ViewportExtent));
+                    },
+                    [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                    {
+                        auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                        pipelineStateCache.Bind(cmd, m_SSAOBoxBlurPipelineGraphics.get());
+
+                        const auto& ssaoTexture = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTexture);
+                        struct PushConstantBlock
+                        {
+                            u32 TextureID{0};
+                            glm::vec2 SrcTexelSize{1.f};
+                        } pc            = {};
+                        pc.TextureID    = ssaoTexture->GetBindlessTextureID();
+                        pc.SrcTexelSize = 1.0f / glm::vec2(ssaoTexture->GetDescription().Dimensions);
+
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.draw(3, 1, 0, 0);
                     });
             }
-
-            m_RenderGraph->AddPass(
-                "SSAOBoxBlurPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
-                [&](RenderGraphResourceScheduler& scheduler)
-                {
-                    scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
-                                            GfxTextureDescription(vk::ImageType::e2D,
-                                                                  glm::vec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                                  vk::Format::eR8Unorm, vk::ImageUsageFlagBits::eColorAttachment));
-
-                    scheduler.WriteRenderTarget(ResourceNames::SSAOTextureBlurred, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                                vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
-
-                    ssaoBoxBlurPassData.SSAOTexture = scheduler.ReadTexture(
-                        ResourceNames::SSAOTexture, MipSet::FirstMip(), EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
-
-                    scheduler.SetViewportScissors(vk::Viewport()
-                                                      .setMinDepth(0.0f)
-                                                      .setMaxDepth(1.0f)
-                                                      .setWidth(m_ViewportExtent.width)
-                                                      .setHeight(m_ViewportExtent.height),
-                                                  vk::Rect2D().setExtent(m_ViewportExtent));
-                },
-                [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
-                {
-                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
-                    pipelineStateCache.Bind(cmd, m_SSAOBoxBlurPipeline.get());
-
-                    struct PushConstantBlock
-                    {
-                        u32 TextureID{0};
-                    } pc         = {};
-                    pc.TextureID = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTexture)->GetBindlessTextureID();
-
-                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
-                                                         vk::ShaderStageFlagBits::eAll, 0, pc);
-                    cmd.draw(3, 1, 0, 0);
-                });
         }
 
         struct MainPassShaderData
@@ -1574,7 +1655,7 @@ namespace Radiant
                     pipelineStateCache.Set(cmd, ro.CullMode);
                     pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
-                    cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                    cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);
                     pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
@@ -1666,7 +1747,7 @@ namespace Radiant
                         pc.MipLevel     = i;
                         pc.SrcTexelSize = 1.0f / bloomMipChain[i].Size;
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.dispatch(glm::ceil(bloomMipChain[i].Size.x / (f32)BLOOM_WG_SIZE_X),
                                      glm::ceil(bloomMipChain[i].Size.y / (f32)BLOOM_WG_SIZE_Y), 1);
@@ -1728,7 +1809,7 @@ namespace Radiant
                         pc.MipLevel     = i;
                         pc.SrcTexelSize = 1.0f / (bloomMipChain[i].Size * 2.0f);
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.draw(3, 1, 0, 0);
                     });
@@ -1788,7 +1869,7 @@ namespace Radiant
                         pc.SrcTextureID = scheduler.GetTexture(bubPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
                         pc.SrcTexelSize = 1.0f / (bloomMipChain[i].Size * 4.0f);
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.dispatch(glm::ceil(nextMipSize.x / (f32)BLOOM_WG_SIZE_X), glm::ceil(nextMipSize.y / (f32)BLOOM_WG_SIZE_Y), 1);
                     });
@@ -1827,7 +1908,7 @@ namespace Radiant
                         pc.SrcTextureID = scheduler.GetTexture(bubPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
                         pc.SrcTexelSize = 1.0f / bloomMipChain[i].Size;
 
-                        cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.draw(3, 1, 0, 0);
                     });
@@ -1873,7 +1954,7 @@ namespace Radiant
                 pc.MainPassTextureID = scheduler.GetTexture(finalPassData.MainPassTexture)->GetBindlessTextureID();
                 pc.BloomTextureID    = scheduler.GetTexture(finalPassData.BloomTexture)->GetBindlessTextureID();
 
-                cmd.pushConstants<PushConstantBlock>(*m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
+                cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);
                 cmd.draw(3, 1, 0, 0);
             });
@@ -1965,6 +2046,7 @@ namespace Radiant
 
                 ImGui::Separator();
                 ImGui::Checkbox("Bloom Use Compute", &s_bBloomComputeBased);
+                ImGui::Checkbox("Enable MSAA", &s_bEnableMSAA);
                 ImGui::Checkbox("Enable SSAO", &s_bEnableSSAO);
                 ImGui::Checkbox("SSAO Use Compute (Better Quality)", &s_bSSAOComputeBased);
                 ImGui::Checkbox("Update Lights", &s_bUpdateLights);

@@ -123,7 +123,7 @@ namespace Radiant
                                                                                      const u32 mipLevel = 0) const noexcept
         {
             return vk::RenderingAttachmentInfo()
-                .setImageView(*m_MipChain[mipLevel].ImageView)
+                .setImageView(m_MipChain[mipLevel].ImageView)
                 .setImageLayout(imageLayout)
                 .setClearValue(clearValue)
                 .setLoadOp(loadOp)
@@ -138,7 +138,7 @@ namespace Radiant
 
         struct MipInfo
         {
-            vk::UniqueImageView ImageView{};
+            vk::ImageView ImageView{};
             std::optional<u32> BindlessImageID{std::nullopt};
             std::optional<u32> BindlessTextureID{std::nullopt};
         };

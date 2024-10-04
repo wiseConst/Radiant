@@ -29,7 +29,6 @@ namespace Radiant
             VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,             // Provides query for current memory usage and budget.
             VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME,          // uint8 index buffer
         };
-
         // debugPrintEXT shaders
         if constexpr (s_bShaderDebugPrintf) requiredDeviceExtensions.emplace_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
 
@@ -113,6 +112,11 @@ namespace Radiant
         *paravozik                     = &indexTypeUint8FeaturesEXT;
         paravozik                      = &indexTypeUint8FeaturesEXT.pNext;
 
+        auto dynamicState3FeaturesEXT =
+            vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT().setExtendedDynamicState3DepthClampEnable(vk::True);
+        *paravozik = &dynamicState3FeaturesEXT;
+        paravozik  = &dynamicState3FeaturesEXT.pNext;
+
         constexpr vk::PhysicalDeviceFeatures vkFeatures10 = vk::PhysicalDeviceFeatures()
                                                                 .setShaderInt16(vk::True)
                                                                 .setShaderInt64(vk::True)
@@ -120,8 +124,9 @@ namespace Radiant
                                                                 .setMultiDrawIndirect(vk::True)
                                                                 .setSamplerAnisotropy(vk::True)
                                                                 .setPipelineStatisticsQuery(vk::True)
+                                                                .setDepthClamp(vk::True)
                                                                 // .setGeometryShader(vk::True)
-                                                                // TODO: Integrate AMD Compressonator .setTextureCompressionBC(vk::True)
+                                                                .setTextureCompressionBC(s_bUseTextureCompressionBC ? vk::True : vk::False)
                                                                 .setShaderStorageImageArrayDynamicIndexing(vk::True)
                                                                 .setShaderSampledImageArrayDynamicIndexing(vk::True);
         SelectGPUAndCreateDeviceThings(instance, surface, requiredDeviceExtensions, vkFeatures10, &vkFeatures13);
@@ -209,6 +214,7 @@ namespace Radiant
         std::vector<vk::QueueFamilyProperties> qfProperties = m_PhysicalDevice.getQueueFamilyProperties();
         RDNT_ASSERT(!qfProperties.empty(), "Queue Families are empty!");
 
+        UnorderedMap<u8, u8> queueFamilyToQueueCount;
         for (u32 i{}; i < qfProperties.size(); ++i)
         {
             const auto queueCount = qfProperties[i].queueCount;
@@ -217,31 +223,35 @@ namespace Radiant
             const auto queueFlags = qfProperties[i].queueFlags;
 
             constexpr auto generalQueueFlags = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer;
-            if (!m_GeneralQueue.QueueFamilyIndex.has_value() && queueFlags & generalQueueFlags)
+            if (m_Queues[0].QueueFamilyIndex == std::numeric_limits<u8>::max() && (queueFlags & generalQueueFlags))
             {
-                m_GeneralQueue.QueueFamilyIndex = i;
                 RDNT_ASSERT(qfProperties[i].timestampValidBits != 0, "Queue Family [{}] doesn't support timestamp queries!", i);
+                RDNT_ASSERT(m_PhysicalDevice.getSurfaceSupportKHR(i, *surface), "General queue should support present!");
 
-                RDNT_ASSERT(m_PhysicalDevice.getSurfaceSupportKHR(i, *surface), "Dedicated present queue not supported right now!");
-                if (!m_PresentQueue.QueueFamilyIndex.has_value()) m_PresentQueue.QueueFamilyIndex = i;
+                m_Queues[0].QueueFamilyIndex = i;
+                m_Queues[0].QueueIndex       = 0;
+                m_Queues[0].Type             = ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL;
 
-                continue;
-            }
+                queueFamilyToQueueCount[i] = 1;
 
-            if (!m_PresentQueue.QueueFamilyIndex.has_value() && m_PhysicalDevice.getSurfaceSupportKHR(i, *surface))
-            {
-                LOG_INFO("Found Dedicated-Present queue at family [{}] ??", i);
-                m_PresentQueue.QueueFamilyIndex = i;
                 continue;
             }
 
             // Check if DMA engine is present.
             const bool bIsDedicatedTransfer = (queueFlags == vk::QueueFlagBits::eTransfer ||
                                                queueFlags == (vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding));
-            if (!m_TransferQueue.QueueFamilyIndex.has_value() && bIsDedicatedTransfer)
+            if (m_Queues[c_TransferQueueOffsetArray].QueueFamilyIndex == std::numeric_limits<u8>::max() && bIsDedicatedTransfer)
             {
                 LOG_INFO("Found DMA engine at queue family [{}]", i);
-                m_TransferQueue.QueueFamilyIndex = i;
+
+                queueFamilyToQueueCount[i] = queueCount;
+                for (u32 queueIndex{}; queueIndex < queueCount; ++queueIndex)
+                {
+                    m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex = i;
+                    m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueIndex       = queueIndex;
+                    m_Queues[c_TransferQueueOffsetArray + queueIndex].Type = ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER;
+                }
+
                 continue;
             }
 
@@ -250,28 +260,32 @@ namespace Radiant
                  queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eSparseBinding) ||
                  queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer) ||
                  queueFlags == (vk::QueueFlagBits::eCompute | vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eSparseBinding));
-            if (!m_ComputeQueue.QueueFamilyIndex.has_value() && bIsAsyncCompute)
+            if (m_Queues[c_ComputeQueueOffsetArray].QueueFamilyIndex == std::numeric_limits<u8>::max() && bIsAsyncCompute)
             {
                 LOG_INFO("Found Async-Compute queue at family [{}]", i);
-                m_ComputeQueue.QueueFamilyIndex = i;
                 RDNT_ASSERT(qfProperties[i].timestampValidBits != 0, "Queue Family [{}] doesn't support timestamp queries!", i);
+
+                queueFamilyToQueueCount[i] = queueCount;
+                for (u32 queueIndex{}; queueIndex < queueCount; ++queueIndex)
+                {
+                    m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex = i;
+                    m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueIndex       = queueIndex;
+                    m_Queues[c_ComputeQueueOffsetArray + queueIndex].Type             = ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE;
+                }
             }
         }
-        RDNT_ASSERT(m_GeneralQueue.QueueFamilyIndex.has_value() && m_PresentQueue.QueueFamilyIndex.has_value() &&
-                        *m_GeneralQueue.QueueFamilyIndex == *m_PresentQueue.QueueFamilyIndex,
-                    "General Queue Family Index should contain present support!");
-        RDNT_ASSERT(m_GeneralQueue.QueueFamilyIndex.has_value(), "Failed to find General Queue Family Index!");
-        RDNT_ASSERT(m_PresentQueue.QueueFamilyIndex.has_value(), "Failed to find Present Queue Family Index!");
-        RDNT_ASSERT(m_TransferQueue.QueueFamilyIndex.has_value(), "Failed to find Dedicated-Transfer Queue Family Index!");
-        RDNT_ASSERT(m_ComputeQueue.QueueFamilyIndex.has_value(), "Failed to find Async-Compute Queue Family Index!");
+        RDNT_ASSERT(m_Queues[0].QueueFamilyIndex != std::numeric_limits<u8>::max(), "Failed to find General Queue Family Index!");
+        RDNT_ASSERT(m_Queues[c_TransferQueueOffsetArray].QueueFamilyIndex != std::numeric_limits<u8>::max(),
+                    "Failed to find Dedicated-Transfer Queue Family Index!");
+        RDNT_ASSERT(m_Queues[c_ComputeQueueOffsetArray].QueueFamilyIndex != std::numeric_limits<u8>::max(),
+                    "Failed to find Async-Compute Queue Family Index!");
+        constexpr std::array<f32, std::max(s_MaxComputeQueueCount, s_MaxTransferQueueCount)> queuePriorities = {0.0f, 0.0f, 0.0f, 0.0f,
+                                                                                                                0.0f, 0.0f, 0.0f, 0.0f};
 
-        constexpr f32 queuePriority = 1.0f;
         std::vector<vk::DeviceQueueCreateInfo> queuesCI;
-        for (const std::set<u32> uniqueQFIndices{*m_GeneralQueue.QueueFamilyIndex, *m_PresentQueue.QueueFamilyIndex,
-                                                 *m_TransferQueue.QueueFamilyIndex, *m_ComputeQueue.QueueFamilyIndex};
-             const auto qfIndex : uniqueQFIndices)
+        for (const auto& [queueFamily, queueCount] : queueFamilyToQueueCount)
         {
-            queuesCI.emplace_back().setQueuePriorities(queuePriority).setQueueCount(1).setQueueFamilyIndex(qfIndex);
+            queuesCI.emplace_back().setQueuePriorities(queuePriorities).setQueueCount(queueCount).setQueueFamilyIndex(queueFamily);
         }
 
         const auto logicalDeviceCI = vk::DeviceCreateInfo()
@@ -287,18 +301,73 @@ namespace Radiant
 
         SetDebugName(m_GPUProperties.deviceName, *m_Device);
 
-        m_GeneralQueue.Handle  = m_Device->getQueue(*m_GeneralQueue.QueueFamilyIndex, 0);
-        m_PresentQueue.Handle  = m_Device->getQueue(*m_PresentQueue.QueueFamilyIndex, 0);
-        m_TransferQueue.Handle = m_Device->getQueue(*m_TransferQueue.QueueFamilyIndex, 0);
-        m_ComputeQueue.Handle  = m_Device->getQueue(*m_ComputeQueue.QueueFamilyIndex, 0);
-
-        SetDebugName("COMMAND_QUEUE_TRANSFER", m_TransferQueue.Handle);
-        SetDebugName("COMMAND_QUEUE_COMPUTE", m_ComputeQueue.Handle);
-        SetDebugName("COMMAND_QUEUE_GRAPHICS_PRESENT", m_GeneralQueue.Handle);
-        if (m_GeneralQueue.Handle != m_PresentQueue.Handle)
+        constexpr u64 c_TimelineSemaphoreInitialValue = 0;
+        m_Queues[0].Handle                            = m_Device->getQueue(m_Queues[0].QueueFamilyIndex, m_Queues[0].QueueIndex);
+        for (auto& timelineValue : m_Queues[0].TimelineValue)
         {
-            SetDebugName("COMMAND_QUEUE_PRESENT", m_PresentQueue.Handle);
-            SetDebugName("COMMAND_QUEUE_GRAPHICS", m_GeneralQueue.Handle);
+            timelineValue = c_TimelineSemaphoreInitialValue;
+        }
+
+        std::ranges::for_each(m_Queues[0].TimelineSemaphore,
+                              [&](auto& timelineSemaphore)
+                              {
+                                  const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
+                                                                   .setInitialValue(c_TimelineSemaphoreInitialValue)
+                                                                   .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
+                                  timelineSemaphore = m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
+                              });
+        SetDebugName("COMMAND_QUEUE_GENERAL", m_Queues[0].Handle);
+
+        for (u32 queueIndex = 0; queueIndex < s_MaxComputeQueueCount; ++queueIndex)
+        {
+            if (m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex == std::numeric_limits<u8>::max()) continue;
+
+            for (auto& timelineValue : m_Queues[c_ComputeQueueOffsetArray + queueIndex].TimelineValue)
+            {
+                timelineValue = c_TimelineSemaphoreInitialValue;
+            }
+
+            std::ranges::for_each(m_Queues[c_ComputeQueueOffsetArray + queueIndex].TimelineSemaphore,
+                                  [&](auto& timelineSemaphore)
+                                  {
+                                      const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
+                                                                       .setInitialValue(c_TimelineSemaphoreInitialValue)
+                                                                       .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
+                                      timelineSemaphore =
+                                          m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
+                                  });
+
+            const std::string queueName = "COMMAND_QUEUE_ASYNC_COMPUTE_" + std::to_string(queueIndex);
+            m_Queues[c_ComputeQueueOffsetArray + queueIndex].Handle =
+                m_Device->getQueue(m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex,
+                                   m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueIndex);
+            SetDebugName(queueName.data(), m_Queues[c_ComputeQueueOffsetArray + queueIndex].Handle);
+        }
+
+        for (u32 queueIndex = 0; queueIndex < s_MaxTransferQueueCount; ++queueIndex)
+        {
+            if (m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex == std::numeric_limits<u8>::max()) continue;
+
+            for (auto& timelineValue : m_Queues[c_TransferQueueOffsetArray + queueIndex].TimelineValue)
+            {
+                timelineValue = c_TimelineSemaphoreInitialValue;
+            }
+
+            std::ranges::for_each(m_Queues[c_TransferQueueOffsetArray + queueIndex].TimelineSemaphore,
+                                  [&](auto& timelineSemaphore)
+                                  {
+                                      const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
+                                                                       .setInitialValue(c_TimelineSemaphoreInitialValue)
+                                                                       .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
+                                      timelineSemaphore =
+                                          m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
+                                  });
+
+            const std::string queueName = "COMMAND_QUEUE_DEDICATED_TRANSFER_" + std::to_string(queueIndex);
+            m_Queues[c_TransferQueueOffsetArray + queueIndex].Handle =
+                m_Device->getQueue(m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex,
+                                   m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueIndex);
+            SetDebugName(queueName.data(), m_Queues[c_TransferQueueOffsetArray + queueIndex].Handle);
         }
     }
 
@@ -421,10 +490,10 @@ namespace Radiant
     void GfxDevice::AllocateMemory(VmaAllocation& allocation, const vk::MemoryRequirements& finalMemoryRequirements,
                                    const vk::MemoryPropertyFlags preferredFlags) noexcept
     {
-        const VmaAllocationCreateInfo allocationCI = {.flags =
-                                                          VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT/* | VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT*/,
-                                                      /*.usage          = VMA_MEMORY_USAGE_AUTO,*/
-                                                      .preferredFlags = (VkMemoryPropertyFlags)preferredFlags};
+        const VmaAllocationCreateInfo allocationCI = {
+            .flags = VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT /* | VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT*/,
+            /*.usage          = VMA_MEMORY_USAGE_AUTO,*/
+            .preferredFlags = (VkMemoryPropertyFlags)preferredFlags};
 
         RDNT_ASSERT(vmaAllocateMemory(m_Allocator, (const VkMemoryRequirements*)&finalMemoryRequirements, &allocationCI, &allocation,
                                       nullptr) == VK_SUCCESS,

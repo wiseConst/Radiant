@@ -7,16 +7,47 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#include <compressonator.h>
-
 namespace Radiant
 {
 
     namespace GfxTextureUtils
     {
-        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels, const i32 requestedChannels) noexcept
+
+        static constexpr const char* s_TextureCacheDir = "texture_cache/";
+
+        NODISCARD static nvtt::Format VulkanFormatToNvttFormat(const vk::Format format) noexcept
+        {
+            switch (format)
+            {
+                case vk::Format::eR8G8B8Unorm: return nvtt::Format::Format_RGB;
+                case vk::Format::eR8G8B8A8Unorm: return nvtt::Format::Format_RGBA;
+                case vk::Format::eBc1RgbUnormBlock: return nvtt::Format::Format_BC1;
+                case vk::Format::eBc1RgbaUnormBlock: return nvtt::Format::Format_BC1a;
+
+                case vk::Format::eBc2UnormBlock: return nvtt::Format::Format_BC2;
+                case vk::Format::eBc3UnormBlock: return nvtt::Format::Format_BC3;
+
+                case vk::Format::eBc4UnormBlock: return nvtt::Format::Format_BC4;
+                case vk::Format::eBc4SnormBlock: return nvtt::Format::Format_BC4S;
+
+                case vk::Format::eBc5UnormBlock: return nvtt::Format::Format_BC5;
+                case vk::Format::eBc5SnormBlock: return nvtt::Format::Format_BC5S;
+
+                case vk::Format::eBc6HUfloatBlock: return nvtt::Format::Format_BC6U;
+                case vk::Format::eBc6HSfloatBlock: return nvtt::Format::Format_BC6S;
+
+                case vk::Format::eBc7UnormBlock: return nvtt::Format::Format_BC7;
+            }
+
+            RDNT_ASSERT(false, "Failed to determine NVTT compression format!");
+        }
+
+        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels, const i32 requestedChannels,
+                        const bool bFlipOnLoad) noexcept
         {
             RDNT_ASSERT(!imagePath.empty(), "Invalid image path!");
+
+            if (bFlipOnLoad) stbi_set_flip_vertically_on_load(true);
 
             void* imageData{nullptr};
             if (stbi_is_hdr(imagePath.data()))
@@ -31,13 +62,17 @@ namespace Radiant
                 channels = requestedChannels;
             }
 
+            if (bFlipOnLoad) stbi_set_flip_vertically_on_load(false);
+
             return imageData;
         }
 
         void* LoadImage(const void* rawImageData, const u64 rawImageDataSize, i32& width, i32& height, i32& channels,
-                        const i32 requestedChannels) noexcept
+                        const i32 requestedChannels, const bool bFlipOnLoad) noexcept
         {
             RDNT_ASSERT(rawImageData && rawImageDataSize > 0, "Invalid raw image data or size!");
+
+            if (bFlipOnLoad) stbi_set_flip_vertically_on_load(true);
 
             void* imageData = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(rawImageData), rawImageDataSize, &width, &height,
                                                     &channels, requestedChannels);
@@ -48,6 +83,8 @@ namespace Radiant
                 LOG_INFO("Overwriting loaded image's channels to 4! Previous: {}", channels);
                 channels = 4;
             }
+
+            if (bFlipOnLoad) stbi_set_flip_vertically_on_load(false);
 
             return imageData;
         }
@@ -60,6 +97,287 @@ namespace Radiant
         u32 GetMipLevelCount(const u32 width, const u32 height) noexcept
         {
             return static_cast<u32>(std::floor(std::log2(std::max(width, height)))) + 1;  // NOTE: +1 for base mip level
+        }
+
+        void TextureCompressor::PushTextureIntoBatchList(const std::string& texturePath, const vk::Format dstFormat) noexcept
+        {
+            RDNT_ASSERT(!texturePath.empty(), "Texture path is invalid!");
+            if (IsCacheExist(texturePath, dstFormat)) return;
+
+            m_TexturesToLoad[dstFormat].emplace_back(texturePath);
+        }
+
+        void TextureCompressor::CompressAndCache() noexcept
+        {
+            if (m_TexturesToLoad.empty()) return;
+            if (!std::filesystem::exists(s_TextureCacheDir)) std::filesystem::create_directory(s_TextureCacheDir);
+
+            // Create the compression context; enable CUDA compression, so that
+            // CUDA-capable GPUs will use GPU acceleration for compression, with a
+            // fallback on other GPUs for CPU compression.
+            nvtt::Context context = {};
+            context.enableCudaAcceleration(true);
+
+            if (context.isCudaAccelerationEnabled())
+                LOG_INFO("[TextureCompressor]: Enjoy the blazingly fast caching process with cuda!");
+            else
+                LOG_INFO("[TextureCompressor]: No CUDA for you. AMD card or old drivers?");
+
+            static constexpr u64 batchSizeLimitBytes = 64 * 1024 * 1024;  // 64 MB
+            u64 currentBatchSize                     = 0;
+            u32 currentBatchCount{};
+
+            for (const auto& [format, texturePaths] : m_TexturesToLoad)
+            {
+                nvtt::CompressionOptions compressionOptions = {};
+                compressionOptions.setFormat(VulkanFormatToNvttFormat(format));
+
+                constexpr nvtt::Quality compressionQuality{nvtt::Quality::Quality_Normal};
+                compressionOptions.setQuality(compressionQuality);
+
+                // NOTE: Storing array of unique ptrs since surface should be per mip per face.
+                std::vector<Unique<nvtt::Surface>> surfaceList;
+                surfaceList.reserve(texturePaths.size());
+
+                std::vector<nvtt::OutputOptions> outputOptionList(texturePaths.size());
+                std::vector<std::string> outputTexturePaths(texturePaths.size());
+                std::vector<Unique<RadiantTextureFileWriter>> textureFileWriters(texturePaths.size());
+
+                // NOTE: Currently hardcoded, will be extended as needed.
+                constexpr i32 face = 0;
+
+                u32 i{};
+                while (i < texturePaths.size())
+                {
+                    currentBatchCount         = 0;
+                    currentBatchSize          = 0;
+                    nvtt::BatchList batchList = {};
+                    for (; i < texturePaths.size(); ++i)
+                    {
+                        const auto& texturePath  = texturePaths[i];
+                        const auto texturePathFS = std::filesystem::path(texturePath);
+                        RDNT_ASSERT(std::filesystem::exists(texturePathFS), "Texture path: {}, doesn't exist!", texturePath);
+
+                        const auto currentFileSizeBytes = std::filesystem::file_size(texturePathFS);
+                        if (currentBatchSize + currentFileSizeBytes > batchSizeLimitBytes && currentBatchSize > 0) break;
+
+                        auto& srcImage = *surfaceList.emplace_back(MakeUnique<nvtt::Surface>());
+                        RDNT_ASSERT(srcImage.load(texturePath.data()), "Failed to load: {}", texturePath);
+
+                        const auto dimensions = glm::uvec2(srcImage.width(), srcImage.height());
+                        const u32 mipCount    = srcImage.countMipmaps();
+
+                        outputTexturePaths[i] = DetermineTextureCachePath(texturePath, format);
+                        textureFileWriters[i] = MakeUnique<RadiantTextureFileWriter>(outputTexturePaths[i], dimensions, mipCount);
+                        outputOptionList[i].setOutputHandler(reinterpret_cast<nvtt::OutputHandler*>(textureFileWriters[i].get()));
+
+                        u32 prevMipImageIndex = surfaceList.size() - 1;
+                        batchList.Append(&srcImage, face, 0, &outputOptionList[i]);
+                        for (u32 mip = 1; mip < mipCount; ++mip)
+                        {
+                            auto& mippedImage = *surfaceList.emplace_back(MakeUnique<nvtt::Surface>(*surfaceList[prevMipImageIndex]));
+                            batchList.Append(&mippedImage, face, mip, &outputOptionList[i]);
+
+                            if (mip == mipCount - 1) break;
+
+                            // Prepare the next mip:
+
+                            // Convert to linear premultiplied alpha. Note that toLinearFromSrgb()
+                            // will clamp HDR images; consider e.g. toLinear(2.2f) instead.
+                            mippedImage.toLinearFromSrgb();
+                            mippedImage.premultiplyAlpha();
+
+                            // Resize the image to the next mipmap size.
+                            // NVTT has several mipmapping filters; Box is the lowest-quality, but
+                            // also the fastest to use.
+                            mippedImage.buildNextMipmap(nvtt::MipmapFilter_Box);
+                            // For general image resizing. use image.resize().
+
+                            // Convert back to unpremultiplied sRGB.
+                            mippedImage.demultiplyAlpha();
+                            mippedImage.toSrgb();
+
+                            prevMipImageIndex = surfaceList.size() - 1;
+                        }
+
+                        currentBatchSize += currentFileSizeBytes;
+                        ++currentBatchCount;
+                    }
+
+                    const auto compressionBeginTime = Timer::Now();
+
+                    RDNT_ASSERT(context.compress(batchList, compressionOptions), "Failed to compress batch list!");
+
+                    LOG_INFO("Time taken to compress {} textures: {} seconds", currentBatchCount,
+                             Timer::GetElapsedSecondsFromNow(compressionBeginTime));
+                }
+            }
+        }
+
+        NODISCARD std::vector<TextureCompressor::TextureInfo> TextureCompressor::LoadTextureCache(const std::string& texturePath,
+                                                                                                  const vk::Format format) noexcept
+        {
+            RDNT_ASSERT(!texturePath.empty(), "Texture path is invalid!");
+            const auto cachedTexturePath = DetermineTextureCachePath(texturePath, format);
+            RDNT_ASSERT(std::filesystem::exists(cachedTexturePath), "Texture cache for: {}, doesn't exist!", texturePath);
+
+            auto textureHeader = TextureCompressor::TextureHeader{};
+
+            auto rawData = CoreUtils::LoadData<u8>(cachedTexturePath);
+            std::memcpy(&textureHeader, rawData.data(), sizeof(textureHeader));
+
+            u64 rawReadDataOffset{sizeof(textureHeader)};
+            u32 mipWidth{textureHeader.Dimensions.x}, mipHeight{textureHeader.Dimensions.y};
+
+            std::vector<TextureCompressor::TextureInfo> textureInfos(textureHeader.MipCount);
+            for (u32 mip{}; mip < textureInfos.size(); ++mip)
+            {
+                textureInfos[mip].Dimensions = {mipWidth, mipHeight};
+
+                u32 sizeBytes{};
+                std::memcpy(&sizeBytes, rawData.data() + rawReadDataOffset, sizeof(sizeBytes));
+                rawReadDataOffset += sizeof(sizeBytes);
+
+                textureInfos[mip].Data.resize(sizeBytes);
+                std::memcpy(textureInfos[mip].Data.data(), rawData.data() + rawReadDataOffset, sizeBytes);
+                rawReadDataOffset += sizeBytes;
+
+                mipWidth  = mipWidth > 1 ? mipWidth / 2 : 1;
+                mipHeight = mipHeight > 1 ? mipHeight / 2 : 1;
+            }
+
+            return textureInfos;
+        }
+
+        NODISCARD std::vector<TextureCompressor::TextureInfo> TextureCompressor::CompressSingle(const std::string& texturePath,
+                                                                                                const vk::Format format,
+                                                                                                const bool bBuildMips,
+                                                                                                const nvtt::Quality quality) noexcept
+        {
+            RDNT_ASSERT(!texturePath.empty(), "Texture path is invalid!");
+            if (!std::filesystem::exists(s_TextureCacheDir)) std::filesystem::create_directory(s_TextureCacheDir);
+
+            const auto textureCachePath = DetermineTextureCachePath(texturePath, format);
+            if (std::filesystem::exists(textureCachePath))
+            {
+                LOG_INFO("Found texture cache for: {}", texturePath);
+                return LoadTextureCache(texturePath, format);
+            }
+
+            // Create the compression context; enable CUDA compression, so that
+            // CUDA-capable GPUs will use GPU acceleration for compression, with a
+            // fallback on other GPUs for CPU compression.
+            nvtt::Context context = {};
+            context.enableCudaAcceleration(true);
+
+            if (context.isCudaAccelerationEnabled())
+                LOG_INFO("[TextureCompressor]: Enjoy the blazingly fast caching process with cuda!");
+            else
+                LOG_INFO("[TextureCompressor]: No CUDA for you. AMD card or old drivers?");
+
+            nvtt::CompressionOptions compressionOptions = {};
+            compressionOptions.setFormat(VulkanFormatToNvttFormat(format));
+            compressionOptions.setQuality(quality);
+
+            nvtt::Surface image;
+            image.load(texturePath.data());
+
+            const auto dimensions = glm::uvec2(image.width(), image.height());
+            const u32 mipCount    = image.countMipmaps();
+
+            const auto compressionBeginTime = Timer::Now();
+            {
+                // NOTE: Need braces since writer closes file in the d-ctor().
+
+                RadiantTextureFileWriter writer(textureCachePath, dimensions, mipCount);
+
+                nvtt::OutputOptions outputOptions{};
+                outputOptions.setOutputHandler(reinterpret_cast<nvtt::OutputHandler*>(&writer));
+
+                // NOTE: Currently hardcoded, will be extended as needed.
+                constexpr i32 face = 0;
+
+                for (u32 mip{}; mip < mipCount; ++mip)
+                {
+                    RDNT_ASSERT(context.compress(image, face, mip, compressionOptions, outputOptions),
+                                "Failed to compress {}, mip: {}, face: {}", texturePath, mip, face);
+
+                    if (mip == mipCount - 1 || !bBuildMips) break;
+
+                    // Prepare the next mip:
+
+                    // Convert to linear premultiplied alpha. Note that toLinearFromSrgb()
+                    // will clamp HDR images; consider e.g. toLinear(2.2f) instead.
+                    image.toLinearFromSrgb();
+                    image.premultiplyAlpha();
+
+                    // Resize the image to the next mipmap size.
+                    // NVTT has several mipmapping filters; Box is the lowest-quality, but
+                    // also the fastest to use.
+                    image.buildNextMipmap(nvtt::MipmapFilter_Box);
+                    // For general image resizing. use image.resize().
+
+                    // Convert back to unpremultiplied sRGB.
+                    image.demultiplyAlpha();
+                    image.toSrgb();
+                }
+            }
+
+            LOG_INFO("Time taken to compress texture {} with {} mips: {} seconds", texturePath, mipCount,
+                     Timer::GetElapsedSecondsFromNow(compressionBeginTime));
+
+            return LoadTextureCache(texturePath, format);
+        }
+
+        NODISCARD const std::string TextureCompressor::DetermineTextureCachePath(const std::string& texturePath,
+                                                                                 const vk::Format format) noexcept
+        {
+            RDNT_ASSERT(!texturePath.empty(), "Texture path is invalid!");
+            std::filesystem::path outputTextureName{s_TextureCacheDir};
+
+            // Find the last occurrence of '/' in the path.
+            const u64 lastSlashPosIndex = texturePath.find_last_of('/');
+
+            // Find the position of the penultimate slash.
+            const u64 penultimateSlashPosIndex = texturePath.find_last_of('/', lastSlashPosIndex - 1);
+
+            // Extract the substring from the 2nd penultimate slash to the end.
+            if (penultimateSlashPosIndex != std::string::npos)
+                outputTextureName += texturePath.substr(penultimateSlashPosIndex + 1);
+            else
+                outputTextureName += texturePath;
+
+            // Create the directories if they don't exist.
+            std::filesystem::create_directories(std::filesystem::path(outputTextureName).parent_path());
+
+            switch (format)
+            {
+                case vk::Format::eBc1RgbUnormBlock: outputTextureName.replace_extension(".bc1"); break;
+                case vk::Format::eBc1RgbaUnormBlock: outputTextureName.replace_extension(".bc1a"); break;
+
+                case vk::Format::eBc2UnormBlock: outputTextureName.replace_extension(".bc2"); break;
+                case vk::Format::eBc3UnormBlock: outputTextureName.replace_extension(".bc3"); break;
+
+                case vk::Format::eBc4UnormBlock: outputTextureName.replace_extension(".bc4"); break;
+                case vk::Format::eBc4SnormBlock: outputTextureName.replace_extension(".bc4s"); break;
+
+                case vk::Format::eBc5UnormBlock: outputTextureName.replace_extension(".bc5"); break;
+                case vk::Format::eBc5SnormBlock: outputTextureName.replace_extension(".bc5s"); break;
+
+                case vk::Format::eBc6HUfloatBlock: outputTextureName.replace_extension(".bc6u"); break;
+                case vk::Format::eBc6HSfloatBlock: outputTextureName.replace_extension(".bc6s"); break;
+
+                case vk::Format::eBc7UnormBlock: outputTextureName.replace_extension(".bc7"); break;
+                default: RDNT_ASSERT(false, "Failed to determine NVTT compression format!");
+            }
+
+            return outputTextureName.string();
+        }
+
+        NODISCARD bool TextureCompressor::IsCacheExist(const std::string& texturePath, const vk::Format format) noexcept
+        {
+            const auto textureCachePath = std::filesystem::path(DetermineTextureCachePath(texturePath, format));
+            return std::filesystem::exists(textureCachePath);
         }
 
     }  // namespace GfxTextureUtils
@@ -131,8 +449,7 @@ namespace Radiant
                                              .setLevelCount(bGenerateMips ? mipLevelCount : 1)));
 
             {
-                auto executionContext =
-                    GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
+                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL);
                 executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
@@ -166,8 +483,7 @@ namespace Radiant
 
             if (m_Description.UsageFlags & vk::ImageUsageFlagBits::eStorage)
             {
-                auto executionContext =
-                    GfxContext::Get().CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
+                auto executionContext = GfxContext::Get().CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL);
                 executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
                 executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(

@@ -19,7 +19,7 @@ namespace Radiant
 
     static constexpr uint32_t s_IrradianceCubeMapSize = 64;
 
-#define MAX_POINT_LIGHT_COUNT 128
+#define MAX_POINT_LIGHT_COUNT 1024
     // TODO: Implement spot lights
 #define MAX_SPOT_LIGHT_COUNT 256
 
@@ -45,6 +45,7 @@ namespace Radiant
         int16_t TSign;  // NOTE: Maybe put in the last tangent's bit?
     };
 
+    // TODO: Instancing + culling(instance frustum occlusion meshlet triangle cone culling)
     struct ObjectInstanceData
     {
         float3 scale;
@@ -95,6 +96,7 @@ namespace Radiant
 
     namespace Shaders
     {
+        static const float3 s_BASE_REFLECTIVITY = float3(0.04f);
         static const float s_KINDA_SMALL_NUMBER = 10.E-4f;
         static const float s_PI                 = 3.14159265f;
         static const float s_RcpPI              = 0.31830989f;
@@ -329,10 +331,10 @@ namespace Radiant
         float3 EvaluateFresnel(const float NdotV, const float3 F0, /*const float roughness,*/ const float3 F90 = float3(1.0f))
         {
             // From filament if F90 = 1
-             const float f = pow(1.0 - NdotV, 5.0);
-             return f + F0 * (1.0 - f);
-            //return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
-            //  return F0 + (max(float3(1.0f - roughness), F0) - F0) * pow(1.0f - NdotV, 5.0f);
+            const float f = pow(1.0 - NdotV, 5.0);
+            return f + F0 * (1.0 - f);
+            // return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
+            //   return F0 + (max(float3(1.0f - roughness), F0) - F0) * pow(1.0f - NdotV, 5.0f);
         }
 
 #else

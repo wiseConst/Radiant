@@ -50,17 +50,20 @@ namespace Radiant
 
             auto dynamicRenderingInfo = vk::PipelineRenderingCreateInfo();
             std::vector<vk::Format> colorAttachmentFormats;
-            for (const auto renderingFormat : gpo->RenderingFormats)
+            for (u32 i{}; i < gpo->RenderingFormats.size(); ++i)
             {
+                const auto format = gpo->RenderingFormats[i];
                 // TODO: Stencil formats
-                if (GfxTexture::IsDepthFormat(renderingFormat))
+                if (GfxTexture::IsDepthFormat(format))
                 {
                     RDNT_ASSERT(dynamicRenderingInfo.depthAttachmentFormat == vk::Format::eUndefined,
                                 "Depth attachment already initialized?!");
-                    dynamicRenderingInfo.setDepthAttachmentFormat(renderingFormat);
+                    dynamicRenderingInfo.setDepthAttachmentFormat(format);
                 }
                 else
-                    colorAttachmentFormats.emplace_back(renderingFormat);
+                {
+                    colorAttachmentFormats.emplace_back(format);
+                }
             }
             dynamicRenderingInfo.setColorAttachmentFormats(colorAttachmentFormats);
 
@@ -75,18 +78,15 @@ namespace Radiant
                                                  .setMinDepthBounds(gpo->DepthBounds.x)
                                                  .setMaxDepthBounds(gpo->DepthBounds.y);
 
-            const auto inputAssemblyStateCI =
-                vk::PipelineInputAssemblyStateCreateInfo().setTopology(gpo->PrimitiveTopology).setPrimitiveRestartEnable(vk::False);
-            const auto vtxInputStateCI = vk::PipelineVertexInputStateCreateInfo();
-
             std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments;
-            for (const auto format : colorAttachmentFormats)
+            for (u32 i{}; i < colorAttachmentFormats.size(); ++i)
             {
                 auto& colorBlendAttachment = colorBlendAttachments.emplace_back(vk::PipelineColorBlendAttachmentState().setColorWriteMask(
                     vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
                     vk::ColorComponentFlagBits::eA));
-
-                switch (gpo->BlendMode)
+                const auto blendMode =
+                    gpo->BlendModes.empty() ? GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_NONE : gpo->BlendModes[i];
+                switch (blendMode)
                 {
                     case GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_NONE: break;
                     case GfxGraphicsPipelineOptions::EBlendMode::BLEND_MODE_ALPHA:
@@ -113,8 +113,12 @@ namespace Radiant
                     }
                 }
             }
+            const auto blendStateCI = vk::PipelineColorBlendStateCreateInfo().setAttachments(colorBlendAttachments);
 
-            const auto blendStateCI         = vk::PipelineColorBlendStateCreateInfo().setAttachments(colorBlendAttachments);
+            const auto inputAssemblyStateCI =
+                vk::PipelineInputAssemblyStateCreateInfo().setTopology(gpo->PrimitiveTopology).setPrimitiveRestartEnable(vk::False);
+            const auto vtxInputStateCI = vk::PipelineVertexInputStateCreateInfo();
+
             const auto rasterizationStateCI = vk::PipelineRasterizationStateCreateInfo()
                                                   .setCullMode(gpo->CullMode)
                                                   .setFrontFace(gpo->FrontFace)
@@ -128,11 +132,7 @@ namespace Radiant
                     .setRasterizationSamples(gpo->bMultisample ? m_Device->GetMSAASamples() : vk::SampleCountFlagBits::e1)
                     .setMinSampleShading(1.0f);
 
-            // NOTE: Unfortunately vulkan.hpp doesn't recognize ankerl's unordered set.
-            std::vector<vk::DynamicState> dynamicStates;
-            for (const auto& dynamicState : gpo->DynamicStates)
-                dynamicStates.emplace_back(dynamicState);
-            const auto dynamicStateCI = vk::PipelineDynamicStateCreateInfo().setDynamicStates(dynamicStates);
+            const auto dynamicStateCI = vk::PipelineDynamicStateCreateInfo().setDynamicStates(gpo->DynamicStates);
 
             const auto shaderStages = m_Description.Shader->GetShaderStages();
             auto [result, pipeline] = m_Device->GetLogicalDevice()->createGraphicsPipelineUnique(
@@ -168,6 +168,7 @@ namespace Radiant
             RDNT_ASSERT(false, "This shouldn't happen! {}", __FUNCTION__);
 
         m_Device->SetDebugName(m_Description.DebugName, *m_Dummy);
+        m_Description.Shader->Clear();
     }
 
     void GfxPipeline::Destroy() noexcept

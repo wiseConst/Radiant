@@ -33,6 +33,11 @@
 
 # My files
 build
-ThirdParty
+ThirdParty/*
+
+!ThirdParty/nvtt/
+!ThirdParty/nvtt/bin/*.dll
+!ThirdParty/nvtt/lib/*.lib
+
 Assets/Models/
 !Assets/Models/standard

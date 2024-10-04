@@ -63,27 +63,27 @@ if (MSVC)
     # Dynamic MSVC runtime library linking
     set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded$<$<CONFIG:Debug>:Debug>DLL$<$<NOT:$<CONFIG:Debug>>:>)
 
+    # No console
     # target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:RELEASE>:/SUBSYSTEM:WINDOWS>")
 endif()
 
 # ============= ThirdParty =============
 
-# AMD compressonator(currently WINDOWS only)
-set(AMD_COMPRESSONATOR_VERSION 4.5.52)
-set(AMD_COMPRESSONATOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Compressonator_${AMD_COMPRESSONATOR_VERSION}")
-target_include_directories(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/include)
+# NVTT (texture compression NV cards only)
+set(NVTT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/nvtt")
+target_include_directories(${PROJECT_NAME} PRIVATE ${NVTT_ROOT}/include)
 
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${AMD_COMPRESSONATOR_ROOT}/lib/Compressonator_MT_DLL.lib)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${NVTT_ROOT}/lib/nvtt30205.lib)
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
+         ${NVTT_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
     )
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-         ${AMD_COMPRESSONATOR_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
+         ${NVTT_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
     )
 endif()
 

@@ -22,10 +22,11 @@ namespace Radiant
         }
         ~GfxShader() noexcept = default;
 
-        NODISCARD std::vector<vk::PipelineShaderStageCreateInfo> GetShaderStages() const noexcept;
+        void Clear() noexcept { m_ModuleMap.clear(); }
+        NODISCARD std::vector<vk::PipelineShaderStageCreateInfo> GetShaderStages() noexcept;
         FORCEINLINE void HotReload() noexcept
         {
-            m_ModuleMap.clear();
+            Clear();
             Invalidate();
         }
 

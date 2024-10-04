@@ -108,8 +108,12 @@ void computeMain(uint3 DTid : SV_DispatchThreadID, const uint3 Gid : SV_GroupID,
         float4 offsetUV = mul(u_PC.CameraData->ProjectionMatrix, float4(sample, 1.0f));
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;
 
-        /*
-        // NOTE: Even best if-path accross threads inside warp sucks :(
+#define REUSE_DEPTH_GS 0
+#if REUSE_DEPTH_GS
+        // NOTE: 
+        // 1) somewhy it's slow a bit
+        // 2) gives patterns
+        // 3) Even best if-path accross threads inside warp sucks :(
         float sampledDepth = 0.0f;
         const uint2 pixel = uint2(offsetUV.xy * u_PC.CameraData.FullResolution - float2(0.5f));
         const uint sampledDepthIdx = Shaders::flatten2D(pixel - tileUpperLeft, TILE_SIZE);
@@ -121,9 +125,10 @@ void computeMain(uint3 DTid : SV_DispatchThreadID, const uint3 Gid : SV_GroupID,
         {
             sampledDepth = Shaders::ScreenSpaceDepthToView( Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->DepthUnpackConsts);
         }
-        */
-
+#else
         const float sampledDepth = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->DepthUnpackConsts);
+#endif
+        
         const float rangeCheck = smoothstep(0.0f, 1.0f, Shaders::g_SampleRadius / abs(viewPos.z - sampledDepth));
         ao += step(sample.z + Shaders::g_SampleBias, sampledDepth) * rangeCheck;
     }

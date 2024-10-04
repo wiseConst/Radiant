@@ -22,6 +22,7 @@ namespace Radiant
         const Unique<GfxContext>& m_GfxContext;
         vk::UniqueDescriptorPool m_ImGuiPool{};
 
+        constexpr ImGuiRenderer() noexcept = delete;
         void Init() noexcept;
     };
 

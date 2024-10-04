@@ -56,12 +56,12 @@ namespace Radiant
             }
 
             // Gather results and prepare them.
-            float minX[8] = {0.0f}, minY[8] = {0.0f}, minZ[8] = {0.0f};
+            f32 minX[8] = {0.0f}, minY[8] = {0.0f}, minZ[8] = {0.0f};
             _mm256_storeu_ps(minX, minVecX);
             _mm256_storeu_ps(minY, minVecY);
             _mm256_storeu_ps(minZ, minVecZ);
 
-            float maxX[8] = {0.0f}, maxY[8] = {0.0f}, maxZ[8] = {0.0f};
+            f32 maxX[8] = {0.0f}, maxY[8] = {0.0f}, maxZ[8] = {0.0f};
             _mm256_storeu_ps(maxX, maxVecX);
             _mm256_storeu_ps(maxY, maxVecY);
             _mm256_storeu_ps(maxZ, maxVecZ);
@@ -116,8 +116,8 @@ namespace Radiant
                     farthestVtx[1] = point.Position;
             }
 
-            const float averagedVtxToFarthestDistance  = glm::distance(farthestVtx[0], averagedVertexPos);
-            const float aabbCentroidToFarthestDistance = glm::distance(farthestVtx[1], aabbCenter);
+            const f32 averagedVtxToFarthestDistance  = glm::distance(farthestVtx[0], averagedVertexPos);
+            const f32 aabbCentroidToFarthestDistance = glm::distance(farthestVtx[1], aabbCenter);
 
             const Sphere sphere = {.Origin =
                                        averagedVtxToFarthestDistance < aabbCentroidToFarthestDistance ? averagedVertexPos : aabbCenter,
@@ -235,11 +235,13 @@ namespace Radiant
             }
         }
 
+        constexpr bool c_bGenerateMipMaps      = true;
+        constexpr bool c_bUseSamplerAnisotropy = true;
         // NOTE: For simplicity, usage of the same texture with multiple samplers isn't supported at least for now!
         NODISCARD static std::string LoadTexture(std::mutex& loaderMutex, UnorderedMap<std::string, Shared<GfxTexture>>& textureMap,
                                                  const std::filesystem::path& meshParentPath, const Unique<GfxContext>& gfxContext,
                                                  const fastgltf::Asset& asset, const fastgltf::Texture& texture,
-                                                 const std::vector<vk::SamplerCreateInfo>& samplerCIs) noexcept
+                                                 const std::optional<vk::SamplerCreateInfo>& samplerCI, const vk::Format format) noexcept
         {
             if (!texture.imageIndex.has_value())
             {
@@ -252,9 +254,7 @@ namespace Radiant
                 textureMap[defaultWhiteTextureName] = gfxContext->GetDefaultWhiteTexture();
                 return defaultWhiteTextureName;
             }
-            i32 width{1}, height{1}, channels{4};
 
-            GfxImmediateExecuteContext executionContext = {};
             std::string textureName{s_DEFAULT_STRING};
             Shared<GfxTexture> loadedTexture{nullptr};
             std::visit(
@@ -276,46 +276,61 @@ namespace Radiant
                         }
 
                         const auto textureFilePath = meshParentPath / textureName;
-                        void* imageData            = GfxTextureUtils::LoadImage(textureFilePath.string(), width, height, channels);
-                        RDNT_ASSERT(imageData, "fastgltf: Failed to load image data!");
 
-                        constexpr bool bGenerateMipMaps = true;
-                        std::optional<vk::SamplerCreateInfo> samplerCI{std::nullopt};
-                        if (texture.samplerIndex.has_value()) samplerCI = samplerCIs[*texture.samplerIndex];
+                        std::vector<GfxTextureUtils::TextureCompressor::TextureInfo> mips{};
+                        if constexpr (s_bUseTextureCompressionBC)
+                        {
+                            mips = GfxTextureUtils::TextureCompressor::LoadTextureCache(textureFilePath.string(), format);
+                        }
+                        else
+                        {
+                            i32 width{1}, height{1}, channels{4};
+
+                            void* stbImageData = GfxTextureUtils::LoadImage(textureFilePath.string(), width, height, channels);
+                            RDNT_ASSERT(stbImageData, "fastgltf: Failed to load image data!");
+
+                            auto& mip      = mips.emplace_back();
+                            mip.Dimensions = glm::uvec2{width, height};
+
+                            const auto stbImageDataSizeBytes = static_cast<u64>(width * height * channels * sizeof(u8));
+                            mip.Data.resize(stbImageDataSizeBytes);
+                            std::memcpy(mip.Data.data(), stbImageData, stbImageDataSizeBytes);
+
+                            GfxTextureUtils::UnloadImage(stbImageData);
+                        }
+
+                        u32 width = mips[0].Dimensions.x, height = mips[0].Dimensions.y;
 
                         {
                             std::scoped_lock lock(loaderMutex);  // Synchronizing access to textureMap by loading actual texture
                             loadedTexture = MakeShared<GfxTexture>(
                                 gfxContext->GetDevice(),
-                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1), vk::Format::eR8G8B8A8Unorm,
+                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1), format,
                                                       vk::ImageUsageFlagBits::eTransferDst, samplerCI, 1, vk::SampleCountFlagBits::e1,
-                                                      EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT));
+                                                      c_bGenerateMipMaps ? EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT : 0));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
 
-                        const auto imageSize = static_cast<u64>(width * height * channels * sizeof(u8));
-                        auto stagingBuffer   = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
-                                                                   GfxBufferDescription(imageSize, /* placeholder */ 1,
-                                                                                          vk::BufferUsageFlagBits::eTransferSrc,
-                                                                                          EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
-                        stagingBuffer->SetData(imageData, imageSize);
-
-                        executionContext =
-                            gfxContext->CreateImmediateExecuteContext(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT);
+                        auto executionContext = gfxContext->CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL);
                         executionContext.CommandBuffer.begin(
                             vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+                        // NOTE: Currently BCn mips are loaded by hand, and RGBA8 are blitted, so mipsToIterateCount will be > 1 for BCn.
+                        const u32 mipCount            = c_bGenerateMipMaps
+                                                            ? glm::max(GfxTextureUtils::GetMipLevelCount(width, height), static_cast<u32>(mips.size()))
+                                                            : 1;
+                        const auto mipsToIterateCount = s_bUseTextureCompressionBC ? mipCount : 1;
 
                         executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                             vk::ImageMemoryBarrier2()
                                 .setImage(*loadedTexture)
-                                .setSubresourceRange(
-                                    vk::ImageSubresourceRange()
-                                        .setBaseArrayLayer(0)
-                                        .setBaseMipLevel(0)
-                                        .setLevelCount(bGenerateMipMaps ? GfxTextureUtils::GetMipLevelCount(width, height) : 1)
-                                        .setLayerCount(1)
-                                        .setAspectMask(vk::ImageAspectFlagBits::eColor))
+                                .setSubresourceRange(vk::ImageSubresourceRange()
+                                                         .setBaseArrayLayer(0)
+                                                         .setBaseMipLevel(0)
+                                                         .setLevelCount(mipCount)
+                                                         .setLayerCount(1)
+                                                         .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                 .setOldLayout(vk::ImageLayout::eUndefined)
                                 .setSrcAccessMask(vk::AccessFlagBits2::eNone)
                                 .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
@@ -323,17 +338,30 @@ namespace Radiant
                                 .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
                                 .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
 
-                        executionContext.CommandBuffer.copyBufferToImage(
-                            *stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
-                            vk::BufferImageCopy()
-                                .setImageSubresource(vk::ImageSubresourceLayers()
-                                                         .setLayerCount(1)
-                                                         .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                         .setBaseArrayLayer(0)
-                                                         .setMipLevel(0))
-                                .setImageExtent(vk::Extent3D(width, height, 1)));
+                        std::vector<Unique<GfxBuffer>> stagingBuffers(mipsToIterateCount);
+                        for (u32 i{}; i < mipsToIterateCount; ++i)
+                        {
+                            const u64 imageSize = mips[i].Data.size() * sizeof(mips[i].Data[0]);
 
-                        if (bGenerateMipMaps)
+                            auto& stagingBuffer = stagingBuffers[i];
+                            stagingBuffer       = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
+                                                                  GfxBufferDescription(imageSize, /* placeholder */ 1,
+                                                                                             vk::BufferUsageFlagBits::eTransferSrc,
+                                                                                             EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
+                            stagingBuffer->SetData(mips[i].Data.data(), imageSize);
+
+                            executionContext.CommandBuffer.copyBufferToImage(
+                                *stagingBuffer, *loadedTexture, vk::ImageLayout::eTransferDstOptimal,
+                                vk::BufferImageCopy()
+                                    .setImageSubresource(vk::ImageSubresourceLayers()
+                                                             .setLayerCount(1)
+                                                             .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                                             .setBaseArrayLayer(0)
+                                                             .setMipLevel(i))
+                                    .setImageExtent(vk::Extent3D(mips[i].Dimensions.x, mips[i].Dimensions.y, 1)));
+                        }
+
+                        if (c_bGenerateMipMaps && !s_bUseTextureCompressionBC)
                             loadedTexture->GenerateMipMaps(executionContext.CommandBuffer);
                         else
                         {
@@ -343,7 +371,7 @@ namespace Radiant
                                     .setSubresourceRange(vk::ImageSubresourceRange()
                                                              .setBaseArrayLayer(0)
                                                              .setBaseMipLevel(0)
-                                                             .setLevelCount(1)
+                                                             .setLevelCount(mipsToIterateCount)
                                                              .setLayerCount(1)
                                                              .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                     .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
@@ -357,12 +385,12 @@ namespace Radiant
 
                         executionContext.CommandBuffer.end();
                         GfxContext::Get().SubmitImmediateExecuteContext(executionContext);
-
-                        GfxTextureUtils::UnloadImage(imageData);
                     },
                     [&](const fastgltf::sources::Vector& vector)
                     {
                         RDNT_ASSERT(false, "{}: NOT IMPLEMENTED!", __FUNCTION__);
+
+                        i32 width{1}, height{1}, channels{4};
 
                         void* imageData = GfxTextureUtils::LoadImage(vector.bytes.data(), vector.bytes.size(), width, height, channels);
                         RDNT_ASSERT(imageData, "Failed to load image data!");
@@ -376,6 +404,7 @@ namespace Radiant
                         const auto& bufferView = asset.bufferViews[view.bufferViewIndex];
                         const auto& buffer     = asset.buffers[bufferView.bufferIndex];
 
+                        i32 width{1}, height{1}, channels{4};
                         std::visit(fastgltf::visitor{// We only care about VectorWithMime here, because we
                                                      // specify LoadExternalBuffers, meaning all buffers
                                                      // are already loaded into a vector.
@@ -440,7 +469,7 @@ namespace Radiant
                 vk::SamplerCreateInfo()
                     .setUnnormalizedCoordinates(vk::False)
                     .setMinLod(0.0f)
-                    .setMaxLod(vk::LodClampNone)
+                    .setMaxLod(FastGltfUtils::c_bGenerateMipMaps ? vk::LodClampNone : 0.0f)
                     .setMagFilter(FastGltfUtils::ConvertFilterToVulkan(currentSamplerInfo.magFilter.value_or(fastgltf::Filter::Linear)))
                     .setMinFilter(FastGltfUtils::ConvertFilterToVulkan(currentSamplerInfo.minFilter.value_or(fastgltf::Filter::Linear)))
                     .setMipmapMode(
@@ -449,27 +478,111 @@ namespace Radiant
                     .setAddressModeV(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
                     .setAddressModeW(FastGltfUtils::ConvertWrapToVulkan(currentSamplerInfo.wrapT))
                     .setBorderColor(vk::BorderColor::eFloatOpaqueWhite)
-                    .setAnisotropyEnable(vk::True)
-                    .setMaxAnisotropy(gfxContext->GetDevice()->GetGPUProperties().limits.maxSamplerAnisotropy);
+                    .setAnisotropyEnable(FastGltfUtils::c_bUseSamplerAnisotropy)
+                    .setMaxAnisotropy(FastGltfUtils::c_bUseSamplerAnisotropy
+                                          ? gfxContext->GetDevice()->GetGPUProperties().limits.maxSamplerAnisotropy
+                                          : 0.0f);
+        }
+
+        UnorderedMap<u64, vk::Format> imageIndexToFormatMap{};
+        {
+            // Prepare textures for compression.
+            GfxTextureUtils::TextureCompressor textureCompressor = {};
+            // Need to track image IDs to compress by myself to avoid duplicates.
+            UnorderedSet<u64> queuedTextures;
+            for (const auto& material : asset->materials)
+            {
+                constexpr auto albedoEmissiveFormat           = vk::Format::eBc7UnormBlock;
+                constexpr auto occlusionNormalRoughnessFormat = vk::Format::eBc4UnormBlock;
+                constexpr auto normalMapFormat                = vk::Format::eBc5UnormBlock;
+
+                const auto pushTextureFunc = [&](const auto& texture, const auto format) noexcept
+                {
+                    // I don't use any rough extensions, so it's guaranteed by fastgltf to have an image index.
+                    const auto imageIndex = *texture.imageIndex;
+
+                    if (!queuedTextures.contains(imageIndex))
+                    {
+                        queuedTextures.emplace(imageIndex);
+                        if constexpr (!s_bUseTextureCompressionBC) return;
+
+                        imageIndexToFormatMap[imageIndex] = format;
+
+                        std::visit(
+                            fastgltf::visitor{
+                                [](const auto& arg)
+                                { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!") },
+                                [&](const fastgltf::sources::URI& filePath)
+                                {
+                                    RDNT_ASSERT(filePath.fileByteOffset == 0, "fastgltf: We don't support offsets with stbi!");
+                                    RDNT_ASSERT(filePath.uri.isLocalPath(), "fastgltf: We're only capable of loading local files!");
+
+                                    const auto textureName = filePath.uri.path();
+                                    RDNT_ASSERT(!textureName.empty(), "fastgltf: Texture name is empty!");
+
+                                    const auto textureFilePath = meshParentPath / textureName;
+                                    textureCompressor.PushTextureIntoBatchList(textureFilePath.string(), format);
+                                }},
+                            asset->images[imageIndex].data);
+                    }
+                };
+
+                if (material.pbrData.baseColorTexture.has_value())
+                {
+                    const auto textureIndex = material.pbrData.baseColorTexture->textureIndex;
+                    pushTextureFunc(asset->textures[textureIndex], albedoEmissiveFormat);
+                }
+
+                if (material.normalTexture.has_value())
+                {
+                    const auto textureIndex = material.normalTexture->textureIndex;
+                    pushTextureFunc(asset->textures[textureIndex], normalMapFormat);
+                }
+
+                if (material.emissiveTexture.has_value())
+                {
+                    const auto textureIndex = material.emissiveTexture->textureIndex;
+                    pushTextureFunc(asset->textures[textureIndex], albedoEmissiveFormat);
+                }
+
+                if (material.occlusionTexture.has_value())
+                {
+                    const auto textureIndex = material.occlusionTexture->textureIndex;
+                    pushTextureFunc(asset->textures[textureIndex], occlusionNormalRoughnessFormat);
+                }
+
+                // NOTE: For now metallic roughness stored in BC7.
+                if (material.pbrData.metallicRoughnessTexture.has_value())
+                {
+                    const auto textureIndex = material.pbrData.metallicRoughnessTexture->textureIndex;
+                    pushTextureFunc(asset->textures[textureIndex], albedoEmissiveFormat);
+                }
+            }
+
+            textureCompressor.CompressAndCache();
         }
 
         // NOTE: textureIndex -> name, since multiple materials can reference the same textures but with different samplers, so
         // there's no need to load same texture N times.
-        UnorderedMap<u64, std::string> textureNameLUT{};
-        textureNameLUT.reserve(asset->textures.size());
-        TextureMap.reserve(asset->textures.size());
+        UnorderedMap<u64, std::string> textureNameLUT;
         // Parallel texture loading.
         {
             std::vector<std::future<std::string>> textureFutures;
             std::mutex loaderMutex          = {};
             const auto textureLoadBeginTime = Timer::Now();
-            for (u64 textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
+            for (u32 textureIndex{}; textureIndex < asset->textures.size(); ++textureIndex)
             {
                 textureFutures.emplace_back(Application::Get().GetThreadPool()->Submit(
                     [&, textureIndex]() noexcept
                     {
-                        return FastGltfUtils::LoadTexture(loaderMutex, TextureMap, meshParentPath, gfxContext, asset.get(),
-                                                          asset->textures[textureIndex], samplerCIs);
+                        auto& texture = asset->textures[textureIndex];
+                        std::optional<vk::SamplerCreateInfo> samplerCI{std::nullopt};
+                        if (texture.samplerIndex.has_value()) samplerCI = samplerCIs[*texture.samplerIndex];
+
+                        return FastGltfUtils::LoadTexture(
+                            loaderMutex, TextureMap, meshParentPath, gfxContext, asset.get(), texture, samplerCI,
+                            s_bUseTextureCompressionBC ? imageIndexToFormatMap[*asset->textures[textureIndex].imageIndex]
+                                                       : vk::Format::eR8G8B8A8Unorm);
                     }));
             }
 
@@ -588,29 +701,24 @@ namespace Radiant
                 // Loading indices.
                 {
                     const auto& indicesAccessor = asset->accessors[*primitive.indicesAccessor];
-
-                    const auto parsedIndexType =
-                        indicesAccessor.componentType == fastgltf::ComponentType::UnsignedByte
-                            ? vk::IndexType::eUint8EXT
-                            : (indicesAccessor.componentType == fastgltf::ComponentType::UnsignedShort ? vk::IndexType::eUint16
-                                                                                                       : vk::IndexType::eUint32);
-                    currentMeshAsset->IndexType = currentMeshAsset->IndexType == vk::IndexType::eNoneKHR
-                                                      ? parsedIndexType
-                                                      : std::max(currentMeshAsset->IndexType, parsedIndexType);
-                    indicesUint32.reserve(indicesUint32.size() + indicesAccessor.count);
+                    const u32 prevIndexOffset   = indicesUint32.size();
+                    u32 idxCounter{0};
+                    indicesUint32.resize(indicesUint32.size() + indicesAccessor.count);
 
                     fastgltf::iterateAccessor<u32>(asset.get(), indicesAccessor,
                                                    [&](u32 idx)
                                                    {
-                                                       indicesUint32.emplace_back(initialVertexIndex + idx);
-
-                                                       // NOTE: Check if index > u16/u8::max() and then switch to index type u32/u16.
-                                                       if (indicesUint32.back() > std::numeric_limits<u8>::max())
-                                                           currentMeshAsset->IndexType = vk::IndexType::eUint16;
-
-                                                       if (indicesUint32.back() > std::numeric_limits<u16>::max())
-                                                           currentMeshAsset->IndexType = vk::IndexType::eUint32;
+                                                       auto& currentIndexBufferValue = indicesUint32[prevIndexOffset + idxCounter];
+                                                       currentIndexBufferValue       = initialVertexIndex + idx;
+                                                       ++idxCounter;
                                                    });
+
+                    // NOTE: Check if index > u16/u8::max() and then switch to index type u32/u16.
+                    const u32 maxIdx            = *std::max_element(indicesUint32.cbegin(), indicesUint32.cend());
+                    currentMeshAsset->IndexType = vk::IndexType::eUint8EXT;
+
+                    if (maxIdx >= std::numeric_limits<u8>::max()) currentMeshAsset->IndexType = vk::IndexType::eUint16;
+                    if (maxIdx >= std::numeric_limits<u16>::max()) currentMeshAsset->IndexType = vk::IndexType::eUint32;
                 }
 
                 // Load vertex positions.
@@ -691,10 +799,11 @@ namespace Radiant
             }
             else if (currentMeshAsset->IndexType == vk::IndexType::eUint16)
             {
-                indicesUint16.reserve(indicesUint32.size());
-                std::transform(indicesUint32.begin(), indicesUint32.end(), std::back_inserter(indicesUint16),
-                               [](const u32 indexUint32) noexcept { return static_cast<u16>(indexUint32); });
-                indicesUint32.clear();  // Clear to save memory footprint.
+                indicesUint16.resize(indicesUint32.size());
+                for (u32 i{}; i < indicesUint32.size(); ++i)
+                {
+                    indicesUint16[i] = static_cast<u16>(indicesUint32[i]);
+                }
                 MeshoptimizerUtils::OptimizeMesh(indicesUint16, vertexPositions, vertexAttributes);
 
                 ibElementSize = sizeof(indicesUint16[0]);
@@ -703,10 +812,11 @@ namespace Radiant
             }
             else if (currentMeshAsset->IndexType == vk::IndexType::eUint8EXT)
             {
-                indicesUint8.reserve(indicesUint32.size());
-                std::transform(indicesUint32.begin(), indicesUint32.end(), std::back_inserter(indicesUint8),
-                               [](const u32 indexUint32) noexcept { return static_cast<u16>(indexUint32); });
-                indicesUint32.clear();  // Clear to save memory footprint.
+                indicesUint8.resize(indicesUint32.size());
+                for (u32 i{}; i < indicesUint32.size(); ++i)
+                {
+                    indicesUint8[i] = static_cast<u8>(indicesUint32[i]);
+                }
                 MeshoptimizerUtils::OptimizeMesh(indicesUint8, vertexPositions, vertexAttributes);
 
                 ibElementSize = sizeof(indicesUint8[0]);
@@ -715,7 +825,7 @@ namespace Radiant
             }
 
             const auto [cmd, queue] =
-                gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT);
+                gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
             cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
             // Handle vertex positions.

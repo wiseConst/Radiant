@@ -26,6 +26,7 @@ namespace Radiant
     // NOTE: Small optimization for CPU usage to issue less VK-API calls.
     struct GfxPipelineStateCache final
     {
+      public:
         GfxPipelineStateCache() noexcept  = default;
         ~GfxPipelineStateCache() noexcept = default;
 
@@ -38,6 +39,11 @@ namespace Radiant
         void Set(const vk::CommandBuffer& cmd, const vk::FrontFace frontFace) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept;
         void Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept;
+        void SetDepthClamp(const vk::CommandBuffer& cmd, const bool bDepthClampEnable) noexcept;
+        void SetStencilTest(const vk::CommandBuffer& cmd, const bool bStencilTestEnable) noexcept;
+        void SetDepthTest(const vk::CommandBuffer& cmd, const bool bDepthTestEnable) noexcept;
+        void SetDepthWrite(const vk::CommandBuffer& cmd, const bool bDepthWriteEnable) noexcept;
+        void SetDepthBounds(const vk::CommandBuffer& cmd, const glm::vec2& depthBounds) noexcept;
 
         void Invalidate() noexcept
         {
@@ -54,14 +60,14 @@ namespace Radiant
 
             Back         = std::nullopt;
             Front        = std::nullopt;
-            bStencilTest = false;
+            bStencilTest = std::nullopt;
 
-            bDepthClamp    = false;
-            bDepthTest     = false;
-            bDepthWrite    = false;
+            bDepthClamp    = std::nullopt;
+            bDepthTest     = std::nullopt;
+            bDepthWrite    = std::nullopt;
             DepthCompareOp = std::nullopt;
 
-            DepthBounds = glm::vec2{0.f};
+            DepthBounds = std::nullopt;
         }
 
       private:
@@ -77,14 +83,14 @@ namespace Radiant
 
         std::optional<vk::StencilOp> Back{std::nullopt};
         std::optional<vk::StencilOp> Front{std::nullopt};
-        bool bStencilTest{false};
+        std::optional<bool> bStencilTest{std::nullopt};
 
-        bool bDepthClamp{false};
-        bool bDepthTest{false};
-        bool bDepthWrite{false};
+        std::optional<bool> bDepthClamp{std::nullopt};
+        std::optional<bool> bDepthTest{std::nullopt};
+        std::optional<bool> bDepthWrite{std::nullopt};
         std::optional<vk::CompareOp> DepthCompareOp{std::nullopt};
 
-        glm::vec2 DepthBounds{0.f};  // Range [0.0f, 1.0f] for example.
+        std::optional<glm::vec2> DepthBounds{std::nullopt};  // Range [0.0f, 1.0f] for example.
     };
 
     // TODO: Make use of it in multiple queues or subsequent submits.
@@ -126,7 +132,8 @@ namespace Radiant
     {
         vk::UniqueCommandPool CommandPool{};
         vk::CommandBuffer CommandBuffer{};
-        ECommandBufferTypeBits CommandBufferType{};
+        ECommandQueueType CommandQueueType{};
+        u8 QueueIndex{};
     };
 
     class GfxContext final : private Uncopyable, private Unmovable
@@ -163,42 +170,43 @@ namespace Radiant
         NODISCARD FORCEINLINE const auto GetSwapchainImageCount() const noexcept { return m_SwapchainImages.size(); }
 
         NODISCARD GfxImmediateExecuteContext
-        CreateImmediateExecuteContext(const ECommandBufferTypeBits commandBufferType,
+        CreateImmediateExecuteContext(const ECommandQueueType commandQueueType, const u8 queueIndex = 0,
                                       const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             const auto& logicalDevice = m_Device->GetLogicalDevice();
             std::scoped_lock lock(m_Mtx);
 
             GfxImmediateExecuteContext context = {};
-            switch (commandBufferType)
+            switch (commandQueueType)
             {
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
                 {
-                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT;
+                    context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL;
                     context.CommandPool =
                         logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
-                                                                   .setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex)
+                                                                   .setQueueFamilyIndex(m_Device->GetGeneralQueue().QueueFamilyIndex)
                                                                    .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+                    context.QueueIndex = 0;
                     break;
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
                 {
-                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT;
-                    context.CommandPool =
-                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
-                                                                   .setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex)
-                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
-
+                    context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE;
+                    context.CommandPool      = logicalDevice->createCommandPoolUnique(
+                        vk::CommandPoolCreateInfo()
+                            .setQueueFamilyIndex(m_Device->GetComputeQueue(queueIndex).QueueFamilyIndex)
+                            .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+                    context.QueueIndex = queueIndex;
                     break;
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
                 {
-                    context.CommandBufferType = ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT;
-                    context.CommandPool =
-                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
-                                                                   .setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex)
-                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
-
+                    context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER;
+                    context.CommandPool      = logicalDevice->createCommandPoolUnique(
+                        vk::CommandPoolCreateInfo()
+                            .setQueueFamilyIndex(m_Device->GetTransferQueue(queueIndex).QueueFamilyIndex)
+                            .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
+                    context.QueueIndex = queueIndex;
                     break;
                 }
                 default: RDNT_ASSERT(false, "Unknown command buffer type!");
@@ -216,21 +224,21 @@ namespace Radiant
         void SubmitImmediateExecuteContext(const GfxImmediateExecuteContext& ieContext) const noexcept
         {
             vk::Queue queue{};
-            switch (ieContext.CommandBufferType)
+            switch (ieContext.CommandQueueType)
             {
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
                 {
                     queue = m_Device->GetGeneralQueue().Handle;
                     break;
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
                 {
-                    queue = m_Device->GetComputeQueue().Handle;
+                    queue = m_Device->GetComputeQueue(ieContext.QueueIndex).Handle;
                     break;
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
                 {
-                    queue = m_Device->GetTransferQueue().Handle;
+                    queue = m_Device->GetTransferQueue(ieContext.QueueIndex).Handle;
                     break;
                 }
                 default: RDNT_ASSERT(false, "Unknown command buffer type!");
@@ -242,13 +250,13 @@ namespace Radiant
         }
 
         NODISCARD std::tuple<vk::UniqueCommandBuffer, vk::Queue> AllocateSingleUseCommandBufferWithQueue(
-            const ECommandBufferTypeBits commandBufferType,
+            const ECommandQueueType commandQueueType,
             const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             std::scoped_lock lock(m_Mtx);
-            switch (commandBufferType)
+            switch (commandQueueType)
             {
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_GENERAL_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(
@@ -259,7 +267,7 @@ namespace Radiant
                                           .back()),
                             m_Device->GetGeneralQueue().Handle};
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(
@@ -270,7 +278,7 @@ namespace Radiant
                                           .back()),
                             m_Device->GetComputeQueue().Handle};
                 }
-                case ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT:
+                case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
                 {
                     return {std::move(m_Device->GetLogicalDevice()
                                           ->allocateCommandBuffersUnique(

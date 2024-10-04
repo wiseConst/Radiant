@@ -7,6 +7,7 @@
 #include <Render/Camera.hpp>
 
 #include <Render/Renderers/Common/ImGuiRenderer.hpp>
+#include <Render/Renderers/Common/DebugRenderer.hpp>
 
 #include <Core/CoreTypes.hpp>
 #include <Scene/Scene.hpp>
@@ -37,6 +38,7 @@ namespace Radiant
         Unique<Scene> m_Scene{nullptr};
         Shared<Camera> m_MainCamera{nullptr};
         Unique<ImGuiRenderer> m_UIRenderer{nullptr};
+        Unique<DebugRenderer> m_DebugRenderer{nullptr};
         ImGuiUtils::ProfilersWindow m_ProfilerWindow = {};
         DrawContext m_DrawContext                    = {};
 

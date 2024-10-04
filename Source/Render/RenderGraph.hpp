@@ -48,11 +48,12 @@ namespace Radiant
 
             friend RenderGraph;
 
-            void TransitionResourceStates(const Unique<GfxContext>& gfxContext) noexcept;
+            void PollClearsOnExecute(const vk::CommandBuffer& cmd) noexcept;
+            void TransitionResourceStates(const vk::CommandBuffer& cmd) noexcept;
         };
 
         void AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
-                     RenderGraphExecuteFunc&& executeFunc) noexcept;
+                     RenderGraphExecuteFunc&& executeFunc, const u8 commandQueueIndex = 0) noexcept;
 
         void Build() noexcept;
         void Execute() noexcept;
@@ -327,23 +328,24 @@ namespace Radiant
             }
         }
 
-        void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& id, const std::string& debugName,
+        void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID, const std::string& debugName,
                               const vk::MemoryRequirements& memoryRequirements, const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
         {
             if (const auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resourceHandle))
             {
-                m_DeviceRMA.FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
+                m_DeviceRMA.FillResourceInfo(resourceHandle, resourceID, debugName, memoryRequirements, memoryPropertyFlags);
             }
             else if (const auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resourceHandle))
             {
                 // NOTE: Handling rebar first cuz it contains device and host bits!
                 if (rgBufferHandle->BufferFlags == EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT)
-                    m_ReBARRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, id, debugName, memoryRequirements,
+                    m_ReBARRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, resourceID, debugName, memoryRequirements,
                                                                      memoryPropertyFlags);
                 else if (rgBufferHandle->BufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT)
-                    m_HostRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
+                    m_HostRMA[m_CurrentFrameIndex].FillResourceInfo(resourceHandle, resourceID, debugName, memoryRequirements,
+                                                                    memoryPropertyFlags);
                 else if (rgBufferHandle->BufferFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)
-                    m_DeviceRMA.FillResourceInfo(resourceHandle, id, debugName, memoryRequirements, memoryPropertyFlags);
+                    m_DeviceRMA.FillResourceInfo(resourceHandle, resourceID, debugName, memoryRequirements, memoryPropertyFlags);
             }
         }
 
@@ -387,7 +389,7 @@ namespace Radiant
             struct OverlappedResource
             {
                 RGResourceHandleVariant ResourceHandle{};
-                RGResourceID ID{};
+                RGResourceID ResourceID{};
                 u32 Offset{};
                 std::string DebugName{s_DEFAULT_STRING};
                 vk::MemoryRequirements MemoryRequirements{};
@@ -467,9 +469,10 @@ namespace Radiant
     class RenderGraphPass final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphPass(const u32 passID, const std::string_view& name, const ERenderGraphPassType passType,
+        RenderGraphPass(const u32 passID, const u8 commandQueueIndex, const std::string_view& name, const ERenderGraphPassType passType,
                         RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
-            : m_ID(passID), m_Name(name), m_PassType(passType), m_SetupFunc(setupFunc), m_ExecuteFunc(executeFunc)
+            : m_ID(passID), m_CommandQueueIndex(commandQueueIndex), m_Name(name), m_Type(passType), m_SetupFunc(setupFunc),
+              m_ExecuteFunc(executeFunc)
         {
         }
         ~RenderGraphPass() noexcept = default;
@@ -484,7 +487,7 @@ namespace Radiant
         {
             RDNT_ASSERT(m_ExecuteFunc, "ExecuteFunc is invalid!");
 
-            if (m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+            if (m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
             {
                 RDNT_ASSERT(m_Viewport.has_value(), "Viewport is invalid!");
                 RDNT_ASSERT(m_Scissor.has_value(), "Scissor is invalid!");
@@ -497,10 +500,13 @@ namespace Radiant
         }
 
       private:
-        ERenderGraphPassType m_PassType{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
+        ERenderGraphPassType m_Type{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
+        u8 m_CommandQueueIndex{0};
+        u8 m_RenderTargetCount{0};
         u32 m_ID{0};
         u32 m_DependencyLevelIndex{0};
         std::string m_Name{s_DEFAULT_STRING};
+        //    UnorderedSet<u32> m_PassesToSyncWith;  // Contains pass ID.
 
         RenderGraphSetupFunc m_SetupFunc{};
         RenderGraphExecuteFunc m_ExecuteFunc{};
@@ -540,10 +546,20 @@ namespace Radiant
             // std::optional<TextureResolveInfo> ResolveInfo{std::nullopt};
         };
 
-        std::vector<RenderTargetInfo> m_RenderTargetInfos;
+        std::array<RenderTargetInfo, s_MaxColorRenderTargets> m_RenderTargetInfos;
         std::optional<DepthStencilInfo> m_DepthStencilInfo{std::nullopt};
         std::optional<vk::Viewport> m_Viewport{std::nullopt};
         std::optional<vk::Rect2D> m_Scissor{std::nullopt};
+
+        // NOTE: Now only for buffers, texture support will be added as needed.
+        struct ClearOnExecuteData
+        {
+            RGResourceID ResourceID{};
+            u32 Data{};
+            u64 Size{};
+            u64 Offset{};
+        };
+        std::vector<ClearOnExecuteData> m_ClearsOnExecute;
 
         friend RenderGraph;
         friend RenderGraph::DependencyLevel;
@@ -561,6 +577,9 @@ namespace Radiant
         {
             return m_RenderGraph.GetTexture(resourceID);
         }
+
+        // NOTE: Should be called only inside pass that also writes to resource!
+        void ClearOnExecute(const std::string& name, const u32 data, const u64 size, const u64 offset = 0) noexcept;
 
         NODISCARD RGResourceID ReadTexture(const std::string& name, const MipSet& mipSet, const ResourceStateFlags resourceState) noexcept;
         NODISCARD RGResourceID WriteTexture(const std::string& name, const MipSet& mipSet, const ResourceStateFlags resourceState,

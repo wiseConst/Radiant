@@ -14,6 +14,8 @@ namespace Radiant
     class RenderGraphResourcePool;
     class RenderGraphResourceScheduler;
 
+    static constexpr u8 s_MaxColorRenderTargets = 8;  // NOTE: Defined across all GAPI's AFAIK.
+
     using MipRange = std::pair<u32, std::optional<u32>>;  // NOTE: In case lastMip not specified, it means unbound(till the end).
     struct MipSet final
     {
@@ -45,11 +47,7 @@ namespace Radiant
     {
         RENDER_GRAPH_PASS_TYPE_GRAPHICS,
         RENDER_GRAPH_PASS_TYPE_COMPUTE,
-        RENDER_GRAPH_PASS_TYPE_TRANSFER,
-
-        // TODO: Multiple queue submission
-        RENDER_GRAPH_PASS_TYPE_ASYNC_COMPUTE,
-        RENDER_GRAPH_PASS_TYPE_DEDICATED_TRANSFER,
+        RENDER_GRAPH_PASS_TYPE_TRANSFER
     };
 
     using RenderGraphSetupFunc   = std::function<void(RenderGraphResourceScheduler&)>;

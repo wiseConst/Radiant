@@ -71,10 +71,21 @@ namespace Radiant
             RDNT_ASSERT(m_PipelineCache, "PipelineCache not valid!");
             return *m_PipelineCache;
         }
-        NODISCARD FORCEINLINE const auto& GetGeneralQueue() const noexcept { return m_GeneralQueue; }
-        NODISCARD FORCEINLINE const auto& GetTransferQueue() const noexcept { return m_TransferQueue; }
-        NODISCARD FORCEINLINE const auto& GetComputeQueue() const noexcept { return m_ComputeQueue; }
-        NODISCARD FORCEINLINE const auto& GetPresentQueue() const noexcept { return m_PresentQueue; }
+        NODISCARD FORCEINLINE const auto& GetGeneralQueue() const noexcept { return m_Queues[0]; }
+        NODISCARD FORCEINLINE const auto& GetTransferQueue(const u8 queueIndex = 0) const noexcept
+        {
+            RDNT_ASSERT(queueIndex < s_MaxTransferQueueCount, "Queue index is greater than: {}", s_MaxTransferQueueCount);
+            RDNT_ASSERT(m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex != std::numeric_limits<u8>::max(),
+                        "Queue doesn't exist!");
+            return m_Queues[c_TransferQueueOffsetArray + queueIndex];
+        }
+        NODISCARD FORCEINLINE const auto& GetComputeQueue(const u8 queueIndex = 0) const noexcept
+        {
+            RDNT_ASSERT(queueIndex < s_MaxComputeQueueCount, "Queue index is greater than: {}", s_MaxComputeQueueCount);
+            RDNT_ASSERT(m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex != std::numeric_limits<u8>::max(),
+                        "Queue doesn't exist!");
+            return m_Queues[c_ComputeQueueOffsetArray + queueIndex];
+        }
         NODISCARD FORCEINLINE const auto& GetGPUProperties() const noexcept { return m_GPUProperties; }
 
         template <typename TObject> constexpr void SetDebugName(const std::string& name, const TObject& object) const noexcept
@@ -148,9 +159,9 @@ namespace Radiant
                                                   .setAddressModeU(vk::SamplerAddressMode::eRepeat)
                                                   .setAddressModeV(vk::SamplerAddressMode::eRepeat)
                                                   .setAddressModeW(vk::SamplerAddressMode::eRepeat)
-                                                  .setMagFilter(vk::Filter::eLinear)
-                                                  .setMinFilter(vk::Filter::eLinear)
-                                                  .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+                                                  .setMagFilter(vk::Filter::eNearest)
+                                                  .setMinFilter(vk::Filter::eNearest)
+                                                  .setMipmapMode(vk::SamplerMipmapMode::eNearest)
                                                   .setMinLod(0.0f)
                                                   .setMaxLod(vk::LodClampNone)
                                                   .setBorderColor(vk::BorderColor::eIntOpaqueBlack);
@@ -245,9 +256,29 @@ namespace Radiant
 
         struct Queue
         {
+            ECommandQueueType Type{};
+            u8 QueueIndex{};
+            u8 QueueFamilyIndex{std::numeric_limits<u8>::max()};
             vk::Queue Handle{};
-            std::optional<u32> QueueFamilyIndex{std::nullopt};
-        } m_GeneralQueue{}, m_PresentQueue{}, m_TransferQueue{}, m_ComputeQueue{};
+            std::array<vk::UniqueSemaphore, s_BufferedFrameCount> TimelineSemaphore;
+            std::array<u64, s_BufferedFrameCount> TimelineValue;
+        };
+        static constexpr u8 s_QueueCount         = 1 + s_MaxComputeQueueCount + s_MaxTransferQueueCount;
+        std::array<Queue, s_QueueCount> m_Queues = {
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL, 0},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 0},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 1},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 2},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 3},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 4},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 5},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 6},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE, 7},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER, 0},
+            Queue{ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER, 1},
+        };
+        const u8 c_ComputeQueueOffsetArray  = 1;  // since first queue is general.
+        const u8 c_TransferQueueOffsetArray = c_ComputeQueueOffsetArray + s_MaxComputeQueueCount;
 
         VmaAllocator m_Allocator{VK_NULL_HANDLE};
         vk::SampleCountFlagBits m_MSAASamples{vk::SampleCountFlagBits::e1};
@@ -292,7 +323,6 @@ namespace Radiant
         };
 
         // NOTE: u64 - global frame number
-        // TODO: Fix compilation issues using UnorderedMap!
         std::unordered_map<u64, DeferredDeletionQueue> m_DeletionQueuesPerFrame;
 
         // NOTE: Only GfxContext can call it!

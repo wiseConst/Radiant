@@ -44,9 +44,14 @@ namespace Radiant
 
     }  // namespace SlangUtils
 
-    NODISCARD std::vector<vk::PipelineShaderStageCreateInfo> GfxShader::GetShaderStages() const noexcept
+    NODISCARD std::vector<vk::PipelineShaderStageCreateInfo> GfxShader::GetShaderStages() noexcept
     {
         std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+        if (m_ModuleMap.empty())
+        {
+            LOG_WARN("ModuleMap[{}] is empty, hot reloading...", m_Description.Path);
+            HotReload();
+        }
 
         for (auto& [shaderStage, module] : m_ModuleMap)
         {

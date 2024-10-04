@@ -6,16 +6,86 @@
 #define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
 
+#include <nvtt/nvtt.h>
+
 namespace Radiant
 {
 
     namespace GfxTextureUtils
     {
-        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels,
-                        const i32 requestedChannels = 4) noexcept;
+
+        struct TextureCompressor final : private Uncopyable, private Unmovable
+        {
+          public:
+            TextureCompressor() noexcept  = default;
+            ~TextureCompressor() noexcept = default;
+
+            struct TextureInfo final
+            {
+                glm::uvec2 Dimensions;
+                std::vector<u8> Data;
+            };
+
+            void PushTextureIntoBatchList(const std::string& texturePath, const vk::Format format) noexcept;
+            void CompressAndCache() noexcept;
+
+            NODISCARD static std::vector<TextureCompressor::TextureInfo> LoadTextureCache(const std::string& texturePath,
+                                                                                          const vk::Format format) noexcept;
+            NODISCARD static std::vector<TextureCompressor::TextureInfo> CompressSingle(
+                const std::string& texturePath, const vk::Format format, const bool bBuildMips = false,
+                const nvtt::Quality compressionQuality = nvtt::Quality::Quality_Fastest) noexcept;
+
+          private:
+            UnorderedMap<vk::Format, std::vector<std::string>> m_TexturesToLoad{};
+
+            // NOTE: MipCount, vk::Format will be added as needed.
+            struct TextureHeader
+            {
+                glm::uvec2 Dimensions{};
+                u32 MipCount{};
+            };
+
+            struct RadiantTextureFileWriter : nvtt::OutputHandler
+            {
+              public:
+                RadiantTextureFileWriter(const std::string& path, const glm::uvec2& dimensions, const u32 mipCount)
+                    : m_RawDataFile(path, std::ios::binary | std::ios::trunc)
+                {
+                    if (!m_RawDataFile.is_open()) LOG_ERROR("Failed to open file {}", path);
+
+                    const auto textureHeader = TextureHeader{.Dimensions{dimensions}, .MipCount = mipCount};
+
+                    m_RawDataFile.write((const char*)&textureHeader, sizeof(textureHeader));
+                }
+
+                ~RadiantTextureFileWriter() { m_RawDataFile.close(); }
+
+                virtual void beginImage(const i32 size, const i32 width, const i32 height, const i32 depth, const i32 face,
+                                        const i32 miplevel) override
+                {
+                }
+                virtual void endImage() override {}
+
+                virtual bool writeData(const void* data, const i32 size) override
+                {
+                    m_RawDataFile.write((const char*)&size, sizeof(size));
+                    m_RawDataFile.write((const char*)data, size);
+                    return true;
+                }
+
+              private:
+                std::ofstream m_RawDataFile;
+            };
+
+            NODISCARD static const std::string DetermineTextureCachePath(const std::string& texturePath, const vk::Format format) noexcept;
+            NODISCARD static bool IsCacheExist(const std::string& texturePath, const vk::Format format) noexcept;
+        };
+
+        void* LoadImage(const std::string_view& imagePath, i32& width, i32& height, i32& channels, const i32 requestedChannels = 4,
+                        const bool bFlipOnLoad = false) noexcept;
 
         void* LoadImage(const void* rawImageData, const u64 rawImageDataSize, i32& width, i32& height, i32& channels,
-                        const i32 requestedChannels = 4) noexcept;
+                        const i32 requestedChannels = 4, const bool bFlipOnLoad = false) noexcept;
 
         void UnloadImage(void* imageData) noexcept;
 

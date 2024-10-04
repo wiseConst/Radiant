@@ -242,13 +242,13 @@ namespace Radiant
             static_assert(std::is_trivial<T>::value, "T must be a trivial type");
             RDNT_ASSERT(!dataPath.empty(), "Data path is invalid!");
 
-            std::ifstream input(dataPath.data(), std::ios::in | std::ios::binary | std::ios::ate);
+            std::ifstream input(dataPath.data(), std::ios::in | std::ios::binary);
             RDNT_ASSERT(input.is_open(), "Failed to open: {}", dataPath);
 
-            const auto fileSize = input.tellg();
-            input.seekg(0, std::ios::beg);
+            const auto fileSize   = std::filesystem::file_size(dataPath);
+            const auto vectorSize = (fileSize + sizeof(T) - 1) / sizeof(T);
 
-            std::vector<T> loadedData(fileSize / sizeof(T));
+            std::vector<T> loadedData(vectorSize);
             input.read(reinterpret_cast<char*>(loadedData.data()), fileSize);
 
             input.close();
@@ -264,6 +264,17 @@ namespace Radiant
             RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
 
             output.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(data[0]));
+            output.close();
+        }
+
+        static void SaveData(const std::string_view& dataPath, const void* data, const u64 dataSizeBytes) noexcept
+        {
+            RDNT_ASSERT(!dataPath.empty(), "Data path is invalid!");
+
+            std::ofstream output(dataPath.data(), std::ios::out | std::ios::binary | std::ios::trunc);
+            RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
+
+            output.write(reinterpret_cast<const char*>(data), dataSizeBytes);
             output.close();
         }
 

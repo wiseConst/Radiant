@@ -5,9 +5,6 @@
 namespace Radiant
 {
 
-    static constexpr glm::vec3 s_MinPointLightPos{-15, -4, -5};
-    static constexpr glm::vec3 s_MaxPointLightPos{15, 14, 5};
-
     class CombinedRenderer final : public Renderer
     {
       public:
@@ -23,8 +20,11 @@ namespace Radiant
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
 
         Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
-        Unique<GfxPipeline> m_PBRPipeline{nullptr};
+        Unique<GfxPipeline> m_MainLightingPassPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};
+
+        Unique<GfxPipeline> m_DepthBoundsComputePipeline{nullptr};
+        Unique<GfxPipeline> m_ShadowsSetupPipeline{nullptr};
 
         // Screen-space shadows
         Unique<GfxPipeline> m_SSSPipeline{nullptr};
@@ -43,12 +43,11 @@ namespace Radiant
         Unique<GfxPipeline> m_BloomUpsampleBlurPipelineCompute{nullptr};
 
         Unique<GfxPipeline> m_EnvMapSkyboxPipeline{nullptr};
-        Unique<GfxPipeline> m_DebugTextureViewPipeline{nullptr};
 
         RenderGraphStatistics m_RenderGraphStats = {};
         Unique<GfxTexture> m_EnvMapTexture{nullptr};
 
-        Shaders::LightData m_LightData = {};
+        Unique<Shaders::LightData> m_LightData{MakeUnique<Shaders::LightData>()};
     };
 
 }  // namespace Radiant

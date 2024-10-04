@@ -26,20 +26,16 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 namespace Radiant
 {
 
-    // NOTE: Technically s_FreeTextureIndices is the same as bindless texture pool IDs.
-    // Resources used for lazy texture loading.
-    static std::vector<GfxTexture> s_TextureStorage = {};
-    static Pool<u32> s_FreeTextureIndices           = {};
-
     void GfxPipelineStateCache::Bind(const vk::CommandBuffer& cmd, GfxPipeline* pipeline) noexcept
     {
         RDNT_ASSERT(pipeline, "GfxPipelineStateCache: Pipeline is invalid!");
         RDNT_ASSERT(!std::holds_alternative<std::monostate>(pipeline->GetDescription().PipelineOptions),
                     "GfxPipelineStateCache: Pipeline holds invalid options!");
-        if (LastBoundPipeline == pipeline) return;
 
-        // Need to invalidate the whole state!
+        // Every pipeline bind invalidates the whole state.
         Invalidate();
+
+        if (LastBoundPipeline == pipeline) return;
 
         vk::PipelineBindPoint pipelineBindPoint{vk::PipelineBindPoint::eGraphics};
         if (std::holds_alternative<GfxGraphicsPipelineOptions>(pipeline->GetDescription().PipelineOptions))
@@ -107,6 +103,46 @@ namespace Radiant
 
         cmd.setDepthCompareOp(compareOp);
         DepthCompareOp = compareOp;
+    }
+
+    void GfxPipelineStateCache::SetDepthClamp(const vk::CommandBuffer& cmd, const bool bDepthClampEnable) noexcept
+    {
+        if (bDepthClamp.has_value() && bDepthClamp == bDepthClampEnable) return;
+
+        cmd.setDepthClampEnableEXT(bDepthClampEnable);
+        bDepthClamp = bDepthClampEnable;
+    }
+
+    void GfxPipelineStateCache::SetStencilTest(const vk::CommandBuffer& cmd, const bool bStencilTestEnable) noexcept
+    {
+        if (bStencilTest.has_value() && bStencilTest == bStencilTestEnable) return;
+
+        cmd.setStencilTestEnable(bStencilTestEnable);
+        bStencilTest = bStencilTestEnable;
+    }
+
+    void GfxPipelineStateCache::SetDepthTest(const vk::CommandBuffer& cmd, const bool bDepthTestEnable) noexcept
+    {
+        if (bDepthTest.has_value() && bDepthTest == bDepthTestEnable) return;
+
+        cmd.setDepthTestEnable(bDepthTestEnable);
+        bDepthTest = bDepthTestEnable;
+    }
+
+    void GfxPipelineStateCache::SetDepthWrite(const vk::CommandBuffer& cmd, const bool bDepthWriteEnable) noexcept
+    {
+        if (bDepthWrite.has_value() && bDepthWrite == bDepthWriteEnable) return;
+
+        cmd.setDepthWriteEnable(bDepthWriteEnable);
+        bDepthWrite = bDepthWriteEnable;
+    }
+
+    void GfxPipelineStateCache::SetDepthBounds(const vk::CommandBuffer& cmd, const glm::vec2& depthBounds) noexcept
+    {
+        if (DepthBounds.has_value() && DepthBounds == depthBounds) return;
+
+        cmd.setDepthBounds(depthBounds.x, depthBounds.y);
+        DepthBounds = depthBounds;
     }
 
     bool GfxContext::BeginFrame() noexcept
@@ -209,7 +245,7 @@ namespace Radiant
             cpuTask.Name      = "SwapchainPresent";
             cpuTask.Color     = Colors::ColorArray[0];
 
-            const auto result = m_Device->GetPresentQueue().Handle.presentKHR(
+            const auto result = m_Device->GetGeneralQueue().Handle.presentKHR(
                 vk::PresentInfoKHR()
                     .setImageIndices(m_CurrentImageIndex)
                     .setSwapchains(*m_Swapchain)
@@ -334,17 +370,15 @@ namespace Radiant
                 return VK_FALSE;
             };
 
-            constexpr auto dumCI =
+            m_DebugUtilsMessenger = m_Instance->createDebugUtilsMessengerEXTUnique(
                 vk::DebugUtilsMessengerCreateInfoEXT()
                     .setPfnUserCallback(debugCallback)
-                    .setMessageSeverity(
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError /*|vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo*/ |
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose)
+                    .setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError /*| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo*/ |
+                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose)
                     .setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
                                     vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-                                    vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding);
-            m_DebugUtilsMessenger = m_Instance->createDebugUtilsMessengerEXTUnique(dumCI);
+                                    vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding));
         }
     }
 
@@ -366,13 +400,13 @@ namespace Radiant
         for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
             m_FrameData[i].GeneralCommandPool = logicalDevice->createCommandPoolUnique(
-                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetGeneralQueue().QueueFamilyIndex));
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetGeneralQueue().QueueFamilyIndex));
 
             m_FrameData[i].AsyncComputeCommandPool = logicalDevice->createCommandPoolUnique(
-                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetComputeQueue().QueueFamilyIndex));
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetComputeQueue().QueueFamilyIndex));
 
             m_FrameData[i].DedicatedTransferCommandPool = logicalDevice->createCommandPoolUnique(
-                vk::CommandPoolCreateInfo().setQueueFamilyIndex(*m_Device->GetTransferQueue().QueueFamilyIndex));
+                vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetTransferQueue().QueueFamilyIndex));
 
             m_FrameData[i].GeneralCommandBuffer = logicalDevice
                                                       ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
@@ -401,8 +435,7 @@ namespace Radiant
 
             stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
 
-            const auto [cmd, queue] =
-                AllocateSingleUseCommandBufferWithQueue(ECommandBufferTypeBits::COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT);
+            const auto [cmd, queue] = AllocateSingleUseCommandBufferWithQueue(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
             cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
             cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
@@ -446,9 +479,6 @@ namespace Radiant
     void GfxContext::Shutdown() noexcept
     {
         LOG_INFO("{}", __FUNCTION__);
-
-        s_TextureStorage.clear();
-        s_FreeTextureIndices = {};
     }
 
     void GfxContext::InvalidateSwapchain() noexcept
@@ -512,7 +542,7 @@ namespace Radiant
                 .setSurface(*m_Surface)
                 .setImageSharingMode(vk::SharingMode::eExclusive)
                 .setQueueFamilyIndexCount(1)
-                .setPQueueFamilyIndices(&m_Device->GetGeneralQueue().QueueFamilyIndex.value())
+                .setPQueueFamilyIndices((const u32*)&m_Device->GetGeneralQueue().QueueFamilyIndex)
                 .setCompositeAlpha(compositeAlpha)
                 .setPresentMode(m_PresentMode)
                 .setImageFormat(imageFormat)
@@ -522,17 +552,6 @@ namespace Radiant
                 .setMinImageCount(std::clamp(3u, availableSurfaceCapabilities.minImageCount, availableSurfaceCapabilities.maxImageCount))
                 .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
                 .setImageUsage(requestedImageUsageFlags);
-        const std::array<u32, 2> queueFamilyIndices{*m_Device->GetGeneralQueue().QueueFamilyIndex,
-                                                    *m_Device->GetPresentQueue().QueueFamilyIndex};
-        if (m_Device->GetGeneralQueue().QueueFamilyIndex != m_Device->GetPresentQueue().QueueFamilyIndex)
-        {
-            // If the graphics and present queues are from different queue families, we either have to explicitly transfer
-            // ownership of images between the queues, or we have to create the swapchain with imageSharingMode as
-            // VK_SHARING_MODE_CONCURRENT
-            swapchainCI.setImageSharingMode(vk::SharingMode::eConcurrent)
-                .setQueueFamilyIndexCount(2)
-                .setPQueueFamilyIndices(queueFamilyIndices.data());
-        }
 
         auto oldSwapchain = std::move(m_Swapchain);
         if (oldSwapchain)
@@ -545,13 +564,13 @@ namespace Radiant
         m_Swapchain       = m_Device->GetLogicalDevice()->createSwapchainKHRUnique(swapchainCI);
         m_SwapchainImages = m_Device->GetLogicalDevice()->getSwapchainImagesKHR(*m_Swapchain);
 
-        m_SwapchainImageViews.reserve(m_SwapchainImages.size());
+        m_SwapchainImageViews.resize(m_SwapchainImages.size());
         vk::ImageViewCreateInfo imageViewCreateInfo({}, {}, vk::ImageViewType::e2D, imageFormat, {},
                                                     {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-        for (u32 i{}; i < m_SwapchainImages.size(); ++i)
+        for (u32 i{}; i < m_SwapchainImageViews.size(); ++i)
         {
             imageViewCreateInfo.image = m_SwapchainImages[i];
-            m_SwapchainImageViews.emplace_back(m_Device->GetLogicalDevice()->createImageViewUnique(imageViewCreateInfo));
+            m_SwapchainImageViews[i]  = m_Device->GetLogicalDevice()->createImageViewUnique(imageViewCreateInfo);
 
             const std::string swapchainImageName = "SwapchainImage[" + std::to_string(i) + "]";
             m_Device->SetDebugName(swapchainImageName, m_SwapchainImages[i]);

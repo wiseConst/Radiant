@@ -71,7 +71,7 @@ namespace Radiant
             .Instance                    = *m_GfxContext->GetInstance(),
             .PhysicalDevice              = gfxDevice->GetPhysicalDevice(),
             .Device                      = *logicalDevice,
-            .QueueFamily                 = gfxDevice->GetGeneralQueue().QueueFamilyIndex.value(),
+            .QueueFamily                 = gfxDevice->GetGeneralQueue().QueueFamilyIndex,
             .Queue                       = gfxDevice->GetGeneralQueue().Handle,
             .DescriptorPool              = *m_ImGuiPool,
             .MinImageCount               = static_cast<u32>(m_GfxContext->GetSwapchainImageCount()),

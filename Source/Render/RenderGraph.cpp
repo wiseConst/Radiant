@@ -98,16 +98,16 @@ namespace Radiant
             if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 // NOTE: Src copy buffer likes eTransferRead, but not eShaderStorageRead & eShaderSampledRead.
-                srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 srcAccessMask |= vk::AccessFlagBits2::eTransferRead;
+                srcAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
             if (currentState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 // NOTE: Dst copy buffer likes eTransferWrite, but not eShaderStorageRead & eShaderSampledRead.
-                srcAccessMask ^= vk::AccessFlagBits2::eShaderWrite;
                 srcAccessMask |= vk::AccessFlagBits2::eTransferWrite;
+                srcAccessMask &= ~vk::AccessFlagBits2::eShaderWrite;
                 srcStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
@@ -127,15 +127,15 @@ namespace Radiant
             if (currentState & EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT)
             {
                 // NOTE: Uniform buffer likes eUniformRead, but not eShaderStorageRead & eShaderSampledRead.
-                srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 srcAccessMask |= vk::AccessFlagBits2::eUniformRead;
+                srcAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
             }
 
             if (currentState & EResourceStateBits::RESOURCE_STATE_INDIRECT_ARGUMENT_BIT)
             {
                 // NOTE: Indirect arg buffer likes eIndirectCommandRead, but not eShaderStorageRead & eShaderSampledRead.
-                srcAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 srcAccessMask |= vk::AccessFlagBits2::eIndirectCommandRead;
+                srcAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
                 srcStageMask |= vk::PipelineStageFlagBits2::eDrawIndirect;
             }
 
@@ -173,31 +173,31 @@ namespace Radiant
             if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_SOURCE_BIT)
             {
                 // NOTE: Src copy buffer likes eTransferRead, but not eShaderStorageRead & eShaderSampledRead.
-                dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 dstAccessMask |= vk::AccessFlagBits2::eTransferRead;
+                dstAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
             if (nextState & EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT)
             {
                 // NOTE: Dst copy buffer likes eTransferWrite, but not eShaderStorageRead & eShaderSampledRead.
-                dstAccessMask ^= vk::AccessFlagBits2::eShaderWrite;
                 dstAccessMask |= vk::AccessFlagBits2::eTransferWrite;
+                dstAccessMask &= ~vk::AccessFlagBits2::eShaderWrite;
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
             if (nextState & EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT)
             {
                 // NOTE: Uniform buffer likes eUniformRead, but not eShaderStorageRead & eShaderSampledRead.
-                dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 dstAccessMask |= vk::AccessFlagBits2::eUniformRead;
+                dstAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
             }
 
             if (nextState & EResourceStateBits::RESOURCE_STATE_INDIRECT_ARGUMENT_BIT)
             {
                 // NOTE: Indirect arg buffer likes eIndirectCommandRead, but not eShaderStorageRead & eShaderSampledRead.
-                dstAccessMask ^= vk::AccessFlagBits2::eShaderRead;
                 dstAccessMask |= vk::AccessFlagBits2::eIndirectCommandRead;
+                dstAccessMask &= ~vk::AccessFlagBits2::eShaderRead;
                 dstStageMask |= vk::PipelineStageFlagBits2::eDrawIndirect;
             }
 
@@ -281,7 +281,7 @@ namespace Radiant
                 {
                     oldLayout = vk::ImageLayout::eGeneral;
                     srcAccessMask |= vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead;
-                    srcAccessMask ^= vk::AccessFlagBits2::eShaderSampledRead;
+                    srcAccessMask &= ~vk::AccessFlagBits2::eShaderSampledRead;
                 }
 
                 srcStageMask |= vk::PipelineStageFlagBits2::eComputeShader;
@@ -510,9 +510,9 @@ namespace Radiant
     }  // namespace RenderGraphUtils
 
     void RenderGraph::AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
-                              RenderGraphExecuteFunc&& executeFunc) noexcept
+                              RenderGraphExecuteFunc&& executeFunc, const u8 commandQueueIndex) noexcept
     {
-        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<u32>(m_Passes.size()), name, passType,
+        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<u32>(m_Passes.size()), commandQueueIndex, name, passType,
                                                                        std::forward<RenderGraphSetupFunc>(setupFunc),
                                                                        std::forward<RenderGraphExecuteFunc>(executeFunc)));
         RenderGraphResourceScheduler scheduler(*this, *pass);
@@ -713,7 +713,7 @@ namespace Radiant
 
         frameData.GeneralCommandBuffer.end();
 
-        const auto& presentQueue = m_GfxContext->GetDevice()->GetPresentQueue().Handle;
+        const auto& presentQueue = m_GfxContext->GetDevice()->GetGeneralQueue().Handle;
         presentQueue.submit2(
             vk::SubmitInfo2()
                 .setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(frameData.GeneralCommandBuffer))
@@ -735,10 +735,15 @@ namespace Radiant
 
     void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept
     {
-        TransitionResourceStates(gfxContext);
+        // TODO: Sort by types to have less compute<->graphics switches. (now this sorting breaks ssao and light culling somewhy)
+        /*std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
+                  [](const auto* lhsPass, const auto* rhsPass) { return lhsPass->m_Type < rhsPass->m_Type; });*/
 
         auto& frameData = gfxContext->GetCurrentFrameData();
         auto& cmd       = frameData.GeneralCommandBuffer;
+
+        PollClearsOnExecute(cmd);
+        TransitionResourceStates(cmd);
 
         for (auto& currentPass : m_Passes)
         {
@@ -760,7 +765,7 @@ namespace Radiant
             cpuTask.Name      = currentPass->m_Name;
             cpuTask.Color     = Colors::ColorArray[currentPass->m_ID % Colors::ColorArray.size()];
 
-            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
             {
                 RDNT_ASSERT(currentPass->m_Viewport.has_value(), "Viewport is invalid!");
                 RDNT_ASSERT(currentPass->m_Scissor.has_value(), "Scissor is invalid!");
@@ -778,7 +783,7 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+                if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
                 {
                     const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
 
@@ -811,7 +816,7 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+                if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
                 {
                     const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
 
@@ -841,8 +846,8 @@ namespace Radiant
                 }
             }
 
-            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
-                (currentPass->m_DepthStencilInfo.has_value() || !currentPass->m_RenderTargetInfos.empty()))
+            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
+                (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
             {
                 cmd.beginRendering(
                     vk::RenderingInfo()
@@ -857,8 +862,8 @@ namespace Radiant
             RenderGraphResourceScheduler scheduler(m_RenderGraph, *currentPass);
             currentPass->Execute(scheduler, cmd);
 
-            if (currentPass->m_PassType == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
-                (currentPass->m_DepthStencilInfo.has_value() || !currentPass->m_RenderTargetInfos.empty()))
+            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
+                (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
                 cmd.endRendering();
 
             cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(frameData.FrameStartTime);
@@ -871,11 +876,58 @@ namespace Radiant
         }
     }
 
-    void RenderGraph::DependencyLevel::TransitionResourceStates(const Unique<GfxContext>& gfxContext) noexcept
+    void RenderGraph::DependencyLevel::PollClearsOnExecute(const vk::CommandBuffer& cmd) noexcept
     {
-        auto& frameData = gfxContext->GetCurrentFrameData();
-        auto& cmd       = frameData.GeneralCommandBuffer;
+        struct FillBufferData
+        {
+            vk::Buffer DstBuffer{};
+            vk::DeviceSize Offset{};
+            vk::DeviceSize Size{};
+            u32 Data{};
+        };
+        std::vector<FillBufferData> fillBufferDatas;
 
+        std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
+        std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
+        UnorderedSet<vk::MemoryBarrier2> memoryBarriers;
+
+        // NOTE: Now only for buffers, texture support will be added as needed.
+        for (auto& currentPass : m_Passes)
+        {
+            for (const auto& [resourceID, data, size, offset] : currentPass->m_ClearsOnExecute)
+            {
+                auto& RGbuffer = m_RenderGraph.m_ResourcePool->GetBuffer(m_RenderGraph.m_ResourceIDToBufferHandle[resourceID]);
+                auto& buffer   = RGbuffer->Get();
+
+                const auto currentState = RGbuffer->GetState();
+                const auto nextState =
+                    EResourceStateBits::RESOURCE_STATE_WRITE_BIT | EResourceStateBits::RESOURCE_STATE_COPY_DESTINATION_BIT;
+
+                RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
+                RGbuffer->SetState(nextState);
+
+                fillBufferDatas.emplace_back(*buffer, offset, size, data);
+            }
+        }
+
+        std::vector<vk::MemoryBarrier2> memoryBarrierVector{memoryBarriers.begin(), memoryBarriers.end()};
+        if (!memoryBarrierVector.empty() || !bufferMemoryBarriers.empty() || !imageMemoryBarriers.empty())
+        {
+            cmd.pipelineBarrier2(vk::DependencyInfo()
+                                     .setMemoryBarriers(memoryBarrierVector)
+                                     .setBufferMemoryBarriers(bufferMemoryBarriers)
+                                     .setImageMemoryBarriers(imageMemoryBarriers));
+
+            ++m_RenderGraph.m_Stats.BarrierBatchCount;
+            m_RenderGraph.m_Stats.BarrierCount += memoryBarrierVector.size() + bufferMemoryBarriers.size() + imageMemoryBarriers.size();
+        }
+
+        for (auto& fbData : fillBufferDatas)
+            cmd.fillBuffer(fbData.DstBuffer, fbData.Offset, fbData.Size, fbData.Data);
+    }
+
+    void RenderGraph::DependencyLevel::TransitionResourceStates(const vk::CommandBuffer& cmd) noexcept
+    {
         std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
         std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
         UnorderedSet<vk::MemoryBarrier2> memoryBarriers;
@@ -910,6 +962,22 @@ namespace Radiant
 
             for (const auto& subresourceID : currentPass->m_TextureReads)
             {
+                // Prevent placing barrier on read-modify-write(the only difference is the alias name, between subresource ids), since it'll
+                // be handled in the next for-loop.
+                bool bIsRMWAccess = false;
+                for (const auto& rmwSubresourceID : currentPass->m_TextureWrites)
+                {
+                    if (rmwSubresourceID.SubresourceIndex != subresourceID.SubresourceIndex ||
+                        rmwSubresourceID.ResourceID != subresourceID.ResourceID)
+                        continue;
+
+                    bIsRMWAccess = m_RenderGraph.ResolveResourceName(rmwSubresourceID.ResourceName) ==
+                                   m_RenderGraph.ResolveResourceName(subresourceID.ResourceName);
+                    if (bIsRMWAccess) break;
+                }
+
+                if (bIsRMWAccess) continue;
+
                 auto& RGtexture =
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
@@ -1039,9 +1107,28 @@ namespace Radiant
                                                          const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue,
                                                          const std::string& newAliasName) noexcept
     {
+        RDNT_ASSERT(m_Pass.m_RenderTargetCount + 1 < s_MaxColorRenderTargets, "Max limit on color render targets reached! {}",
+                    s_MaxColorRenderTargets);
         const auto resourceID = WriteTexture(name, mipSet, EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT, newAliasName);
-        m_Pass.m_RenderTargetInfos.emplace_back(clearValue, loadOp, storeOp);
+        m_Pass.m_RenderTargetInfos[m_Pass.m_RenderTargetCount++] =
+            RenderGraphPass::RenderTargetInfo{.ClearValue = clearValue, .LoadOp = loadOp, .StoreOp = storeOp};
         (void)resourceID;
+    }
+
+    void RenderGraphResourceScheduler::ClearOnExecute(const std::string& name, const u32 data, const u64 size, const u64 offset) noexcept
+    {
+        RDNT_ASSERT(size > 0, "Size should be > 0!");
+
+        const auto resourceID = m_RenderGraph.GetResourceID(name);
+        const auto bIsBufferWrite =
+            std::find_if(m_Pass.m_BufferWrites.cbegin(), m_Pass.m_BufferWrites.cend(),
+                         [&](const auto& other) { return other.ResourceID == resourceID; }) != m_Pass.m_BufferWrites.cend();
+        const auto bIsTextureWrite =
+            std::find_if(m_Pass.m_TextureWrites.cbegin(), m_Pass.m_TextureWrites.cend(),
+                         [&](const auto& other) { return other.ResourceID == resourceID; }) != m_Pass.m_TextureWrites.cend();
+
+        RDNT_ASSERT(bIsBufferWrite || bIsTextureWrite, "ClearOnExecute can be called only inside pass that also writes to resource!");
+        m_Pass.m_ClearsOnExecute.emplace_back(resourceID, data, size, offset);
     }
 
     NODISCARD RGResourceID RenderGraphResourceScheduler::ReadTexture(const std::string& name, const MipSet& mipSet,
@@ -1125,6 +1212,12 @@ namespace Radiant
             m_Pass.m_TextureWrites.emplace_back(subresourceID);
             m_Pass.m_ResourceIDToResourceState[subresourceID] |=
                 resourceState | EResourceStateBits::RESOURCE_STATE_WRITE_BIT | EResourceStateBits::RESOURCE_STATE_READ_BIT;
+
+            if (newAliasName != s_DEFAULT_STRING)
+            {
+                const auto srcSubresourceID = RenderGraphSubresourceID(name, resourceID, p);
+                m_Pass.m_TextureReads.emplace_back(srcSubresourceID);
+            }
         }
 
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
@@ -1176,7 +1269,7 @@ namespace Radiant
                             for (const auto& resource : currentMemoryBucket.AlreadyAliasedResources)
                             {
                                 ImGui::Text("Resource[ %s ], ResourceID[ %llu ], Offset[ %0.3f ] MB, Size[ %0.3f ] MB.",
-                                            resource.DebugName.data(), resource.ID, resource.Offset / 1024.f / 1024.f,
+                                            resource.DebugName.data(), resource.ResourceID, resource.Offset / 1024.f / 1024.f,
                                             resource.MemoryRequirements.size / 1024.f / 1024.f);
                             }
 
@@ -1298,9 +1391,9 @@ namespace Radiant
 
                 for (const auto& aliasedResource : bucket.AlreadyAliasedResources)
                 {
-                    if (m_ResourceInfoMap.contains(aliasedResource.ID) &&
-                        aliasedResource.MemoryPropertyFlags == m_ResourceInfoMap[aliasedResource.ID].MemoryPropertyFlags &&
-                        aliasedResource.MemoryRequirements == m_ResourceInfoMap[aliasedResource.ID].MemoryRequirements)
+                    if (m_ResourceInfoMap.contains(aliasedResource.ResourceID) &&
+                        aliasedResource.MemoryPropertyFlags == m_ResourceInfoMap[aliasedResource.ResourceID].MemoryPropertyFlags &&
+                        aliasedResource.MemoryRequirements == m_ResourceInfoMap[aliasedResource.ResourceID].MemoryRequirements)
                         continue;
 
                     bNeedMemoryDefragmentation = true;
@@ -1318,7 +1411,7 @@ namespace Radiant
         struct RenderGraphResourceUnaliased
         {
             RGResourceHandleVariant ResourceHandle{};
-            RGResourceID ID{};
+            RGResourceID ResourceID{};
             std::string DebugName{s_DEFAULT_STRING};
             vk::MemoryRequirements MemoryRequirements{};
             vk::MemoryPropertyFlags MemoryPropertyFlags{};
@@ -1364,8 +1457,8 @@ namespace Radiant
                 // NOTES:
                 // 1) First row's resource in bucket fully occupies it!
                 // 2) Memory type should be the same!
-                if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[memoryBucket.AlreadyAliasedResources.front().ID],
-                                                  m_ResourceLifetimeMap[resourceToBeAssigned.ID]) ||
+                if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[memoryBucket.AlreadyAliasedResources.front().ResourceID],
+                                                  m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]) ||
                     resourceToBeAssigned.MemoryPropertyFlags != memoryBucket.AlreadyAliasedResources.front().MemoryPropertyFlags)
                     continue;
 
@@ -1380,8 +1473,8 @@ namespace Radiant
                 // Build nonaliasable memory offsets for every resource each time we wanna emplace new resource.
                 for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
                 {
-                    if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[aliasedResource.ID],
-                                                      m_ResourceLifetimeMap[resourceToBeAssigned.ID]))
+                    if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[aliasedResource.ResourceID],
+                                                      m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]))
                     {
                         const u64 byteOffsetStart = aliasedResource.Offset;
                         const u64 byteOffsetEnd   = byteOffsetStart + aliasedResource.MemoryRequirements.size;
@@ -1424,7 +1517,7 @@ namespace Radiant
                 if (foundMemoryRegion.has_value())
                 {
                     memoryBucket.AlreadyAliasedResources.emplace_back(
-                        resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, (*foundMemoryRegion).first,
+                        resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ResourceID, (*foundMemoryRegion).first,
                         resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
                     bResourceAssigned = true;
 
@@ -1435,7 +1528,7 @@ namespace Radiant
             if (!bResourceAssigned)
             {
                 auto& bucket = m_MemoryBuckets.emplace_back();
-                bucket.AlreadyAliasedResources.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ID, 0,
+                bucket.AlreadyAliasedResources.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ResourceID, 0,
                                                             resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements,
                                                             resourceToBeAssigned.MemoryPropertyFlags);
             }

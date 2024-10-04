@@ -32,9 +32,8 @@ static const uint g_PointLightBatchCount = (MAX_POINT_LIGHT_COUNT + LIGHT_CLUSTE
 
 // TODO: SpotLights, AreaLights culling
 
-groupshared Sphere lds_PointLightData[LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS];
+groupshared Sphere lds_PointLightData[LIGHT_CLUSTERS_MAX_SHARED_LIGHTS];
 
-// NOTE: Although it depends on light count, but current WG_SIZE = 64 is the optimal I profiled.
 [shader("compute")]
 [numthreads(LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE, 1, 1)]
 void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupIndex)
@@ -60,13 +59,16 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupInde
     const uint froxelBitmaskIndex = uint(froxelIndex * Shaders::s_INV_LIGHT_CLUSTERS_WORD_SIZE);
     const uint froxelBit = 1u << (froxelIndex % LIGHT_CLUSTERS_WORD_SIZE);
     const bool bIsClusterActive = (u_PC.ActiveLightClusters.ActiveClusters[froxelBitmaskIndex] & froxelBit) > 0;
+    if (WaveActiveAllTrue(bIsClusterActive)) return;
+
 #else
     const bool bIsClusterActive = true;
 #endif
 
+
 #if LIGHT_CLUSTERS_SPLIT_DISPATCHES
     uint globalLightOffset = u_PC.PointLightBatchOffset;
-    const uint pointLightBatchCount = (u_PC.PointLightBatchCount + LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS - 1) / LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS;
+    const uint pointLightBatchCount = (u_PC.PointLightBatchCount + LIGHT_CLUSTERS_MAX_SHARED_LIGHTS - 1) / LIGHT_CLUSTERS_MAX_SHARED_LIGHTS;
     #else
     uint globalLightOffset = 0;
     #endif
@@ -77,7 +79,7 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupInde
     for (uint lightBatchIndex = 0; lightBatchIndex < g_PointLightBatchCount && globalLightOffset < u_PC.LightData->PointLightCount; ++lightBatchIndex)
 #endif
     {
-        for (uint i = GroupIndex; i < LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS && 
+        for (uint i = GroupIndex; i < LIGHT_CLUSTERS_MAX_SHARED_LIGHTS && 
                                     (globalLightOffset + i) < u_PC.LightData->PointLightCount; i += LIGHT_CLUSTERS_ASSIGNMENT_WG_SIZE) {
             Sphere plWS = u_PC.LightData->PointLights[globalLightOffset + i].sphere;
             plWS.Origin = mul(u_PC.CameraData->ViewMatrix, float4(plWS.Origin, 1.0f)).xyz;
@@ -86,9 +88,9 @@ void computeMain(uint3 DTid: SV_DispatchThreadID, uint GroupIndex : SV_GroupInde
         GroupMemoryBarrierWithGroupSync();
 
 #if LIGHT_CLUSTERS_SPLIT_DISPATCHES
-        const uint writtenPointLightCount = min(LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS, u_PC.PointLightBatchCount - LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS * lightBatchIndex);
+        const uint writtenPointLightCount = min(LIGHT_CLUSTERS_MAX_SHARED_LIGHTS, u_PC.PointLightBatchCount - LIGHT_CLUSTERS_MAX_SHARED_LIGHTS * lightBatchIndex);
 #else
-        const uint writtenPointLightCount = min(LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS, u_PC.LightData->PointLightCount - LIGHT_CLUSTERS_MAX_SHARED_POINT_LIGHTS * lightBatchIndex);
+        const uint writtenPointLightCount = min(LIGHT_CLUSTERS_MAX_SHARED_LIGHTS, u_PC.LightData->PointLightCount - LIGHT_CLUSTERS_MAX_SHARED_LIGHTS * lightBatchIndex);
 #endif
         for (uint lightIndex = 0; lightIndex < writtenPointLightCount && bIsClusterActive; ++lightIndex)
         {

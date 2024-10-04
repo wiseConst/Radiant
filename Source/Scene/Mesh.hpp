@@ -16,7 +16,7 @@ namespace Radiant
         Shared<GfxBuffer> VertexPositionBuffer{nullptr};
         Shared<GfxBuffer> VertexAttributeBuffer{nullptr};
         Shared<GfxBuffer> IndexBuffer{nullptr};
-        vk::IndexType IndexType{vk::IndexType::eUint16};
+        vk::IndexType IndexType{vk::IndexType::eNoneKHR};
         u32 IndexCount{0};
         u32 FirstIndex{0};
         Shared<GfxBuffer> MaterialBuffer{nullptr};

@@ -8,17 +8,21 @@ namespace Radiant
     static constexpr u8 s_BufferedFrameCount = 2;
     static_assert(s_BufferedFrameCount > 0);
 
+    static constexpr u8 s_MaxComputeQueueCount  = 8;
+    static constexpr u8 s_MaxTransferQueueCount = 2;
+
     static constexpr bool s_bUseResourceMemoryAliasing = true;
     static constexpr bool s_bForceGfxValidation        = true;
     static constexpr bool s_bRequireRayTracing         = false;
     static constexpr bool s_bRequireMeshShading        = false;
     static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
+    static constexpr bool s_bUseTextureCompressionBC   = true;
 
-    enum class ECommandBufferTypeBits : u8
+    enum class ECommandQueueType : u8
     {
-        COMMAND_BUFFER_TYPE_GENERAL_BIT            = BIT(0),
-        COMMAND_BUFFER_TYPE_ASYNC_COMPUTE_BIT      = BIT(1),
-        COMMAND_BUFFER_TYPE_DEDICATED_TRANSFER_BIT = BIT(2),
+        COMMAND_QUEUE_TYPE_GENERAL = 0,
+        COMMAND_QUEUE_TYPE_ASYNC_COMPUTE,
+        COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER,
     };
 
     using ExtraBufferFlags = u32;

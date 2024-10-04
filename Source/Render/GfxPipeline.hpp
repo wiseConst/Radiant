@@ -8,11 +8,14 @@
 namespace Radiant
 {
 
+    class GfxDevice;
+    class GfxShader;
+
     // NOTE: Programmable Vertex Pulling only.
     struct GfxGraphicsPipelineOptions
     {
         std::vector<vk::Format> RenderingFormats{};
-        UnorderedSet<vk::DynamicState> DynamicStates{};
+        std::vector<vk::DynamicState> DynamicStates{};
 
         vk::CullModeFlags CullMode{vk::CullModeFlagBits::eNone};
         vk::FrontFace FrontFace{vk::FrontFace::eCounterClockwise};
@@ -37,7 +40,8 @@ namespace Radiant
             BLEND_MODE_NONE,
             BLEND_MODE_ADDITIVE,
             BLEND_MODE_ALPHA,
-        } BlendMode{EBlendMode::BLEND_MODE_NONE};
+        };
+        std::vector<EBlendMode> BlendModes;  // Per format, this array should have the same order as "RenderingFormats" if used.
     };
 
     struct GfxComputePipelineOptions
@@ -49,7 +53,6 @@ namespace Radiant
         u32 MaxRayRecursionDepth{1};
     };
 
-    class GfxShader;
     struct GfxPipelineDescription
     {
         std::string DebugName{s_DEFAULT_STRING};
@@ -58,7 +61,6 @@ namespace Radiant
         Shared<GfxShader> Shader{nullptr};
     };
 
-    class GfxDevice;
     class GfxPipeline final : private Uncopyable, private Unmovable
     {
       public:
@@ -67,8 +69,8 @@ namespace Radiant
         {
             if (auto* gpo = std::get_if<GfxGraphicsPipelineOptions>(&m_Description.PipelineOptions); gpo)
             {
-                gpo->DynamicStates.insert(vk::DynamicState::eViewportWithCount);
-                gpo->DynamicStates.insert(vk::DynamicState::eScissorWithCount);
+                gpo->DynamicStates.emplace_back(vk::DynamicState::eViewportWithCount);
+                gpo->DynamicStates.emplace_back(vk::DynamicState::eScissorWithCount);
             }
             Invalidate();
         }

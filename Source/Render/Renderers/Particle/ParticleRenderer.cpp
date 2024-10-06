@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "ParticleRenderer.hpp"
 
 #include <Core/Application.hpp>

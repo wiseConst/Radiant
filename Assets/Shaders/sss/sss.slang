@@ -1,6 +1,6 @@
 // sss.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 
 static const uint32_t g_sss_max_steps        = 16;    // Max ray steps, affects quality and performance.
 static const float    g_sss_max_ray_distance = 0.1f;  // Max shadow length, longer shadows are less accurate.
@@ -49,7 +49,7 @@ float ScreenSpaceShadows(const float2 uv, const float3 viewPos, const float3 lig
         if (!Shaders::is_saturated(rayUV)) continue;
 
         // Compute the difference between the ray's and the camera's depth
-        const float sampledDepthVS = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(rayUV, 0).r, u_PC.CameraData->DepthUnpackConsts);
+        const float sampledDepthVS = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(rayUV, 0).r, u_PC.CameraData->ProjectionMatrix);
         const float depthDelta = rayPos.z - sampledDepthVS;
 
         // Check if the camera can't "see" the ray (ray depth must be larger than the camera depth, so positive depth_delta)

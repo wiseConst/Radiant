@@ -20,6 +20,7 @@ namespace Radiant
         Unique<GfxPipeline> m_LightClustersAssignmentPipeline{nullptr};
 
         Unique<GfxPipeline> m_DepthPrePassPipeline{nullptr};
+        Unique<GfxPipeline> m_CSMPipeline{nullptr};
         Unique<GfxPipeline> m_MainLightingPassPipeline{nullptr};
         Unique<GfxPipeline> m_FinalPassPipeline{nullptr};
 

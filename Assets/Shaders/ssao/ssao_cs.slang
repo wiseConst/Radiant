@@ -1,7 +1,7 @@
 // ssao_cs.slang
 // https://wickedengine.net/2019/09/improved-normal-reconstruction-from-depth
 
-#include <../../../Source/ShaderDefines.h>
+#include <../../../Source/ShaderDefines.hpp>
 #include <ssao_defines.hpp>
 
 #if USE_THREAD_GROUP_TILING_X
@@ -123,10 +123,10 @@ void computeMain(uint3 DTid : SV_DispatchThreadID, const uint3 Gid : SV_GroupID,
         }
         else
         {
-            sampledDepth = Shaders::ScreenSpaceDepthToView( Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->DepthUnpackConsts);
+            sampledDepth = Shaders::ScreenSpaceDepthToView( Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->ProjectionMatrix);
         }
 #else
-        const float sampledDepth = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->DepthUnpackConsts);
+        const float sampledDepth = Shaders::ScreenSpaceDepthToView(Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(offsetUV.xy, 0).r, u_PC.CameraData->ProjectionMatrix);
 #endif
         
         const float rangeCheck = smoothstep(0.0f, 1.0f, Shaders::g_SampleRadius / abs(viewPos.z - sampledDepth));

@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "SSGIRenderer.hpp"
 
 #include <Core/Application.hpp>

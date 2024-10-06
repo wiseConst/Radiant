@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "DebugRenderer.hpp"
 
 #include <Render/GfxContext.hpp>

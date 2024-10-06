@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "RenderGraph.hpp"
 
 // NOTE: Only for RenderGraphResourcePool::UI_ShowResourceUsage()
@@ -855,8 +855,11 @@ namespace Radiant
                         .setLayerCount(layerCount)
                         .setPDepthAttachment(&depthAttachmentInfo)
                         .setPStencilAttachment(&stencilAttachmentInfo)
-                        .setRenderArea(vk::Rect2D().setExtent(
-                            vk::Extent2D().setWidth(currentPass->m_Viewport->width).setHeight(currentPass->m_Viewport->height))));
+                        .setRenderArea(
+                            vk::Rect2D()
+                                .setOffset(vk::Offset2D().setX(currentPass->m_Viewport->x).setY(currentPass->m_Viewport->y))
+                                .setExtent(
+                                    vk::Extent2D().setWidth(currentPass->m_Viewport->width).setHeight(currentPass->m_Viewport->height))));
             }
 
             RenderGraphResourceScheduler scheduler(m_RenderGraph, *currentPass);

@@ -121,7 +121,7 @@ namespace Radiant
                                          .InvFullResolution       = 1.0f / m_FullResolution,
                                          .Position                = m_Position,
                                          .zNearFar                = {m_zNear, m_zFar},
-                                         .DepthUnpackConsts       = {(m_zFar * m_zNear) / (m_zFar - m_zNear), m_zFar / (m_zFar - m_zNear)}};
+                                         .Zoom                    = m_Zoom};
         }
     };
 

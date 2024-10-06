@@ -1,6 +1,6 @@
 // texture_view.slang
 
-#include <../../../Source/ShaderDefines.h>
+#include <../../../Source/ShaderDefines.hpp>
 
 struct PushConstantBlock
 {

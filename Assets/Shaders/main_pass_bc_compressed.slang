@@ -1,6 +1,6 @@
 // main_pass_bc_compressed.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../Source/ShaderDefines.hpp"
 #include "clustered_shading/light_clusters_defines.hpp"
 #include "csm/csm_defines.hpp"
 
@@ -28,7 +28,7 @@ struct MainPassShaderData
     uint SSSTextureID;
     float2 ScaleBias; // For clustered shading, x - scale, y - bias
     const Shaders::CascadedShadowMapsData *CSMData;
-    uint CSMTextureIDs[SHADOW_MAP_CASCADE_COUNT];
+    uint ShadowMapAtlasTextureID;
 };
 
 struct PushConstantBlock
@@ -160,7 +160,6 @@ void ProcessPointLights(inout float3 irradiance, const uint froxelIndex, const f
     }
 }
 
-
 [shader("fragment")]
 float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragCoord : SV_Position) : SV_Target
 {
@@ -229,6 +228,9 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
         float3 projCoords = fragPosLS.xyz / fragPosLS.w;
         projCoords.xy = projCoords.xy * 0.5 + 0.5;
 
+        // transform texture coordiantes to sample appropriate part of shadow texture atlas
+        Shaders::AdjustTextureCoordinatesToShadowTextureAtlas(projCoords.xy, cascadeIndex);
+
         if (Shaders::is_saturated(projCoords))
         {
             const float bias = max(0.005f, 0.05f * (1.0f - dot(N, dirL))) * 2.0f / abs(u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex]);
@@ -246,14 +248,14 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
             {
                 for (int y = -PCF_RADIUS; y <= PCF_RADIUS; ++y)
                 {
-                    const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[cascadeIndex]].Sample(projCoords.xy + float2(x, y) * texelSize) .r;
+                    const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.ShadowMapAtlasTextureID].Sample(projCoords.xy + float2(x, y) * texelSize) .r;
                     const float fOccluded = (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
                     shadow += shadowDarkness * shadowFade * fOccluded;
                 }
             }
             shadow /= (float)((PCF_RADIUS * 2 + 1) * (PCF_RADIUS * 2 + 1));
 #else
-            const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.CSMTextureIDs[cascadeIndex]].Sample(projCoords.xy).r;
+            const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.ShadowMapAtlasTextureID].Sample(projCoords.xy).r;
             const float fOccluded = (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
             shadow += shadowDarkness * shadowFade * fOccluded;
 #endif

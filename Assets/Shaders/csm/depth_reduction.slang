@@ -1,13 +1,13 @@
 // depth_reduction.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include <csm_defines.hpp>
 
 struct PushConstantBlock
 {
     uint DepthTextureID;
     float2 SrcTexelSize;
-    float2 DepthUnpackConsts;
+    const Shaders::CameraData *CameraData;
     Shaders::DepthBounds *DepthBounds;
 };
 [[vk::push_constant]] PushConstantBlock u_PC;
@@ -16,15 +16,14 @@ struct PushConstantBlock
 [shader("compute")]
 void computeMain(const uint3 DTid : SV_DispatchThreadID)
 {
-    uint depthMin = 0xFFFFFFFF;
-    uint depthMax = 0;
-
+    if (any(DTid.xy >= u_PC.CameraData.FullResolution.xy)) return;
     const float2 uv = DTid.xy * u_PC.SrcTexelSize;
-    const float sampledDepth = Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(uv, 0).r;
-    const float depthVS = Shaders::ScreenSpaceDepthToView(sampledDepth, u_PC.DepthUnpackConsts);
 
-    const float minWarpDepth = WaveActiveMin(depthVS);
-    const float maxWarpDepth = WaveActiveMax(depthVS);
+    const float sampledDepth = Shaders::Texture_Heap[u_PC.DepthTextureID].SampleLevel(uv, 0).r;
+    const float positiveDepthVS = -Shaders::ScreenSpaceDepthToView(sampledDepth, u_PC.CameraData->ProjectionMatrix);
+
+    const float minWarpDepth = WaveActiveMin(positiveDepthVS);
+    const float maxWarpDepth = WaveActiveMax(positiveDepthVS);
 
     InterlockedMin(u_PC.DepthBounds.MinMaxZ.x, asuint(minWarpDepth));
     InterlockedMax(u_PC.DepthBounds.MinMaxZ.y, asuint(maxWarpDepth));

@@ -1,6 +1,6 @@
 // equirectangular_to_cubemap.slang
 
-#include <../../../Source/ShaderDefines.h>
+#include <../../../Source/ShaderDefines.hpp>
 #include <cubemap.slang>
 
 // https://stackoverflow.com/questions/48494389/how-does-this-code-sample-from-a-spherical-map

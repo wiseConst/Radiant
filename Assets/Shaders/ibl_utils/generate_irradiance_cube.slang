@@ -1,6 +1,6 @@
 // generate_irradiance_cube.slang
 
-#include <../../../Source/ShaderDefines.h>
+#include <../../../Source/ShaderDefines.hpp>
 #include <cubemap.slang>
 
 static constexpr float g_DeltaPhi = 2.0f * Shaders::s_PI / 180.0f;

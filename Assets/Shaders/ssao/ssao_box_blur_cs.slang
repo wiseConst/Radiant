@@ -1,6 +1,6 @@
 // ssao_box_blur_cs.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include <ssao_defines.hpp>
 
 struct PushConstantBlock

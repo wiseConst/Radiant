@@ -1,6 +1,6 @@
 // light_clusters_build.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include <light_clusters_defines.hpp>
 
 struct PushConstantBlock

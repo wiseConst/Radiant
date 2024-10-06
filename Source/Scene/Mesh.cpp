@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "Mesh.hpp"
 
 #include <Core/Application.hpp>
@@ -551,11 +551,12 @@ namespace Radiant
                     pushTextureFunc(asset->textures[textureIndex], occlusionNormalRoughnessFormat);
                 }
 
-                // NOTE: For now metallic roughness stored in BC7.
+                // NOTE: For now metallic/roughness stored in BC1.
+                constexpr auto metallicRoughnessFormat = vk::Format::eBc1RgbUnormBlock;
                 if (material.pbrData.metallicRoughnessTexture.has_value())
                 {
                     const auto textureIndex = material.pbrData.metallicRoughnessTexture->textureIndex;
-                    pushTextureFunc(asset->textures[textureIndex], albedoEmissiveFormat);
+                    pushTextureFunc(asset->textures[textureIndex], metallicRoughnessFormat);
                 }
             }
 

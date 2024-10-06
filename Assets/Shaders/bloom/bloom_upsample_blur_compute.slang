@@ -1,6 +1,6 @@
 // bloom_upsample_blur_compute.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include <bloom_defines.hpp>
 
 // This shader performs upsampling on a texture,

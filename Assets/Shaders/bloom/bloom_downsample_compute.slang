@@ -1,6 +1,6 @@
 // bloom_downsample_compute.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include <bloom_defines.hpp>
 
 // This shader performs downsampling on a texture,

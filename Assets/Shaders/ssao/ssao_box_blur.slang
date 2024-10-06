@@ -1,6 +1,6 @@
 // ssao_box_blur.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include "../FullScreenQuad.slang"
 #include <ssao_defines.hpp>
 

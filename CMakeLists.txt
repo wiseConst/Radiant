@@ -37,7 +37,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Binaries/Release)
 set(CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Source)
 set(SHADERS_DIR ${CMAKE_SOURCE_DIR}/Assets/Shaders)
 
-file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.cppm" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp" "${SHADERS_DIR}/*.hpp" "${SHADERS_DIR}/*.h")
+file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.cppm" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp") 
 set(ALL_FILES ${SRC_FILES})
 
 # Automatically group all sources into folders for MVS.
@@ -51,7 +51,7 @@ endforeach()
 
 add_executable(${PROJECT_NAME} ${ALL_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CORE_DIR})
-target_precompile_headers(${PROJECT_NAME} PRIVATE ${CORE_DIR}/pch.h)
+target_precompile_headers(${PROJECT_NAME} PRIVATE ${CORE_DIR}/pch.hpp)
 target_include_directories(${PROJECT_NAME} PRIVATE ${SHADERS_DIR})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE 
@@ -107,7 +107,7 @@ if (NOT EXISTS ${GRAPHVIZ_ROOT})
 endif()
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.10.2)
+set(SLANG_VERSION 2024.13)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")
@@ -161,7 +161,9 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(glfw)
 target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
-set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
+set_target_properties(glfw PROPERTIES FOLDER "ThirdParty/glfw")
+set_target_properties(uninstall PROPERTIES FOLDER "ThirdParty/glfw")
+set_target_properties(update_mappings PROPERTIES FOLDER "ThirdParty/glfw")
 
 # imgui 
 message(STATUS "Fetching imgui...")

@@ -1,6 +1,6 @@
 // points2d.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../Source/ShaderDefines.hpp"
 #include <radiance_cascades_defines.hpp>
 
 struct VSOutput

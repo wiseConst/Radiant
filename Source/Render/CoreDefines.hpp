@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Core/Core.hpp>
-#include <ShaderDefines.h>
+#include <ShaderDefines.hpp>
 
 namespace Radiant
 {

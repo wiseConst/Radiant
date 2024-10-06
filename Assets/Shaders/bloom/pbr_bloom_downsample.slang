@@ -1,6 +1,6 @@
 // pbr_bloom_downsample.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include "../FullScreenQuad.slang"
 #include <bloom_defines.hpp>
 

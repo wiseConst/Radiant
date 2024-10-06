@@ -1,6 +1,6 @@
 // blinn_phong.slang
 
-#include "../../Source/ShaderDefines.h"
+#include "../../Source/ShaderDefines.hpp"
 
 struct FragmentStageInput
 { 

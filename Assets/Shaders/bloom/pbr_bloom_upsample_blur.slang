@@ -1,6 +1,6 @@
 // pbr_bloom_upsample_blur.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include "../FullScreenQuad.slang"
 
 // This shader performs upsampling on a texture,

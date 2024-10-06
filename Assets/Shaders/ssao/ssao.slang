@@ -1,6 +1,6 @@
 // ssao.slang
 
-#include "../../../Source/ShaderDefines.h"
+#include "../../../Source/ShaderDefines.hpp"
 #include "../FullScreenQuad.slang"
 #include <ssao_defines.hpp>
 
@@ -33,7 +33,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
         float4 offsetUV = mul(u_PC.CameraData->ProjectionMatrix, float4(sample, 1.0f));
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;
 
-        const float sampledDepth = Shaders::ScreenSpaceDepthToView( Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(offsetUV.xy).r, u_PC.CameraData->DepthUnpackConsts);
+        const float sampledDepth = Shaders::ScreenSpaceDepthToView( Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(offsetUV.xy).r, u_PC.CameraData->ProjectionMatrix);
         const float rangeCheck = smoothstep(0.0f, 1.0f, Shaders::g_SampleRadius / abs(viewPos.z - sampledDepth));
         ao += step(sample.z + Shaders::g_SampleBias, sampledDepth) * rangeCheck;
     }

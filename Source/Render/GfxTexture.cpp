@@ -1,4 +1,4 @@
-#include <pch.h>
+#include <pch.hpp>
 #include "GfxTexture.hpp"
 
 #include <Render/GfxContext.hpp>
@@ -171,11 +171,11 @@ namespace Radiant
                         textureFileWriters[i] = MakeUnique<RadiantTextureFileWriter>(outputTexturePaths[i], dimensions, mipCount);
                         outputOptionList[i].setOutputHandler(reinterpret_cast<nvtt::OutputHandler*>(textureFileWriters[i].get()));
 
-                        u32 prevMipImageIndex = surfaceList.size() - 1;
                         batchList.Append(&srcImage, face, 0, &outputOptionList[i]);
                         for (u32 mip = 1; mip < mipCount; ++mip)
                         {
-                            auto& mippedImage = *surfaceList.emplace_back(MakeUnique<nvtt::Surface>(*surfaceList[prevMipImageIndex]));
+                            const auto& prevMippedImage = *surfaceList.back();
+                            auto& mippedImage           = *surfaceList.emplace_back(MakeUnique<nvtt::Surface>(prevMippedImage));
                             batchList.Append(&mippedImage, face, mip, &outputOptionList[i]);
 
                             if (mip == mipCount - 1) break;
@@ -196,8 +196,6 @@ namespace Radiant
                             // Convert back to unpremultiplied sRGB.
                             mippedImage.demultiplyAlpha();
                             mippedImage.toSrgb();
-
-                            prevMipImageIndex = surfaceList.size() - 1;
                         }
 
                         currentBatchSize += currentFileSizeBytes;

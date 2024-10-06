@@ -131,7 +131,7 @@ namespace Radiant
             float2 InvFullResolution;
             float3 Position;
             float2 zNearFar;
-            float2 DepthUnpackConsts;  // x - depthLinearizeMul, y - depthLinearizeAdd
+            float Zoom;
         };
 
         // NOTE: By default all textures in glTF are in sRGB color space, so we convert all textures firstly in linear RGB color space and
@@ -145,7 +145,7 @@ namespace Radiant
                 uint16_t MetallicFactor;
                 uint16_t RoughnessFactor;
                 uint32_t AlbedoTextureID;
-                uint32_t MetallicRoughnessTextureID;
+                uint32_t MetallicRoughnessTextureID;  // R = 0, G = roughness, B = metallic.
             } PbrData;
             uint32_t NormalTextureID;
             float NormalScale;
@@ -220,6 +220,18 @@ namespace Radiant
         }
 
         // clang-format off
+        // XeGTAO uses same thing: https://github.com/GameTechDev/XeGTAO/blob/a5b1686c7ea37788eeb3576b5be47f7c03db532c/Source/Rendering/Shaders/XeGTAO.h#L169
+        // also better explanation is right there:
+        // https://www.youtube.com/watch?v=z1KG2Cwi1pk&list=PLU2nPsAdxKWQYxkmQ3TdbLsyc1l2j25XM&index=125&ab_channel=GameEngineSeries
+        float ScreenSpaceDepthToView(const float fScreenDepth, const float4x4 projectionMatrix)
+        {
+            // NOTE: Projection matrix here I receive from camera data, it's in Col-Row major stored(c++ side + glm), 
+            // but slang access is always Row-Col, so instead of this:
+            // return -projectionMatrix[3][2] / (fScreenDepth + projectionMatrix[2][2]);
+            // we do this:
+            return -projectionMatrix[2][3] / (fScreenDepth + projectionMatrix[2][2]);
+        }
+
         // NOTE: Formula is easily derived from projection perspective matrix multiplication && perspective division = Zout(depth in framebuffer).
         // depthLinearizeMul: (zFar * zNear) / (zFar - zNear); depthLinearizeAdd: zFar / (zFar - zNear); 
         // Also since we want ViewSpace(we are facing towards NEGATIVE Z) depth we NEGATE it.

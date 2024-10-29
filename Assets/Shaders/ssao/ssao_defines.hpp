@@ -47,12 +47,12 @@ namespace Radiant
             float3(0.74902f, 0.61176f, 0.56863f), float3(0.62745f, 0.54118f, 0.89412f), float3(0.56078f, 0.46275f, 0.51373f),
             float3(0.96471f, 0.06275f, 0.27059f), float3(0.95686f, 0.20784f, 0.52157f), float3(0.75686f, 0.10588f, 0.81961f),
             float3(0.44706f, 0.08627f, 0.36471f)};
-        static constexpr uint32_t g_SampleCount = 11;
+        static constexpr uint32_t g_SampleCount = 8;
         static constexpr float g_SampleCountInv = 1.0f / g_SampleCount;
 
         static const float g_SampleRadius   = 0.25f;
         static const float g_SampleBias     = 0.025f;
-        static const uint8_t g_SSAOStrength = 2;
+        static const uint8_t g_SSAOStrength = 1;
 
 #endif
 

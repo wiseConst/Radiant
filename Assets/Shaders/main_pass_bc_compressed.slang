@@ -8,7 +8,7 @@ struct FragmentStageInput
 { 
     float4 Color;
     float2 UV;
-    float3 FragPosVS;
+    float3 FragPosVS; // Used for CSM && light cluster detection.
     float3 FragPosWS;
     float3 Normal;
     float3 Tangent;
@@ -23,7 +23,10 @@ struct VSOutput
 
 struct MainPassShaderData
 {
-    uint EnvironmentMapTextureCubeID;
+    uint IrradianceMapTextureCubeID;
+    uint PrefilteredMapTextureCubeID; 
+    uint PrefilteredMapLodCount;
+    uint BRDFIntegrationTextureID;
     uint SSAOTextureID;
     uint SSSTextureID;
     float2 ScaleBias; // For clustered shading, x - scale, y - bias
@@ -96,11 +99,10 @@ float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 a
     const float3 H = normalize(V + L);
 
     const float NdotH = max(dot(N, H), Shaders::s_KINDA_SMALL_NUMBER);
-    const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
     const float NdotL = max(dot(N, L), Shaders::s_KINDA_SMALL_NUMBER);
-    const float HdotV = max(dot(H, V), Shaders::s_KINDA_SMALL_NUMBER);
+    const float NdotV = abs(dot(N, V)) + Shaders::s_KINDA_SMALL_NUMBER;
 
-    const float3 F = Shaders::EvaluateFresnel(NdotV, F0/*, metallicRoughness.y*/); // kS
+    const float3 F = Shaders::EvaluateFresnelSchlick(NdotV, F0); // kS
     const float3 DFG = Shaders::EvaluateDistributionGGX(NdotH, metallicRoughness.y) * Shaders::EvaluateGeometrySmith(NdotV, NdotL, metallicRoughness.y) * F;
     const float denom = 4 * NdotV * NdotL;
     const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
@@ -202,7 +204,6 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     uint cascadeIndex = 0;
     if (u_PC.LightData.Sun.bCastShadows) {
 
-#if SHADOW_MAP_CASCADE_COUNT == 4
         const float4 fComparison = float4(float4(fsInput.FragPosVS.z) < float4(u_PC.MPSData.CSMData.CascadeSplits[0], 
             u_PC.MPSData.CSMData.CascadeSplits[1], u_PC.MPSData.CSMData.CascadeSplits[2], u_PC.MPSData.CSMData.CascadeSplits[3]));
             float fIndex = dot(
@@ -214,15 +215,6 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
 
         fIndex = min(fIndex, SHADOW_MAP_CASCADE_COUNT - 1);
         cascadeIndex = (uint)fIndex;
-#else
-        for (uint i = 0; i < SHADOW_MAP_CASCADE_COUNT - 1; ++i)
-        {
-            if (fsInput.FragPosVS.z < u_PC.MPSData.CSMData.CascadeSplits[i])
-            {
-                cascadeIndex = i + 1;
-            }
-        }
-#endif
 
         const float4 fragPosLS = mul(u_PC.MPSData.CSMData.ViewProjectionMatrix[cascadeIndex], float4(fsInput.FragPosWS, 1.0f));
         float3 projCoords = fragPosLS.xyz / fragPosLS.w;
@@ -233,14 +225,8 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
 
         if (Shaders::is_saturated(projCoords))
         {
-            const float bias = max(0.005f, 0.05f * (1.0f - dot(N, dirL))) * 2.0f / abs(u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex]);
+            const float bias = max(0.005f, 0.1f * (1.0f - dot(N, dirL))) / abs(u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex]);
             const float currentDepth = projCoords.z;  // get depth of current fragment from light's perspective
-
-            // https://www.reddit.com/r/GraphicsProgramming/comments/r4xowh/cascaded_shadow_mapping_pcss_help
-            const float shadowDarkness = 0.8f;
-            const float transitionDistance = 25.0f;
-            const float shadowDistance = u_PC.CameraData.zNearFar.x;
-            const float shadowFade = saturate( 1.0f - ((length(fsInput.FragPosVS) - (shadowDistance - transitionDistance)) / transitionDistance));
 
 #if PCF_SHADOWS_ENABLE
             static constexpr float2 texelSize = 1.0f / SHADOW_MAP_CASCADE_SIZE;
@@ -250,14 +236,13 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
                 {
                     const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.ShadowMapAtlasTextureID].Sample(projCoords.xy + float2(x, y) * texelSize) .r;
                     const float fOccluded = (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
-                    shadow += shadowDarkness * shadowFade * fOccluded;
+                    shadow += fOccluded;
                 }
             }
             shadow /= (float)((PCF_RADIUS * 2 + 1) * (PCF_RADIUS * 2 + 1));
 #else
             const float sampledDepth = Shaders::Texture_Heap[u_PC.MPSData.ShadowMapAtlasTextureID].Sample(projCoords.xy).r;
-            const float fOccluded = (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
-            shadow += shadowDarkness * shadowFade * fOccluded;
+            shadow += (currentDepth + bias) < sampledDepth ? 1.0 : 0.0;
 #endif
         }
     }
@@ -269,29 +254,35 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedoOverPi, metallicRoughness, V, N);
 
     // Ambient / indirect part
-    //if (u_PC.MPSData.EnvironmentMapTextureCubeID != 0) {
-    //    const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.EnvironmentMapTextureCubeID].Sample(N).rgb;
-    //    const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
-    //    const float3 kD = 1.0f - Shaders::EvaluateFresnel(NdotV, F0);
-    //    const float3 ao = Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r * Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-    //    const float3 ambient = kD * cubemapIrradiance * albedo.rgb * ao;
-    //    irradiance += ambient;
-    //} 
-    //else 
+    float3 ambient = float3(0.0f);
+    float3 ao = float3(1.0f);
+    if (u_PC.MPSData.SSAOTextureID != 0)
     {
-        float3 ao = float3(1.0f);
-        if (u_PC.MPSData.SSAOTextureID != 0)
-        {
-            ao *= Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r;
-        }
-        if (materialData->OcclusionTextureID != 0)
-        {
-            ao *= Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-        }
-        const float3 ambient = 0.03f * albedo.rgb * ao;
-        irradiance += ambient;
+        ao *= Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r;
     }
+    if (materialData->OcclusionTextureID != 0)
+    {
+        ao *= Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
+    }
+    if (u_PC.MPSData.IrradianceMapTextureCubeID != 0 && u_PC.MPSData.PrefilteredMapTextureCubeID != 0 && u_PC.MPSData.BRDFIntegrationTextureID != 0) {
+        const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
 
+        const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.IrradianceMapTextureCubeID].Sample(N).rgb;
+        const float3 F = Shaders::EvaluateFresnelSchlickRoughness(NdotV, F0, metallicRoughness.y);
+        const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
+        const float3 indirectDiffuse = kD * cubemapIrradiance * albedoOverPi;
+
+        const float3 cubemapPrefilteredColor = Shaders::Texture_Cube_Heap[u_PC.MPSData.PrefilteredMapTextureCubeID] .SampleLevel(reflect(-V, N), metallicRoughness.y * u_PC.MPSData.PrefilteredMapLodCount) .rgb;
+        const float2 brdf = Shaders::Texture_Heap[u_PC.MPSData.BRDFIntegrationTextureID].Sample(float2(NdotV, metallicRoughness.y)).rg;
+        const float3 indirectSpecular = cubemapPrefilteredColor * (F * brdf.r + brdf.g);
+
+        ambient = (indirectDiffuse + indirectSpecular) * ao;
+    }
+    else
+    {
+        ambient = 0.03f * albedoOverPi * ao;
+    }
+    irradiance += ambient;
 
 #if VISUALIZE_LIGHT_CLUSTERS_HEAT_MAP
     uint heatmapPointLightCount = 0;

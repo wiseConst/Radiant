@@ -19,7 +19,7 @@ namespace Radiant
         std::string Name{s_DEFAULT_STRING};
         CommandLineArguments CmdArgs{};
         glm::uvec2 WindowExtent{1280, 720};
-        u32 FPSLimit{60};
+        u32 FPSLimit{0};
     };
 
     class Application final

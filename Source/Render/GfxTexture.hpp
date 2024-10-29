@@ -105,7 +105,7 @@ namespace Radiant
         {
             UsageFlags |= vk::ImageUsageFlagBits::eSampled;
 
-            if (CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT)
+            if (CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT)
                 UsageFlags |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
         }
         constexpr GfxTextureDescription() noexcept =
@@ -139,7 +139,7 @@ namespace Radiant
         {
             m_UUID                   = ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture));
             const bool bExposeMips   = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT;
-            const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT;
+            const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT;
             RDNT_ASSERT((bExposeMips && bGenerateMips) == false, "GfxTexture can't have both bExposeMips && bGenerateMips specified!");
             Invalidate();
         }

@@ -14,8 +14,6 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 
 if (MSVC)
-    # This will enable INTERPROCEDURAL_OPTIMIZATION for all targets created after this line. Those created before are not affected.
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
     set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 
     # Multithreaded project compilation using MSVC
@@ -37,7 +35,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Binaries/Release)
 set(CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Source)
 set(SHADERS_DIR ${CMAKE_SOURCE_DIR}/Assets/Shaders)
 
-file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.cppm" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp") 
+file(GLOB_RECURSE SRC_FILES "${CORE_DIR}/*.cpp" "${CORE_DIR}/*.cppm" "${CORE_DIR}/*.h" "${CORE_DIR}/*.hpp" "${SHADERS_DIR}/*.hpp" "${SHADERS_DIR}/*.h" "${SHADERS_DIR}/*.slang") 
 set(ALL_FILES ${SRC_FILES})
 
 # Automatically group all sources into folders for MVS.
@@ -59,6 +57,9 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     $<$<CONFIG:Release>:RDNT_RELEASE=1 RDNT_DEBUG=0>
 )
 
+# This will enable INTERPROCEDURAL_OPTIMIZATION for all targets created after this line.
+set_target_properties(${PROJECT_NAME} PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+
 if (MSVC)
     # Dynamic MSVC runtime library linking
     set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded$<$<CONFIG:Debug>:Debug>DLL$<$<NOT:$<CONFIG:Debug>>:>)
@@ -69,7 +70,7 @@ endif()
 
 # ============= ThirdParty =============
 
-# NVTT (texture compression NV cards only)
+# NVTT (BCn texture compression)
 set(NVTT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/nvtt")
 target_include_directories(${PROJECT_NAME} PRIVATE ${NVTT_ROOT}/include)
 
@@ -107,7 +108,7 @@ if (NOT EXISTS ${GRAPHVIZ_ROOT})
 endif()
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.13)
+set(SLANG_VERSION 2024.14.2)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")
@@ -128,23 +129,56 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/include)
 
 if (WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/lib/slang.lib)
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        ${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang.dll
+    )
+	
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        ${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang-glslang.dll
+    )
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        ${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang.dll)
+		
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        ${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang-glslang.dll
+    )
+
 endif()
-
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-     ${SLANG_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}
-)
-
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-     ${SLANG_ROOT}/bin/ ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}
-)
 
 # Vulkan SDK
 message(STATUS "Looking for Vulkan SDK...")
 find_package(Vulkan REQUIRED)
 target_compile_definitions(${PROJECT_NAME} PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
-target_include_directories(${PROJECT_NAME} PRIVATE ${Vulkan_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS}/vma)
+target_include_directories(${PROJECT_NAME} PRIVATE ${Vulkan_INCLUDE_DIRS})
+
+# Vulkan Memory Allocator
+set(VMA_VERSION 3.1.0)
+set(VMA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/vma)
+if (NOT EXISTS ${VMA_ROOT})
+    message(STATUS "Downloading Vulkan Memory Allocator...")
+    set(VMA_URL "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v${VMA_VERSION}")
+    if (WIN32)
+        file(DOWNLOAD ${VMA_URL}.zip ${VMA_ROOT}.zip)
+        message(STATUS "Extracting Vulkan Memory Allocator...")
+        file(ARCHIVE_EXTRACT INPUT ${VMA_ROOT}.zip DESTINATION ${VMA_ROOT})
+        file(REMOVE ${VMA_ROOT}.zip)
+    elseif(UNIX)
+        file(DOWNLOAD ${VMA_URL}.tar.gz ${VMA_ROOT}.tar.gz)
+        message(STATUS "Extracting Vulkan Memory Allocator...")
+        file(ARCHIVE_EXTRACT INPUT ${VMA_ROOT}.tar.gz DESTINATION ${VMA_ROOT})
+        file(REMOVE ${VMA_ROOT}.tar.gz)
+    elseif(APPLE)
+        message("Vulkan Memory Allocator downloading for APPLE systems isn't supported for now!")
+    endif()
+endif()
+
+target_include_directories(${PROJECT_NAME} PRIVATE "${VMA_ROOT}/VulkanMemoryAllocator-${VMA_VERSION}/include")
 
 # glfw
 message(STATUS "Fetching GLFW...")
@@ -268,81 +302,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(unordered_dense)
 target_link_libraries(${PROJECT_NAME} PRIVATE unordered_dense)
 set_target_properties(unordered_dense PROPERTIES FOLDER "ThirdParty")
-
-# TODO: Include Jolt
-
-## When turning this option on, the library will be compiled using doubles for positions. This allows for much bigger worlds.
-#set(DOUBLE_PRECISION OFF)
-#
-## When turning this option on, the library will be compiled with debug symbols
-#set(GENERATE_DEBUG_SYMBOLS ON)
-#
-## When turning this option on, the library will be compiled in such a way to attempt to keep the simulation deterministic across platforms
-#set(CROSS_PLATFORM_DETERMINISTIC OFF)
-#
-## When turning this option on, the library will be compiled with interprocedural optimizations enabled, also known as link-time optimizations or link-time code generation.
-## Note that if you turn this on you need to use SET_INTERPROCEDURAL_OPTIMIZATION() or set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON) to enable LTO specificly for your own project as well.
-## If you don't do this you may get an error: /usr/bin/ld: libJolt.a: error adding symbols: file format not recognized
-#if (MSVC)
-#    set(INTERPROCEDURAL_OPTIMIZATION ON)
-#endif ()
-#
-## When turning this on, in Debug and Release mode, the library will emit extra code to ensure that the 4th component of a 3-vector is kept the same as the 3rd component 
-## and will enable floating point exceptions during simulation to detect divisions by zero. 
-## Note that this currently only works using MSVC. Clang turns Float2 into a SIMD vector sometimes causing floating point exceptions (the option is ignored).
-#set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF)
-#
-## Number of bits to use in ObjectLayer. Can be 16 or 32.
-#set(OBJECT_LAYER_BITS 16)
-#
-## Select X86 processor features to use, by default the library compiles with AVX2, if everything is off it will be SSE2 compatible.
-#set(USE_SSE4_1 ON)
-#set(USE_SSE4_2 ON)
-#set(USE_AVX ON)
-#set(USE_AVX2 ON)
-#set(USE_AVX512 OFF)
-#set(USE_LZCNT ON)
-#set(USE_TZCNT ON)
-#set(USE_F16C ON)
-#set(USE_FMADD ON)
-#
-#FetchContent_Declare(
-#        JoltPhysics
-#        GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics
-#        GIT_TAG master
-#        SOURCE_SUBDIR "Build"
-#)
-#FetchContent_MakeAvailable(JoltPhysics)
-#target_link_libraries(${PROJECT_NAME} PRIVATE Jolt)
-#set_target_properties(Jolt PROPERTIES FOLDER "ThirdParty")
-
-# TODO: Valve's GameNetworkingSockets
-#FetchContent_Declare(
-#    GameNetworkingSockets
-#    GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
-#    GIT_TAG        master
-#    GIT_SHALLOW    true
-#)
-#FetchContent_MakeAvailable(GameNetworkingSockets)
-#target_link_libraries(${PROJECT_NAME} PRIVATE GameNetworkingSockets)
-#set_target_properties(GameNetworkingSockets PROPERTIES FOLDER "ThirdParty")
-
-# TODO: SteamAudio
-#FetchContent_Declare(
-#    SteamAudio
-#    GIT_REPOSITORY https://github.com/ValveSoftware/steam-audio.git
-#    GIT_TAG        master
-#    GIT_SHALLOW    true
-#)
-
-#set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-#set(STEAMAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-#set(STEAMAUDIO_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-#set(STEAMAUDIO_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)   
-#FetchContent_MakeAvailable(SteamAudio)
-
-#target_link_libraries(${PROJECT_NAME} PRIVATE SteamAudio)
-#set_target_properties(SteamAudio PROPERTIES FOLDER "ThirdParty")
 
 # openmp
 message(STATUS "Looking for openmp...")

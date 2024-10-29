@@ -206,7 +206,7 @@ namespace Radiant
 
                     RDNT_ASSERT(context.compress(batchList, compressionOptions), "Failed to compress batch list!");
 
-                    LOG_INFO("Time taken to compress {} textures: {} seconds", currentBatchCount,
+                    LOG_INFO("Time taken to compress {} [{}] textures: {} seconds", currentBatchCount, vk::to_string(format),
                              Timer::GetElapsedSecondsFromNow(compressionBeginTime));
                 }
             }
@@ -386,7 +386,9 @@ namespace Radiant
 
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
         const bool bExposeMips   = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT;
-        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT;
+        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT;
+
+        RDNT_ASSERT((bGenerateMips != bExposeMips) || (!bGenerateMips && !bExposeMips), "You can't have both bGenerateMips && bExposeMips");
 
         const auto imageCI =
             vk::ImageCreateInfo()
@@ -421,7 +423,7 @@ namespace Radiant
     {
         const auto mipLevelCount = GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
         const bool bExposeMips   = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT;
-        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT;
+        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT;
 
         m_MipChain.resize(bExposeMips ? mipLevelCount : 1);
         for (u32 baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
@@ -456,7 +458,7 @@ namespace Radiant
                         .setSubresourceRange(vk::ImageSubresourceRange()
                                                  .setBaseArrayLayer(0)
                                                  .setBaseMipLevel(baseMipLevel)
-                                                 .setLevelCount(1)
+                                                 .setLevelCount(bGenerateMips ? mipLevelCount : 1)
                                                  .setLayerCount(m_Description.LayerCount)
                                                  .setAspectMask(IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth
                                                                                                     : vk::ImageAspectFlagBits::eColor))
@@ -490,7 +492,7 @@ namespace Radiant
                         .setSubresourceRange(vk::ImageSubresourceRange()
                                                  .setBaseArrayLayer(0)
                                                  .setBaseMipLevel(baseMipLevel)
-                                                 .setLevelCount(1)
+                                                 .setLevelCount(bGenerateMips ? mipLevelCount : 1)
                                                  .setLayerCount(m_Description.LayerCount)
                                                  .setAspectMask(IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth
                                                                                                     : vk::ImageAspectFlagBits::eColor))
@@ -518,7 +520,7 @@ namespace Radiant
 
     void GfxTexture::GenerateMipMaps(const vk::CommandBuffer& cmd) const noexcept
     {
-        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT;
+        const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT;
         RDNT_ASSERT(bGenerateMips, "bGenerateMips is not specified!");
 
         const auto formatProps = m_Device->GetPhysicalDevice().getFormatProperties(m_Description.Format);

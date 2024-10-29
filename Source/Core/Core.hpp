@@ -32,12 +32,8 @@ namespace Radiant
 #endif
 
 #if RDNT_RELEASE
-#define RDNT_ASSERT(cond, ...)                                                                                                             \
-    if (!(cond))                                                                                                                           \
-    {                                                                                                                                      \
-        LOG_ERROR(__VA_ARGS__);                                                                                                            \
-        std::terminate();                                                                                                                  \
-    }
+#define RDNT_ASSERT(cond, ...) (cond)
+
 #endif
 
     struct WindowResizeData final
@@ -45,10 +41,8 @@ namespace Radiant
         glm::uvec2 Dimensions;
     };
 
-    class ThreadPool final : private Uncopyable, private Unmovable
+    struct ThreadPool final : private Uncopyable, private Unmovable
     {
-        static constexpr bool s_bSetCPUCoreAffinity = true;
-
       public:
         ThreadPool() noexcept
         {
@@ -88,6 +82,7 @@ namespace Radiant
         std::mutex m_Mtx{};
         std::deque<std::move_only_function<void() noexcept>> m_WorkQueue;
         bool m_bShutdownRequested{false};
+        static constexpr bool s_bSetCPUCoreAffinity = true;
         std::vector<std::jthread> m_Workers;
 
         void Init() noexcept

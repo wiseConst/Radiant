@@ -4,6 +4,8 @@
 #include <Render/GfxContext.hpp>
 #include <Render/GfxPipeline.hpp>
 #include <Render/GfxShader.hpp>
+#include <Render/GfxBuffer.hpp>
+#include <Render/GfxTexture.hpp>
 #include <Render/Camera.hpp>
 
 #include <Render/Renderers/Common/ImGuiRenderer.hpp>
@@ -43,6 +45,14 @@ namespace Radiant
         DrawContext m_DrawContext                    = {};
 
         vk::Extent2D m_ViewportExtent{};
+
+        NODISCARD Shaders::CameraData GetShaderMainCameraData() const noexcept;
+
+        // Returns
+        // 1) Irradiance Cube Map(approximated indirect diffuse lighting portion of environment)
+        // 2) Prefiltered Cube Map(approximated indirect specular part of environment lighting)
+        NODISCARD std::pair<Unique<GfxTexture>, Unique<GfxTexture>> GenerateIBLMaps(
+            const std::string_view& equirectangularMapPath) noexcept;
     };
 
 }  // namespace Radiant

@@ -12,11 +12,14 @@ namespace Radiant
 
     }  // namespace ResourceNames
 
-    ParticleRenderer::ParticleRenderer() noexcept {}
+    ParticleRenderer::ParticleRenderer() noexcept
+    {
+        m_MainCamera = MakeShared<Camera>(70.0f, static_cast<f32>(m_ViewportExtent.width) / static_cast<f32>(m_ViewportExtent.height),
+                                          1000.0f, 0.0001f);
+    }
 
     void ParticleRenderer::RenderFrame() noexcept
     {
-
         m_UIRenderer->RenderFrame(m_ViewportExtent, m_RenderGraph, ResourceNames::FinalRT,
                                   [&]()
                                   {

@@ -36,7 +36,7 @@ namespace Radiant
         struct LightClusterList
         {
             uint32_t PointLightBitmasks[LIGHT_CLUSTERS_POINT_LIGHT_BITMASK_ARRAY_SIZE];
-          //  uint32_t SpotLightBitmasks[LIGHT_CLUSTERS_SPOT_LIGHT_BITMASK_ARRAY_SIZE];
+            //  uint32_t SpotLightBitmasks[LIGHT_CLUSTERS_SPOT_LIGHT_BITMASK_ARRAY_SIZE];
         };
 
 #ifndef __cplusplus
@@ -72,6 +72,20 @@ namespace Radiant
         {
             uint32_t ActiveClusters[LIGHT_CLUSTERS_ACTIVE_CLUSTERS_BITMASK_ARRAY_SIZE];
         };
+
+#ifdef __cplusplus
+        static void PrintLightClustersSubdivisions(const f32 zNear, const f32 zFar) noexcept
+        {
+            LOG_INFO("Light clusters subdivision Z slices: {}", LIGHT_CLUSTERS_SUBDIVISION_Z);
+            for (u32 slice{}; slice < LIGHT_CLUSTERS_SUBDIVISION_Z; ++slice)
+            {
+                const auto ZSliceNear = zNear * glm::pow(zFar / zNear, (f32)slice / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
+                const auto ZSliceFar  = zNear * glm::pow(zFar / zNear, (f32)(slice + 1) / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
+
+                LOG_TRACE("Slice: {}, Froxel dimensions: [{:.4f}, {:.4f}].", slice, ZSliceNear, ZSliceFar);
+            }
+        }
+#endif
 
     }  // namespace Shaders
 

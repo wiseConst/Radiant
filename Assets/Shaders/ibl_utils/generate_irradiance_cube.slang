@@ -3,8 +3,14 @@
 #include <../../../Source/ShaderDefines.hpp>
 #include <cubemap.slang>
 
-static constexpr float g_DeltaPhi = 2.0f * Shaders::s_PI / 180.0f;
-static constexpr float g_DeltaTheta = 0.5f * Shaders::s_PI / 64.0f;
+// NOTE: I think shader can be optimized through compute shaders
+// if we create 2 shared float2 arrays, so we precompute those heavy funcs
+// for the whole warp and then reuse them.
+// groupshared float2 gs_Phi[(sampleDelta + 2.0f * Shaders::s_PI - 1) / sampleDelta]
+// groupshared float2 gs_Theta[(sampleDelta + 0.5f * Shaders::s_PI - 1) / sampleDelta]
+// For sampleDelta = 0.025f it results in total 2520 bytes: 
+// (phi is 252 element length = 252 * sizeof(float2) = 252 * 8 bytes = 2016 bytes)
+// (theta is 63 element length = 63 * sizeof(float2) = 63 * 8 bytes = 504 bytes)
 
 [shader("fragment")]
 float4 fragmentMain(VSOutput fsInput : VSOutput) : SV_Target
@@ -12,25 +18,30 @@ float4 fragmentMain(VSOutput fsInput : VSOutput) : SV_Target
     const float3 N = normalize(fsInput.LocalPos);
     float3 irradiance = 0.f;
 
-    float3 up = float3(0.0f, 1.0f, 0.0f);
-    const float3 right = normalize(cross(up, N));
-    up = normalize(cross(N, right));
+    float3 B = float3(0.0f, 1.0f, 0.0f);
+    const float3 T = normalize(cross(B, N));
+    B = cross(N, T);
 
-    float samplesNum = 0.0f;
-    for (float phi = 0.0f; phi < 2.0f * Shaders::s_PI; phi += g_DeltaPhi)
+    static const float sampleDelta = 0.025f;
+    float samplesNum = 0.f;
+    for (float phi = 0.0f; phi < 2.0f * Shaders::s_PI; phi += sampleDelta) // around X
     {
-        for (float theta = 0.0f; theta < 0.5f * Shaders::s_PI; theta += g_DeltaTheta)
+        const float cosPhi = cos(phi);
+        const float sinPhi = sin(phi);
+        for (float theta = 0.0f; theta < 0.5f * Shaders::s_PI; theta += sampleDelta) // around Y
         {
-            // spherical to cartesian (in tangent space)
-            const float3 tangentSample = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
-            // tangent space to world
-            const float3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
+            const float sinTheta = sin(theta);
+            const float cosTheta = cos(theta);
+            // Spherical to cartesian (in tangent space).
+            const float3 tangentSample = float3(sinTheta * cosPhi, sinTheta * sinPhi, cosTheta);
+            // Tangent space to world.
+            const float3 sampleVec = normalize(tangentSample.x * T + tangentSample.y * B + tangentSample.z * N);
 
-            irradiance += Shaders::Texture_Cube_Heap[u_PC.SrcTextureID].Sample(sampleVec).rgb * cos(theta) * sin(theta);
+            irradiance += Shaders::Texture_Cube_Heap[u_PC.SrcTextureID].Sample(sampleVec).rgb * cosTheta * sinTheta;
             samplesNum += 1.0f;
         }
     }
-    irradiance *= Shaders::s_PI  / samplesNum;
 
+    irradiance *= Shaders::s_PI / samplesNum;
     return float4(irradiance, 1.0f);
 }

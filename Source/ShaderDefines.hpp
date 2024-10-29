@@ -17,8 +17,6 @@ namespace Radiant
 
 #endif
 
-    static constexpr uint32_t s_IrradianceCubeMapSize = 64;
-
 #define MAX_POINT_LIGHT_COUNT 1024
     // TODO: Implement spot lights
 #define MAX_SPOT_LIGHT_COUNT 256
@@ -100,6 +98,50 @@ namespace Radiant
         static const float s_KINDA_SMALL_NUMBER = 10.E-4f;
         static const float s_PI                 = 3.14159265f;
         static const float s_RcpPI              = 0.31830989f;
+
+        // clang-format off
+        // Indices for the cube (total 36 indices)
+        static constexpr uint8_t g_CubeIndices[36] = {
+            0,  1,  2,  0,  2,  3,   // Back face
+            4,  5,  6,  4,  6,  7,   // Front face
+            8,  9,  10, 8,  10, 11,  // Left face
+            12, 13, 14, 12, 14, 15,  // Right face
+            16, 17, 18, 16, 18, 19,  // Top face
+            20, 21, 22, 20, 22, 23   // Bottom face
+        };
+
+        static constexpr float3 g_UnitCubeVertices[24] = {
+            float3(-1.0f, -1.0f, -1.0f),  // Back face
+            float3(1.0f, -1.0f, -1.0f),  
+            float3(1.0f, 1.0f, -1.0f), 
+            float3(-1.0f, 1.0f, -1.0f),
+
+            float3(-1.0f, -1.0f, 1.0f),  // Front face
+            float3(1.0f, -1.0f, 1.0f),   
+            float3(1.0f, 1.0f, 1.0f),  
+            float3(-1.0f, 1.0f, 1.0f),
+
+            float3(-1.0f, -1.0f, -1.0f),  // Left face
+            float3(-1.0f, -1.0f, 1.0f),  
+            float3(-1.0f, 1.0f, 1.0f), 
+            float3(-1.0f, 1.0f, -1.0f),
+
+            float3(1.0f, -1.0f, -1.0f),  // Right face
+            float3(1.0f, -1.0f, 1.0f),   
+            float3(1.0f, 1.0f, 1.0f),  
+            float3(1.0f, 1.0f, -1.0f),
+
+            float3(-1.0f, 1.0f, -1.0f),  // Top face
+            float3(1.0f, 1.0f, -1.0f),   
+            float3(1.0f, 1.0f, 1.0f),  
+            float3(-1.0f, 1.0f, 1.0f),
+
+            float3(-1.0f, -1.0f, -1.0f),  // Bottom face
+            float3(1.0f, -1.0f, -1.0f),  
+            float3(1.0f, -1.0f, 1.0f), 
+            float3(-1.0f, -1.0f, 1.0f),
+        };
+        // clang-format on
 
         static const uint32_t s_RAINBOW_COLOR_COUNT                 = 8;
         static const float4 s_RAINBOW_COLORS[s_RAINBOW_COLOR_COUNT] = {
@@ -333,20 +375,106 @@ namespace Radiant
             return NdotV / (NdotV * (1.0f - k) + k);
         }
 
-        // geom obstruction && geom shadowing
+        // geom obstruction && geom shadowing. (Microfacets shadowing)
         float EvaluateGeometrySmith(const float NdotV, const float NdotL, const float roughness)
         {
             return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);
         }
 
-        // FresnelSchlick (IBL version optional), evaluating ratio of base reflectivity looking perpendicularly towards surface
-        float3 EvaluateFresnel(const float NdotV, const float3 F0, /*const float roughness,*/ const float3 F90 = float3(1.0f))
+        // IBL geom obstruction && geom shadowing. (Microfacets shadowing)
+        float EvaluateGeometrySmith_IBL(const float NdotV, const float NdotL, const float roughness)
         {
-            // From filament if F90 = 1
-            const float f = pow(1.0 - NdotV, 5.0);
-            return f + F0 * (1.0 - f);
-            // return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
-            //   return F0 + (max(float3(1.0f - roughness), F0) - F0) * pow(1.0f - NdotV, 5.0f);
+            const float k  = roughness * roughness * 0.5f;
+            const float GL = NdotL / (NdotL * (1.0 - k) + k);
+            const float GV = NdotV / (NdotV * (1.0 - k) + k);
+            return GL * GV;
+        }
+
+        // (Reflectance depending on angle of incidence)
+        // FresnelSchlick, evaluating ratio of base reflectivity looking perpendicularly towards surface.
+        float3 EvaluateFresnelSchlick(const float NdotV, const float3 F0, const float3 F90 = float3(1.0f))
+        {
+            return F0 + (F90 - F0) * pow(1.0f - NdotV, 5.0f);
+        }
+
+        // (Reflectance depending on angle of incidence)
+        // FresnelSchlick IBL version, evaluating ratio of base reflectivity looking perpendicularly towards surface.
+        float3 EvaluateFresnelSchlickRoughness(const float NdotV, const float3 F0, const float roughness, const float3 F90 = float3(1.0f))
+        {
+            // The greater the roughness, the lesser the fresnel.
+            return EvaluateFresnelSchlick(NdotV, F0, max(float3(1.0f - roughness), F0));
+        }
+
+        // http://holger.dammertz.org/stuff/notes_HammersleyOnHemisphere.html
+        // Inverses the number around decimal point. Returned number is in range [0, 1).
+        float RadicalInverse_VdC(uint bits)
+        {
+            bits = (bits << 16u) | (bits >> 16u);
+            bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+            bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+            bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+            bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+            return float(bits) * 2.3283064365386963e-10;  // / 0x100000000
+        }
+
+        // Returns low-discrepancy 2d point in range [0, 1).
+        float2 Hammersley2D(const uint i, const float invN)
+        {
+            return float2(float(i) * invN, RadicalInverse_VdC(i));
+        }
+
+        // Based on http://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_slides.pdf
+        float3 ImportanceSampleGGX(const float2 Xi, const float3 N, const float roughness)
+        {
+            // Maps a 2D point to a hemisphere with spread based on roughness
+            const float a = roughness * roughness;  // Better for human perception as Epic Games does from Disney's research.
+
+            const float phi      = 2.0 * Shaders::s_PI * Xi.x;
+            const float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
+            const float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+            // From spherical coordinates to cartesian coordinates.
+            const float3 H = float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+
+            // Tangent space
+            const float3 up        = abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+            const float3 tangent   = normalize(cross(up, N));
+            const float3 bitangent = cross(N, tangent);
+
+            // Convert to world space
+            return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+        }
+
+        float3 TonemapACES(const float3 x)
+        {
+            const float a = 2.51f;
+            const float b = 0.03f;
+            const float c = 2.43f;
+            const float d = 0.59f;
+            const float e = 0.14f;
+            return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+        }
+
+        float3 TonemapReinhard(const float3 x)
+        {
+            return x / (x + float3(1.0f));
+        }
+
+        float3 ToneMapUncharted2(float3 x)
+        {
+            const float A        = 0.15f;
+            const float B        = 0.50f;
+            const float C        = 0.10f;
+            const float D        = 0.20f;
+            const float E        = 0.02f;
+            const float F        = 0.30f;
+            const float W        = 11.2f;
+            const float exposure = 2.0f;
+
+            x *= exposure;
+            x                 = ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+            const float white = ((W * (A * W + C * B) + D * E) / (W * (A * W + B) + D * F)) - E / F;
+            return x / white;
         }
 
 #else

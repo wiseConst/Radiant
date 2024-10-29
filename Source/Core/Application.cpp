@@ -4,6 +4,7 @@
 #include <Render/Renderers/Combined/CombinedRenderer.hpp>
 #include <Render/Renderers/Particle/ParticleRenderer.hpp>
 #include <Render/Renderers/SSGI/SSGIRenderer.hpp>
+#include <Render/Renderers/AW2/AlanWake2Renderer.hpp>
 
 namespace Radiant
 {
@@ -20,8 +21,9 @@ namespace Radiant
         m_MainWindow = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
 
         m_Renderer = MakeUnique<CombinedRenderer>();
-        //   m_Renderer = MakeUnique<ParticleRenderer>();
-        // m_Renderer = MakeUnique<SSGIRenderer>();
+        // m_Renderer = MakeUnique<ParticleRenderer>();
+        //  m_Renderer = MakeUnique<AlanWake2Renderer>();
+        //  m_Renderer = MakeUnique<SSGIRenderer>();
     }
 
     void Application::Run() noexcept
@@ -31,18 +33,9 @@ namespace Radiant
         LOG_INFO("{}", __FUNCTION__);
         m_bIsRunning = true;
 
-        auto lastTime = Timer::Now();
-        u32 frameCount{0};
-        f32 accumulatedDeltaTime{0.f};
-
-        while (m_bIsRunning)
+        auto lastTime{Timer::Now()};
+        while (m_MainWindow->IsRunning())
         {
-            if (!m_MainWindow->IsRunning())
-            {
-                m_bIsRunning = false;
-                break;
-            }
-
             if (m_MainWindow->IsMinimized())
             {
                 m_MainWindow->WaitEvents();  // don't burn cpu
@@ -55,27 +48,20 @@ namespace Radiant
             m_Renderer->UpdateMainCamera(m_DeltaTime);
             m_Renderer->RenderFrame();
 
-            ++frameCount;
-
             auto currentTime = Timer::Now();
             m_DeltaTime      = std::chrono::duration<f32, std::chrono::seconds::period>(currentTime - lastTime).count();
             lastTime         = currentTime;
 
-            accumulatedDeltaTime += m_DeltaTime;
-            if (accumulatedDeltaTime >= 1.f || m_Description.FPSLimit != 0 && frameCount == m_Description.FPSLimit)
+            if (m_Description.FPSLimit != 0)
             {
-                frameCount           = 0;
-                accumulatedDeltaTime = 0.f;
-
-                if (m_Description.FPSLimit != 0)
-                {
-                    const auto diff = 1.f / m_Description.FPSLimit - accumulatedDeltaTime;
-                    std::this_thread::sleep_for(std::chrono::duration<f32, std::chrono::seconds::period>(diff));
-                }
+                const f32 targetFrameTime = 1.f / m_Description.FPSLimit;
+                if (m_DeltaTime < targetFrameTime)
+                    std::this_thread::sleep_for(std::chrono::duration<f32, std::chrono::seconds::period>(targetFrameTime - m_DeltaTime));
             }
 
             m_Renderer->EndFrame();
         }
+        m_bIsRunning = false;
     }
 
     void Application::Shutdown() noexcept

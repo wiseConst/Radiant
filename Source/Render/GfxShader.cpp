@@ -79,7 +79,7 @@ namespace Radiant
         RDNT_ASSERT(SLANG_SUCCEEDED(slangResult), "SLANG: Failed to create global session!");
 
         const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
-                                              .profile                     = slangGlobalSession->findProfile("glsl_460"),
+                                              .profile                     = slangGlobalSession->findProfile("glsl460"),
                                               .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
                                               .floatingPointMode           = SLANG_FLOATING_POINT_MODE_FAST,
                                               .forceGLSLScalarBufferLayout = true};
@@ -183,14 +183,21 @@ namespace Radiant
                     return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage;
             };
 
-            const u32 elementsNum = spirvCode->getBufferSize() / sizeof(u32);
-            const auto shaderCacheName =
-                std::string(s_ShaderCacheDir) + GetStrippedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK)) + ".spv";
-            std::vector<u32> cache(1 + elementsNum);
+            const auto strippedShaderName =
+                std::string(s_ShaderCacheDir) + GetStrippedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK));
+            const auto shaderNameSpv = strippedShaderName + ".spv";
 
-            cache[0] = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
-            std::memcpy(cache.data() + cache.size() - elementsNum, spirvCode->getBufferPointer(), spirvCode->getBufferSize());
-            CoreUtils::SaveData(shaderCacheName, cache);
+            // Save raw SPIR-V shader cache.
+            const auto elementsNum = spirvCode->getBufferSize() / sizeof(u32);
+            std::vector<u32> cache(elementsNum);
+
+            std::memcpy(cache.data(), spirvCode->getBufferPointer(), spirvCode->getBufferSize());
+            CoreUtils::SaveData(shaderNameSpv, cache);
+
+            // Save last write time used for hot-reloading.
+            const auto lastWriteTime  = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
+            const auto shaderNameMeta = strippedShaderName + ".meta";
+            CoreUtils::SaveData(shaderNameMeta, &lastWriteTime, sizeof(lastWriteTime));
         }
     }
 
@@ -230,30 +237,36 @@ namespace Radiant
                 // Search for the previous slash to isolate the filename.
                 const u64 lastSlashIndex = shaderPath.rfind('/', pos);
                 if (lastSlashIndex != std::string::npos)  // Get filename with .slang
-                    return shaderPath.substr(lastSlashIndex + 1) + "." + shaderStage + ".spv";
+                    return shaderPath.substr(lastSlashIndex + 1) + "." + shaderStage;
                 else  // If no slash is found, return the whole substring including .slang
-                    return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage + ".spv";
+                    return shaderPath.substr(0, pos + suffix.length()) + "." + shaderStage;
             };
 
-            const auto shaderCacheName =
+            const auto strippedShaderName =
                 std::string(s_ShaderCacheDir) + GetCachedShaderNameFunc(m_Description.Path, vk::to_string(shaderStageVK));
-            if (!std::filesystem::exists(shaderCacheName)) continue;
+
+            const auto shaderNameMeta  = strippedShaderName + ".meta";
+            const auto shaderCacheName = strippedShaderName + ".spv";
+            if (!std::filesystem::exists(shaderCacheName) || !std::filesystem::exists(shaderNameMeta)) continue;
 
             const std::vector<u32> cacheData = CoreUtils::LoadData<u32>(shaderCacheName);
             RDNT_ASSERT(!cacheData.empty(), "Failed to load shader cache!");
 
+            const std::vector<u32> metaData = CoreUtils::LoadData<u32>(shaderNameMeta);
+            RDNT_ASSERT(!metaData.empty(), "Failed to load shader metadata!");
+
             // Get the last modified time of the whole slang file!
             const auto lastWriteTime = static_cast<u32>(std::filesystem::last_write_time(m_Description.Path).time_since_epoch().count());
-            if (cacheData[0] != lastWriteTime)
+            if (metaData[0] != lastWriteTime)
             {
                 bEverythingLoaded = false;
                 continue;
             }
 
-            m_ModuleMap.emplace(shaderStageVK, m_Device->GetLogicalDevice()->createShaderModuleUnique(
-                                                   vk::ShaderModuleCreateInfo()
-                                                       .setPCode(cacheData.data() + 1)
-                                                       .setCodeSize((cacheData.size() - 1) * sizeof(cacheData[0]))));
+            m_ModuleMap.emplace(
+                shaderStageVK,
+                m_Device->GetLogicalDevice()->createShaderModuleUnique(
+                    vk::ShaderModuleCreateInfo().setPCode(cacheData.data()).setCodeSize(cacheData.size() * sizeof(cacheData[0]))));
         }
 
         return bEverythingLoaded && !m_ModuleMap.empty();

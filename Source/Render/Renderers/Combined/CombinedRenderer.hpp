@@ -43,11 +43,13 @@ namespace Radiant
         Unique<GfxPipeline> m_BloomDownsamplePipelineCompute{nullptr};
         Unique<GfxPipeline> m_BloomUpsampleBlurPipelineCompute{nullptr};
 
+        Unique<GfxBuffer> m_CubeIndexBuffer{nullptr};
         Unique<GfxPipeline> m_EnvMapSkyboxPipeline{nullptr};
+        Unique<GfxTexture> m_IrradianceCubemapTexture{nullptr};
+        Unique<GfxTexture> m_PrefilteredCubemapTexture{nullptr};
+        Unique<GfxTexture> m_BrdfLutTexture{nullptr};
 
         RenderGraphStatistics m_RenderGraphStats = {};
-        Unique<GfxTexture> m_EnvMapTexture{nullptr};
-
         Unique<Shaders::LightData> m_LightData{MakeUnique<Shaders::LightData>()};
     };
 

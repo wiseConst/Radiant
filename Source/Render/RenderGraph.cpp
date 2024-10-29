@@ -20,24 +20,6 @@ namespace Radiant
 
     namespace RenderGraphUtils
     {
-
-        static void DepthFirstSearch(u32 passID, std::vector<u32>& sortedPassID, const std::vector<std::vector<u32>>& adjacencyLists,
-                                     std::vector<u8>& visitedPasses) noexcept
-        {
-            RDNT_ASSERT(passID < adjacencyLists.size() && passID < visitedPasses.size(), "Invalid passID!");
-
-            visitedPasses[passID] = 1;
-            for (auto otherPassID : adjacencyLists[passID])
-            {
-                RDNT_ASSERT(visitedPasses[otherPassID] != 1, "RenderGraph is not acyclic! Pass[{}] -> Pass[{}]", passID, otherPassID);
-
-                if (visitedPasses[otherPassID] != 2) DepthFirstSearch(otherPassID, sortedPassID, adjacencyLists, visitedPasses);
-            }
-
-            sortedPassID.emplace_back(passID);
-            visitedPasses[passID] = 2;
-        }
-
         // HUGE NOTE:
         // Per-resource barriers should usually be used for queue ownership transfers and image layout transitions,
         // otherwise use global barriers.
@@ -577,11 +559,30 @@ namespace Radiant
     {
         std::vector<u8> visitedPasses(m_Passes.size(), 0);
 
+        // https://stackoverflow.com/questions/78166176/how-can-i-write-a-beautiful-inline-recursive-lambda-in-c
+        const auto DepthFirstSearchFunc = [](this const auto& dfsSelf, u32 passID, std::vector<u32>& sortedPassID,
+                                             const std::vector<std::vector<u32>>& adjacencyLists,
+                                             std::vector<u8>& visitedPasses) noexcept -> void
+        {
+            RDNT_ASSERT(passID < adjacencyLists.size() && passID < visitedPasses.size(), "Invalid passID!");
+
+            visitedPasses[passID] = 1;
+            for (auto otherPassID : adjacencyLists[passID])
+            {
+                RDNT_ASSERT(visitedPasses[otherPassID] != 1, "RenderGraph is not acyclic! Pass[{}] -> Pass[{}]", passID, otherPassID);
+
+                if (visitedPasses[otherPassID] != 2) dfsSelf(otherPassID, sortedPassID, adjacencyLists, visitedPasses);
+            }
+
+            sortedPassID.emplace_back(passID);
+            visitedPasses[passID] = 2;
+        };
+
         m_TopologicallySortedPassesID.reserve(m_Passes.size());
         for (const auto& pass : m_Passes)
         {
             if (visitedPasses[pass->m_ID] != 2)
-                RenderGraphUtils::DepthFirstSearch(pass->m_ID, m_TopologicallySortedPassesID, m_AdjacencyLists, visitedPasses);
+                DepthFirstSearchFunc(pass->m_ID, m_TopologicallySortedPassesID, m_AdjacencyLists, visitedPasses);
         }
 
         std::ranges::reverse(m_TopologicallySortedPassesID);
@@ -890,7 +891,8 @@ namespace Radiant
         };
         std::vector<FillBufferData> fillBufferDatas;
 
-        std::vector<vk::ImageMemoryBarrier2> imageMemoryBarriers;
+        std::vector<vk::ImageMemoryBarrier2>
+            imageMemoryBarriers;  // NOTE: Currently unused since ClearOnExecute defined only for buffers rn.
         std::vector<vk::BufferMemoryBarrier2> bufferMemoryBarriers;
         UnorderedSet<vk::MemoryBarrier2> memoryBarriers;
 
@@ -1258,7 +1260,7 @@ namespace Radiant
                         const auto& currentMemoryBucket = rma.m_MemoryBuckets[memoryBucketIndex];
                         u64 totalMemoryUsage{0};
                         for (const auto& resource : currentMemoryBucket.AlreadyAliasedResources)
-                            totalMemoryUsage += resource.MemoryRequirements.size;
+                            totalMemoryUsage += resource.ResourceInfo.MemoryRequirements.size;
 
                         const float memoryReduction =
                             (totalMemoryUsage - currentMemoryBucket.MemoryRequirements.size) / static_cast<f32>(totalMemoryUsage) * 100.0f;
@@ -1272,8 +1274,8 @@ namespace Radiant
                             for (const auto& resource : currentMemoryBucket.AlreadyAliasedResources)
                             {
                                 ImGui::Text("Resource[ %s ], ResourceID[ %llu ], Offset[ %0.3f ] MB, Size[ %0.3f ] MB.",
-                                            resource.DebugName.data(), resource.ResourceID, resource.Offset / 1024.f / 1024.f,
-                                            resource.MemoryRequirements.size / 1024.f / 1024.f);
+                                            resource.ResourceInfo.DebugName.data(), resource.ResourceID, resource.Offset / 1024.f / 1024.f,
+                                            resource.ResourceInfo.MemoryRequirements.size / 1024.f / 1024.f);
                             }
 
                             ImGui::TreePop();
@@ -1395,8 +1397,9 @@ namespace Radiant
                 for (const auto& aliasedResource : bucket.AlreadyAliasedResources)
                 {
                     if (m_ResourceInfoMap.contains(aliasedResource.ResourceID) &&
-                        aliasedResource.MemoryPropertyFlags == m_ResourceInfoMap[aliasedResource.ResourceID].MemoryPropertyFlags &&
-                        aliasedResource.MemoryRequirements == m_ResourceInfoMap[aliasedResource.ResourceID].MemoryRequirements)
+                        aliasedResource.ResourceInfo.MemoryPropertyFlags ==
+                            m_ResourceInfoMap[aliasedResource.ResourceID].MemoryPropertyFlags &&
+                        aliasedResource.ResourceInfo.MemoryRequirements == m_ResourceInfoMap[aliasedResource.ResourceID].MemoryRequirements)
                         continue;
 
                     bNeedMemoryDefragmentation = true;
@@ -1405,24 +1408,103 @@ namespace Radiant
 
                 if (bNeedMemoryDefragmentation) break;
             }
-            bNeedMemoryDefragmentation = bNeedMemoryDefragmentation || (resourcesInBuckets != m_ResourceInfoMap.size());
+            bNeedMemoryDefragmentation |= (resourcesInBuckets != m_ResourceInfoMap.size());
         }
         if (!bNeedMemoryDefragmentation && m_ResourcesNeededMemoryRebind.empty()) return;
         CleanMemoryBuckets();
         RDNT_ASSERT(!m_ResourceInfoMap.empty(), "Resource Info Map is invalid!");
 
-        struct RenderGraphResourceUnaliased
+        auto unaliasedResourcesList = GetUnaliasedResourcesList(bNeedMemoryDefragmentation);
+        while (!unaliasedResourcesList.empty())
         {
-            RGResourceHandleVariant ResourceHandle{};
-            RGResourceID ResourceID{};
-            std::string DebugName{s_DEFAULT_STRING};
-            vk::MemoryRequirements MemoryRequirements{};
-            vk::MemoryPropertyFlags MemoryPropertyFlags{};
-        };
+            bool bResourceAssigned    = false;
+            auto resourceToBeAssigned = std::move(unaliasedResourcesList.back());
+            unaliasedResourcesList.pop_back();
 
-        // NOTE: Firstly invalidate resources cuz their allocation might be deleted, thne populate resources,
-        // sort them in ascending order and start aliasing from the highest memory usage resource.
-        std::vector<RenderGraphResourceUnaliased> unaliasedResources;
+            for (auto& memoryBucket : m_MemoryBuckets)
+            {
+                // NOTES:
+                // 1) First row's resource in bucket fully occupies it!
+                // 2) Memory type should be the same!
+                const auto& firstRowResourceInBucket = memoryBucket.AlreadyAliasedResources.front();
+                if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[firstRowResourceInBucket.ResourceID],
+                                                  m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]) ||
+                    resourceToBeAssigned.ResourceInfo.MemoryPropertyFlags != firstRowResourceInBucket.ResourceInfo.MemoryPropertyFlags)
+                    continue;
+
+                // Build non-aliasable memory offsets for every resource each time we wanna emplace new resource.
+                auto nonAliasableMemoryOffsets = BuildNonAliasableMemoryOffsetList(memoryBucket, resourceToBeAssigned);
+
+                // Find best memory region to fit current resource.
+                const auto foundMemoryRegion = FindBestMemoryRegion(nonAliasableMemoryOffsets, memoryBucket, resourceToBeAssigned);
+                if (foundMemoryRegion.has_value())
+                {
+                    memoryBucket.AlreadyAliasedResources.emplace_back(std::move(resourceToBeAssigned.ResourceInfo),
+                                                                      resourceToBeAssigned.ResourceID, (*foundMemoryRegion).Offset);
+
+                    bResourceAssigned = true;
+                    break;
+                }
+            }
+
+            if (!bResourceAssigned)
+            {
+                auto& bucket = m_MemoryBuckets.emplace_back();
+                bucket.AlreadyAliasedResources.emplace_back(resourceToBeAssigned.ResourceInfo, resourceToBeAssigned.ResourceID, 0);
+            }
+        }
+
+        // Actual resource binding to memory bucket allocation.
+        // Firstly determine memory requirements, then allocate memory and bind.
+        for (auto& memoryBucket : m_MemoryBuckets)
+        {
+            RDNT_ASSERT(!memoryBucket.AlreadyAliasedResources.empty(), "MemoryBucket is invalid!");
+
+            // NOTE: First row's resource in bucket fully occupies it!
+            const auto& firstRowResourceInBucket = memoryBucket.AlreadyAliasedResources.front();
+
+            // 1. Gather memory requirements.
+            memoryBucket.MemoryRequirements  = firstRowResourceInBucket.ResourceInfo.MemoryRequirements;
+            memoryBucket.MemoryPropertyFlags = firstRowResourceInBucket.ResourceInfo.MemoryPropertyFlags;
+            for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
+            {
+                memoryBucket.MemoryRequirements.alignment =
+                    std::max(memoryBucket.MemoryRequirements.alignment, aliasedResource.ResourceInfo.MemoryRequirements.alignment);
+                memoryBucket.MemoryRequirements.memoryTypeBits &= aliasedResource.ResourceInfo.MemoryRequirements.memoryTypeBits;
+                memoryBucket.MemoryPropertyFlags |= aliasedResource.ResourceInfo.MemoryPropertyFlags;
+            }
+            RDNT_ASSERT(memoryBucket.MemoryRequirements.memoryTypeBits != 0,
+                        "Invalid memory type bits! Failed to determine memoryType for memory bucket!");
+
+            // 2. Bind resource to memory.
+            m_ResourcePoolPtr->m_Device->AllocateMemory(memoryBucket.Allocation, memoryBucket.MemoryRequirements,
+                                                        memoryBucket.MemoryPropertyFlags);
+            for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
+            {
+                if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&aliasedResource.ResourceInfo.ResourceHandle))
+                {
+                    auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
+                    m_ResourcePoolPtr->m_Device->BindTexture(*gfxTextureHandle, memoryBucket.Allocation, aliasedResource.Offset);
+                    gfxTextureHandle->RG_Finalize();
+                }
+
+                if (auto* rgBufferHandle = std::get_if<RGBufferHandle>(&aliasedResource.ResourceInfo.ResourceHandle))
+                {
+                    auto& gfxBufferHandle = m_ResourcePoolPtr->GetBuffer(*rgBufferHandle)->Get();
+                    m_ResourcePoolPtr->m_Device->BindBuffer(*gfxBufferHandle, memoryBucket.Allocation, aliasedResource.Offset);
+                    gfxBufferHandle->RG_Finalize(memoryBucket.Allocation);
+                }
+            }
+        }
+    }
+
+    NODISCARD std::vector<RenderGraphResourcePool::ResourceMemoryAliaser::RenderGraphResourceUnaliased> RenderGraphResourcePool::
+        ResourceMemoryAliaser::GetUnaliasedResourcesList(const bool bNeedMemoryDefragmentation) noexcept
+    {
+        std::vector<RenderGraphResourcePool::ResourceMemoryAliaser::RenderGraphResourceUnaliased> unaliasedResourcesList{};
+
+        // NOTE: Firstly invalidate resources because their allocation might be deleted, then populate resources,
+        // sort them in ASC order and start aliasing from the highest memory usage resource.
         for (const auto& [resourceID, resourceInfo] : m_ResourceInfoMap)
         {
             auto memoryRequirements = resourceInfo.MemoryRequirements;
@@ -1442,139 +1524,76 @@ namespace Radiant
                 }
             }
 
-            unaliasedResources.emplace_back(resourceInfo.ResourceHandle, resourceID, resourceInfo.DebugName, memoryRequirements,
-                                            resourceInfo.MemoryPropertyFlags);
+            auto& unaliasedResource                           = unaliasedResourcesList.emplace_back(resourceInfo, resourceID);
+            unaliasedResource.ResourceInfo.MemoryRequirements = memoryRequirements;
         }
-        std::sort(std::execution::par, unaliasedResources.begin(), unaliasedResources.end(),
-                  [](const auto& lhs, const auto& rhs) { return lhs.MemoryRequirements.size < rhs.MemoryRequirements.size; });
-        m_ResourcesNeededMemoryRebind.clear();
+        std::sort(std::execution::par, unaliasedResourcesList.begin(), unaliasedResourcesList.end(),
+                  [](const auto& lhs, const auto& rhs) noexcept
+                  { return lhs.ResourceInfo.MemoryRequirements.size < rhs.ResourceInfo.MemoryRequirements.size; });
 
-        while (!unaliasedResources.empty())
+        return unaliasedResourcesList;
+    }
+
+    NODISCARD std::optional<RenderGraphResourcePool::ResourceMemoryAliaser::MemoryRegion> RenderGraphResourcePool::ResourceMemoryAliaser::
+        FindBestMemoryRegion(const std::vector<MemoryOffset>& nonAliasableMemoryOffsetList, const RenderGraphResourceBucket& memoryBucket,
+                             const RenderGraphResourceUnaliased& resourceToBeAssigned) noexcept
+    {
+        std::optional<RenderGraphResourcePool::ResourceMemoryAliaser::MemoryRegion> bestMemoryRegion{std::nullopt};
+        const auto& firstRowResourceInBucket = memoryBucket.AlreadyAliasedResources.front();
+
+        i64 overlapCounter{0};
+        for (u64 i{}; i < nonAliasableMemoryOffsetList.size() - 1; ++i)
         {
-            bool bResourceAssigned    = false;
-            auto resourceToBeAssigned = std::move(unaliasedResources.back());
-            unaliasedResources.pop_back();
+            const auto& [currentOffset, currentType] = nonAliasableMemoryOffsetList[i];
+            const auto& [nextOffset, nextType]       = nonAliasableMemoryOffsetList[i + 1];
+            overlapCounter = std::max(overlapCounter + (currentType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_START ? 1 : -1), 0ll);
 
-            for (auto& memoryBucket : m_MemoryBuckets)
-            {
-                // NOTES:
-                // 1) First row's resource in bucket fully occupies it!
-                // 2) Memory type should be the same!
-                if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[memoryBucket.AlreadyAliasedResources.front().ResourceID],
-                                                  m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]) ||
-                    resourceToBeAssigned.MemoryPropertyFlags != memoryBucket.AlreadyAliasedResources.front().MemoryPropertyFlags)
-                    continue;
+            const bool bReachedAliasableRegion = overlapCounter == 0 && currentType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_END &&
+                                                 nextType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_START;
 
-                enum class EMemoryOffsetType : u8
-                {
-                    MEMORY_OFFSET_TYPE_START,
-                    MEMORY_OFFSET_TYPE_END
-                };
-                using MemoryOffset                                  = std::pair<uint64_t, EMemoryOffsetType>;
-                std::vector<MemoryOffset> nonAliasableMemoryOffsets = {{0, EMemoryOffsetType::MEMORY_OFFSET_TYPE_END}};
+            const u64 alignedOffset = Math::AlignUp(
+                currentOffset, resourceToBeAssigned.ResourceInfo.MemoryRequirements.alignment);  // vkBind*Memory requires aligned location
+            const u64 memoryRegionSize    = nextOffset - alignedOffset;
+            const bool bMemoryRegionValid = memoryRegionSize > 0;
 
-                // Build nonaliasable memory offsets for every resource each time we wanna emplace new resource.
-                for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
-                {
-                    if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[aliasedResource.ResourceID],
-                                                      m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]))
-                    {
-                        const u64 byteOffsetStart = aliasedResource.Offset;
-                        const u64 byteOffsetEnd   = byteOffsetStart + aliasedResource.MemoryRequirements.size;
+            const bool bCanFitInsideAllocation = (alignedOffset + resourceToBeAssigned.ResourceInfo.MemoryRequirements.size) <=
+                                                 firstRowResourceInBucket.ResourceInfo.MemoryRequirements.size;
+            const bool bCanFitInsideMemoryRegion = resourceToBeAssigned.ResourceInfo.MemoryRequirements.size < memoryRegionSize;
+            if (!bMemoryRegionValid || !bCanFitInsideMemoryRegion || !bCanFitInsideAllocation || !bReachedAliasableRegion) continue;
 
-                        nonAliasableMemoryOffsets.emplace_back(byteOffsetStart, EMemoryOffsetType::MEMORY_OFFSET_TYPE_START);
-                        nonAliasableMemoryOffsets.emplace_back(byteOffsetEnd, EMemoryOffsetType::MEMORY_OFFSET_TYPE_END);
-                    }
-                }
-                nonAliasableMemoryOffsets.emplace_back(memoryBucket.AlreadyAliasedResources.front().MemoryRequirements.size,
-                                                       EMemoryOffsetType::MEMORY_OFFSET_TYPE_START);
-
-                std::sort(std::execution::par, nonAliasableMemoryOffsets.begin(), nonAliasableMemoryOffsets.end(),
-                          [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
-
-                std::optional<std::pair</* OffsetBytes */ u64, /* SizeBytes */ u64>> foundMemoryRegion{std::nullopt};
-                i64 overlapCounter{0};
-                for (u64 i{}; i < nonAliasableMemoryOffsets.size() - 1; ++i)
-                {
-                    const auto& [currentOffset, currentType] = nonAliasableMemoryOffsets[i];
-                    const auto& [nextOffset, nextType]       = nonAliasableMemoryOffsets[i + 1];
-                    overlapCounter = std::max(overlapCounter + (currentType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_START ? 1 : -1), 0ll);
-
-                    const bool bReachedAliasableRegion = overlapCounter == 0 && currentType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_END &&
-                                                         nextType == EMemoryOffsetType::MEMORY_OFFSET_TYPE_START;
-
-                    const u64 alignedOffset = Math::AlignUp(
-                        currentOffset, resourceToBeAssigned.MemoryRequirements.alignment);  // vkBind*Memory requires aligned location
-                    const u64 memoryRegionSize = nextOffset - alignedOffset;
-                    const bool bRegionValid    = memoryRegionSize > 0;
-
-                    const bool bCanFitInsideAllocation = alignedOffset + resourceToBeAssigned.MemoryRequirements.size <=
-                                                         memoryBucket.AlreadyAliasedResources.front().MemoryRequirements.size;
-                    if (!bRegionValid || !bReachedAliasableRegion || !bCanFitInsideAllocation) continue;
-
-                    if (!foundMemoryRegion.has_value() ||
-                        memoryRegionSize <= (*foundMemoryRegion).second && resourceToBeAssigned.MemoryRequirements.size < memoryRegionSize)
-                        foundMemoryRegion = {alignedOffset, memoryRegionSize};
-                }
-
-                if (foundMemoryRegion.has_value())
-                {
-                    memoryBucket.AlreadyAliasedResources.emplace_back(
-                        resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ResourceID, (*foundMemoryRegion).first,
-                        resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements, resourceToBeAssigned.MemoryPropertyFlags);
-                    bResourceAssigned = true;
-
-                    break;
-                }
-            }
-
-            if (!bResourceAssigned)
-            {
-                auto& bucket = m_MemoryBuckets.emplace_back();
-                bucket.AlreadyAliasedResources.emplace_back(resourceToBeAssigned.ResourceHandle, resourceToBeAssigned.ResourceID, 0,
-                                                            resourceToBeAssigned.DebugName, resourceToBeAssigned.MemoryRequirements,
-                                                            resourceToBeAssigned.MemoryPropertyFlags);
-            }
+            if (!bestMemoryRegion.has_value() || memoryRegionSize <= (*bestMemoryRegion).Size)
+                bestMemoryRegion = {alignedOffset, memoryRegionSize};
         }
 
-        // 1. Gather memory requirements.
-        // 2. Bind resource to memory.
-        for (auto& memoryBucket : m_MemoryBuckets)
+        return bestMemoryRegion;
+    }
+
+    NODISCARD std::vector<RenderGraphResourcePool::ResourceMemoryAliaser::MemoryOffset> RenderGraphResourcePool::ResourceMemoryAliaser::
+        BuildNonAliasableMemoryOffsetList(const RenderGraphResourceBucket& memoryBucket,
+                                          const RenderGraphResourceUnaliased& resourceToBeAssigned) noexcept
+    {
+        std::vector<RenderGraphResourcePool::ResourceMemoryAliaser::MemoryOffset> nonAliasableMemoryOffsets{
+            {0, EMemoryOffsetType::MEMORY_OFFSET_TYPE_END}};
+
+        const auto& firstRowResourceInBucket = memoryBucket.AlreadyAliasedResources.front();
+        for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
         {
-            RDNT_ASSERT(!memoryBucket.AlreadyAliasedResources.empty(), "MemoryBucket is invalid!");
-            // NOTE: First row's resource in bucket fully occupies it!
-            memoryBucket.MemoryRequirements  = memoryBucket.AlreadyAliasedResources.front().MemoryRequirements;
-            memoryBucket.MemoryPropertyFlags = memoryBucket.AlreadyAliasedResources.front().MemoryPropertyFlags;
-
-            for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
+            if (DoEffectiveLifetimesIntersect(m_ResourceLifetimeMap[aliasedResource.ResourceID],
+                                              m_ResourceLifetimeMap[resourceToBeAssigned.ResourceID]))
             {
-                memoryBucket.MemoryRequirements.alignment =
-                    std::max(memoryBucket.MemoryRequirements.alignment, aliasedResource.MemoryRequirements.alignment);
-                memoryBucket.MemoryRequirements.memoryTypeBits &= aliasedResource.MemoryRequirements.memoryTypeBits;
-                memoryBucket.MemoryPropertyFlags |= aliasedResource.MemoryPropertyFlags;
-            }
-            RDNT_ASSERT(memoryBucket.MemoryRequirements.memoryTypeBits != 0,
-                        "Invalid memory type bits! Failed to determine memoryType for memory bucket!");
+                const u64 byteOffsetStart = aliasedResource.Offset;
+                const u64 byteOffsetEnd   = byteOffsetStart + aliasedResource.ResourceInfo.MemoryRequirements.size;
 
-            m_ResourcePoolPtr->m_Device->AllocateMemory(memoryBucket.Allocation, memoryBucket.MemoryRequirements,
-                                                        memoryBucket.MemoryPropertyFlags);
-            for (const auto& aliasedResource : memoryBucket.AlreadyAliasedResources)
-            {
-                if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&aliasedResource.ResourceHandle))
-                {
-                    auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
-                    m_ResourcePoolPtr->m_Device->BindTexture(*gfxTextureHandle, memoryBucket.Allocation, aliasedResource.Offset);
-                    gfxTextureHandle->RG_Finalize();
-                }
-
-                if (auto* rgBufferHandle = std::get_if<RGBufferHandle>(&aliasedResource.ResourceHandle))
-                {
-                    auto& gfxBufferHandle = m_ResourcePoolPtr->GetBuffer(*rgBufferHandle)->Get();
-                    m_ResourcePoolPtr->m_Device->BindBuffer(*gfxBufferHandle, memoryBucket.Allocation, aliasedResource.Offset);
-                    gfxBufferHandle->RG_Finalize(memoryBucket.Allocation);
-                }
+                nonAliasableMemoryOffsets.emplace_back(byteOffsetStart, EMemoryOffsetType::MEMORY_OFFSET_TYPE_START);
+                nonAliasableMemoryOffsets.emplace_back(byteOffsetEnd, EMemoryOffsetType::MEMORY_OFFSET_TYPE_END);
             }
         }
+        nonAliasableMemoryOffsets.emplace_back(firstRowResourceInBucket.ResourceInfo.MemoryRequirements.size,
+                                               EMemoryOffsetType::MEMORY_OFFSET_TYPE_START);
+
+        std::sort(std::execution::par, nonAliasableMemoryOffsets.begin(), nonAliasableMemoryOffsets.end(),
+                  [](const auto& lhs, const auto& rhs) noexcept { return lhs.first < rhs.first; });
+        return nonAliasableMemoryOffsets;
     }
 
 }  // namespace Radiant

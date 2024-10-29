@@ -23,13 +23,13 @@ float glm_radians(float degrees)
     return degrees * 0.01745329251994329576923690768489;
 }
 
+// Everything below is reversed, cuz of slang's Row-Col access.
+
 float4x4 glm_perspective(const float fovy, const float aspect, const float zNear, const float zFar)
 {
     const float tanHalfFovy = tan(fovy * 0.5f);
-    float4x4 Result = float4x4(1);
 
-    // Everything below is reversed, cuz of slang's Row-Col access.
-
+    float4x4 Result = float4x4(0.0f);
     Result[0][0] = 1.0f / (aspect * tanHalfFovy);
     Result[1][1] = 1.0f / (tanHalfFovy);
     Result[2][2] = zFar / (zNear - zFar);
@@ -40,29 +40,29 @@ float4x4 glm_perspective(const float fovy, const float aspect, const float zNear
 
 float4x4 glm_inverse(const float4x4 m)
 {
-    const float Coef00 = m[2][2] * m[3][3] - m[3][2] * m[2][3];
-    const float Coef02 = m[1][2] * m[3][3] - m[3][2] * m[1][3];
-    const float Coef03 = m[1][2] * m[2][3] - m[2][2] * m[1][3];
+    const float Coef00 = m[2][2] * m[3][3] - m[2][3] * m[3][2];
+    const float Coef02 = m[2][1] * m[3][3] - m[2][3] * m[3][1];
+    const float Coef03 = m[2][1] * m[3][2] - m[2][2] * m[3][1];
 
-   const float Coef04 = m[2][1] * m[3][3] - m[3][1] * m[2][3];
-   const float Coef06 = m[1][1] * m[3][3] - m[3][1] * m[1][3];
-   const float Coef07 = m[1][1] * m[2][3] - m[2][1] * m[1][3];
+    const float Coef04 = m[1][2] * m[3][3] - m[1][3] * m[3][2];
+    const float Coef06 = m[1][1] * m[3][3] - m[1][3] * m[3][1];
+    const float Coef07 = m[1][1] * m[3][2] - m[1][2] * m[3][1];
 
-    const float Coef08 = m[2][1] * m[3][2] - m[3][1] * m[2][2];
-    const float Coef10 = m[1][1] * m[3][2] - m[3][1] * m[1][2];
-    const float Coef11 = m[1][1] * m[2][2] - m[2][1] * m[1][2];
+    const float Coef08 = m[1][2] * m[2][3] - m[1][3] * m[2][2];
+    const float Coef10 = m[1][1] * m[2][3] - m[1][3] * m[2][1];
+    const float Coef11 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
 
-    const float Coef12 = m[2][0] * m[3][3] - m[3][0] * m[2][3];
-    const float Coef14 = m[1][0] * m[3][3] - m[3][0] * m[1][3];
-    const float Coef15 = m[1][0] * m[2][3] - m[2][0] * m[1][3];
+    const float Coef12 = m[0][2] * m[3][3] - m[0][3] * m[3][2];
+    const float Coef14 = m[0][1] * m[3][3] - m[0][3] * m[3][1];
+    const float Coef15 = m[0][1] * m[3][2] - m[0][2] * m[3][1];
 
-   const float Coef16 = m[2][0] * m[3][2] - m[3][0] * m[2][2];
-   const float Coef18 = m[1][0] * m[3][2] - m[3][0] * m[1][2];
-   const float Coef19 = m[1][0] * m[2][2] - m[2][0] * m[1][2];
+    const float Coef16 = m[0][2] * m[2][3] - m[0][3] * m[2][2];
+    const float Coef18 = m[0][1] * m[2][3] - m[0][3] * m[2][1];
+    const float Coef19 = m[0][1] * m[2][2] - m[0][2] * m[2][1];
 
-    const float Coef20 = m[2][0] * m[3][1] - m[3][0] * m[2][1];
-    const float Coef22 = m[1][0] * m[3][1] - m[3][0] * m[1][1];
-    const float Coef23 = m[1][0] * m[2][1] - m[2][0] * m[1][1];
+    const float Coef20 = m[0][2] * m[1][3] - m[0][3] * m[1][2];
+    const float Coef22 = m[0][1] * m[1][3] - m[0][3] * m[1][1];
+    const float Coef23 = m[0][1] * m[1][2] - m[0][2] * m[1][1];
 
     const float4 Fac0 = float4(Coef00, Coef00, Coef02, Coef03);
     const float4 Fac1 = float4(Coef04, Coef04, Coef06, Coef07);
@@ -71,27 +71,26 @@ float4x4 glm_inverse(const float4x4 m)
     const float4 Fac4 = float4(Coef16, Coef16, Coef18, Coef19);
     const float4 Fac5 = float4(Coef20, Coef20, Coef22, Coef23);
 
-    const float4 Vec0 = float4(m[1][0], m[0][0], m[0][0], m[0][0]);
-    const float4 Vec1 = float4(m[1][1], m[0][1], m[0][1], m[0][1]);
-    const float4 Vec2 = float4(m[1][2], m[0][2], m[0][2], m[0][2]);
-    const float4 Vec3 = float4(m[1][3], m[0][3], m[0][3], m[0][3]);
+    const float4 Vec0 = float4(m[0][1], m[0][0], m[0][0], m[0][0]);
+    const float4 Vec1 = float4(m[1][1], m[1][0], m[1][0], m[1][0]);
+    const float4 Vec2 = float4(m[2][1], m[2][0], m[2][0], m[2][0]);
+    const float4 Vec3 = float4(m[3][1], m[3][0], m[3][0], m[3][0]);
 
     const float4 Inv0 = float4(Vec1 * Fac0 - Vec2 * Fac1 + Vec3 * Fac2);
     const float4 Inv1 = float4(Vec0 * Fac0 - Vec2 * Fac3 + Vec3 * Fac4);
     const float4 Inv2 = float4(Vec0 * Fac1 - Vec1 * Fac3 + Vec3 * Fac5);
     const float4 Inv3 = float4(Vec0 * Fac2 - Vec1 * Fac4 + Vec2 * Fac5);
 
-   const float4 SignA = float4(+1, -1, +1, -1);
-   const float4 SignB = float4(-1, +1, -1, +1);
-
-   // Everything below is reversed, cuz of slang's Row-Col access.
-   float4x4 Inverse = transpose(float4x4(Inv0 * SignA, Inv1 * SignB, Inv2 * SignA, Inv3 * SignB));
-
-   const float4 Row0 = float4(Inverse[0][0], Inverse[1][0], Inverse[2][0], Inverse[3][0]);
+    const float4 SignA = float4(+1, -1, +1, -1);
+    const float4 SignB = float4(-1, +1, -1, +1);
+    const float4x4 Inverse = transpose(float4x4(Inv0 * SignA, Inv1 * SignB, Inv2 * SignA, Inv3 * SignB));
+    // transpose and change indices?
+    const float4 Row0 = float4(Inverse[0][0], Inverse[0][1], Inverse[0][2], Inverse[0][3]);
 
     const float4 Dot0 = float4(m[0] * Row0);
     const float Dot1 = (Dot0.x + Dot0.y) + (Dot0.z + Dot0.w);
 
+    // rcp?
     const float OneOverDeterminant = 1.0f / Dot1;
 
     return Inverse * OneOverDeterminant;
@@ -99,15 +98,13 @@ float4x4 glm_inverse(const float4x4 m)
 
 float4x4 glm_lookAt(const float3 eye, const float3 center, const float3 up)
 {
-    const float3 f = float3(normalize(center - eye));
-    const float3 s = float3(normalize(cross(f, up)));
-    const float3 u = float3(cross(s, f));
-
-    // Everything below is reversed, cuz of slang's Row-Col access.
+     const float3 f = float3(normalize(center - eye));
+     const float3 s = float3(normalize(cross(f, up)));
+     const float3 u = float3(cross(s, f));
 
     float4x4 Result = float4x4(1);
     Result[0][0] = s.x;
-    Result[0][1] = s.y;
+    Result[1][0] = s.y;
     Result[0][2] = s.z;
     Result[1][0] = u.x;
     Result[1][1] = u.y;
@@ -123,9 +120,7 @@ float4x4 glm_lookAt(const float3 eye, const float3 center, const float3 up)
 
 float4x4 glm_ortho(const float left, const float right, const float bottom, const float top, const float zNear, const float zFar)
 {
-    float4x4 Result = float4x4(1);
-    // Everything below is reversed, cuz of slang's Row-Col access.
-
+    float4x4 Result = float4x4(1.0f);
     Result[0][0] = 2.0f / (right - left);
     Result[1][1] = 2.0f / (top - bottom);
     Result[2][2] = -1.0f / (zFar - zNear);
@@ -143,7 +138,7 @@ void computeMain()
     const float zNear = asfloat(u_PC.DepthBounds.MinMaxZ.x);//u_PC.CameraData.zNearFar.y;
     const float zFar = asfloat(u_PC.DepthBounds.MinMaxZ.y);  // u_PC.CameraData.zNearFar.x;
 
-    printf("zNear: %0.3f, zFar: %0.3f", zNear, zFar);
+    printf("zNear: %f, zFar: %f", zNear, zFar);
 
     const float aspectRatio = u_PC.CameraData.FullResolution.x / u_PC.CameraData.FullResolution.y;
     const float4x4 projMain = glm_perspective(glm_radians(u_PC.CameraData.Zoom), aspectRatio, zNear, zFar);

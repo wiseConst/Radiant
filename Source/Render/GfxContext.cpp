@@ -189,7 +189,7 @@ namespace Radiant
                 *currentFrameData.TimestampsQueryPool, 0, currentFrameData.CurrentTimestampIndex,
                 sizeof(u64) * currentFrameData.TimestampsCapacity, sizeof(u64),
                 vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
-            RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to getQueryPoolResults()!")
+            RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to getQueryPoolResults()!");
 
             currentFrameData.TimestampResults = std::move(data);
             m_Device->GetLogicalDevice()->resetQueryPool(*currentFrameData.TimestampsQueryPool, 0, currentFrameData.TimestampsCapacity);

@@ -28,8 +28,11 @@ namespace Radiant
 #define AABB_GENERATOR_USE_AVX2 1
 #if _MSC_VER && AABB_GENERATOR_USE_AVX2
             size_t i       = 0;
-            __m256 minVecX = _mm256_set1_ps(FLT_MAX), minVecY = _mm256_set1_ps(FLT_MAX), minVecZ = _mm256_set1_ps(FLT_MAX);
-            __m256 maxVecX = _mm256_set1_ps(FLT_MIN), maxVecY = _mm256_set1_ps(FLT_MIN), maxVecZ = _mm256_set1_ps(FLT_MIN);
+            __m256 minVecX = _mm256_set1_ps(std::numeric_limits<f32>::max()), minVecY = _mm256_set1_ps(std::numeric_limits<f32>::max()),
+                   minVecZ = _mm256_set1_ps(std::numeric_limits<f32>::max());
+            __m256 maxVecX = _mm256_set1_ps(std::numeric_limits<f32>::lowest()),
+                   maxVecY = _mm256_set1_ps(std::numeric_limits<f32>::lowest()),
+                   maxVecZ = _mm256_set1_ps(std::numeric_limits<f32>::lowest());
 
             const size_t alignedDataSize = (positions.size() & ~7);
             for (i = 0; i < alignedDataSize; i += 8)
@@ -81,8 +84,8 @@ namespace Radiant
                 max = glm::max(positions[i].Position, max);
             }
 #else
-            min = glm::vec3(FLT_MAX);
-            max = glm::vec3(FLT_MIN);
+            min = glm::vec3(std::numeric_limits<f32>::max());
+            max = glm::vec3(std::numeric_limits<f32>::lowest());
             for (const auto& point : points)
             {
                 min = glm::min(point.Position, min);
@@ -132,10 +135,10 @@ namespace Radiant
 
         template <typename T>
         static constexpr void RemapVertexStream(const u64 uniqueVertexCount, std::vector<T>& vertexStream,
-                                                const std::vector<u32>& rempaTable) noexcept
+                                                const std::vector<u32>& remapTable) noexcept
         {
             std::vector<T> newVertexStream(uniqueVertexCount);
-            meshopt_remapVertexBuffer(newVertexStream.data(), vertexStream.data(), vertexStream.size(), sizeof(T), rempaTable.data());
+            meshopt_remapVertexBuffer(newVertexStream.data(), vertexStream.data(), vertexStream.size(), sizeof(T), remapTable.data());
             vertexStream = std::move(newVertexStream);
         }
 
@@ -259,7 +262,7 @@ namespace Radiant
             Shared<GfxTexture> loadedTexture{nullptr};
             std::visit(
                 fastgltf::visitor{
-                    [](auto& arg) { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!") },
+                    [](auto& arg) { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!"); },
                     [&](const fastgltf::sources::URI& filePath)
                     {
                         RDNT_ASSERT(filePath.fileByteOffset == 0, "fastgltf: We don't support offsets with stbi!");
@@ -307,7 +310,7 @@ namespace Radiant
                                 gfxContext->GetDevice(),
                                 GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1), format,
                                                       vk::ImageUsageFlagBits::eTransferDst, samplerCI, 1, vk::SampleCountFlagBits::e1,
-                                                      c_bGenerateMipMaps ? EResourceCreateBits::RESOURCE_CREATE_GENERATE_MIPS_BIT : 0));
+                                                      c_bGenerateMipMaps ? EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT : 0));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }
@@ -492,9 +495,9 @@ namespace Radiant
             UnorderedSet<u64> queuedTextures;
             for (const auto& material : asset->materials)
             {
-                constexpr auto albedoEmissiveFormat           = vk::Format::eBc7UnormBlock;
-                constexpr auto occlusionNormalRoughnessFormat = vk::Format::eBc4UnormBlock;
-                constexpr auto normalMapFormat                = vk::Format::eBc5UnormBlock;
+                constexpr auto albedoEmissiveFormat = vk::Format::eBc7UnormBlock;
+                constexpr auto occlusionFormat      = vk::Format::eBc4UnormBlock;
+                constexpr auto normalMapFormat      = vk::Format::eBc5UnormBlock;
 
                 const auto pushTextureFunc = [&](const auto& texture, const auto format) noexcept
                 {
@@ -511,7 +514,7 @@ namespace Radiant
                         std::visit(
                             fastgltf::visitor{
                                 [](const auto& arg)
-                                { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!") },
+                                { RDNT_ASSERT(false, "fastgltf: Default argument when loading image! This shouldn't happen!"); },
                                 [&](const fastgltf::sources::URI& filePath)
                                 {
                                     RDNT_ASSERT(filePath.fileByteOffset == 0, "fastgltf: We don't support offsets with stbi!");
@@ -548,7 +551,7 @@ namespace Radiant
                 if (material.occlusionTexture.has_value())
                 {
                     const auto textureIndex = material.occlusionTexture->textureIndex;
-                    pushTextureFunc(asset->textures[textureIndex], occlusionNormalRoughnessFormat);
+                    pushTextureFunc(asset->textures[textureIndex], occlusionFormat);
                 }
 
                 // NOTE: For now metallic/roughness stored in BC1.
@@ -685,9 +688,10 @@ namespace Radiant
                             "fastgltf: A mesh primitive is required to hold the POSITION attribute.");
 
                 vertexPositionsPerPrimitive.clear();
-                currentMeshAsset->Surfaces.emplace_back(
-                    static_cast<u32>(indicesUint32.size()), static_cast<u32>(asset->accessors[*primitive.indicesAccessor].count), Sphere{},
-                    primitive.materialIndex.value_or(0), FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitive.type));
+                currentMeshAsset->Surfaces.emplace_back(static_cast<u32>(indicesUint32.size()),
+                                                        static_cast<u32>(asset->accessors[*primitive.indicesAccessor].count), Sphere{},
+                                                        static_cast<u32>(primitive.materialIndex.value_or(0)),
+                                                        FastGltfUtils::ConvertPrimitiveTypeToVulkanPrimitiveTopology(primitive.type));
 
                 if (primitive.materialIndex.has_value())
                 {
@@ -715,8 +719,8 @@ namespace Radiant
                                                    });
 
                     // NOTE: Check if index > u16/u8::max() and then switch to index type u32/u16.
-                    const u32 maxIdx            = *std::max_element(indicesUint32.cbegin(), indicesUint32.cend());
-                    currentMeshAsset->IndexType = vk::IndexType::eUint8EXT;
+                    const u32 maxIdx = *std::max_element(indicesUint32.cbegin(), indicesUint32.cend());
+                    if (currentMeshAsset->IndexType == vk::IndexType::eNoneKHR) currentMeshAsset->IndexType = vk::IndexType::eUint8EXT;
 
                     if (maxIdx >= std::numeric_limits<u8>::max()) currentMeshAsset->IndexType = vk::IndexType::eUint16;
                     if (maxIdx >= std::numeric_limits<u16>::max()) currentMeshAsset->IndexType = vk::IndexType::eUint32;
@@ -893,7 +897,7 @@ namespace Radiant
             std::visit(fastgltf::visitor{[](auto& arg) {
                                              RDNT_ASSERT(
                                                  false,
-                                                 "fastgltf: Default argument when parsing transformation matrices! This shouldn't happen!")
+                                                 "fastgltf: Default argument when parsing transformation matrices! This shouldn't happen!");
                                          },
                                          [&](const fastgltf::math::fmat4x4& trsMatrix)
                                          { memcpy(&newNode->LocalTransform, trsMatrix.data(), sizeof(trsMatrix)); },

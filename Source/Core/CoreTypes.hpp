@@ -14,9 +14,9 @@ namespace Radiant
 #else
 #define FORCEINLINE __attribute__((always_inline))
 #endif
+
 #define BIT(x) (1 << (x))
 #define FALLTHROUGH [[fallthrough]]
-
 #define MAYBE_UNUSED [[maybe_unused]]
 
     static const std::string s_DEFAULT_STRING{"NONE"};
@@ -58,7 +58,7 @@ namespace Radiant
         return std::make_unique<T>(std::forward<Args>(args)...);
     }
 
-    class Timer final
+    struct Timer final
     {
       public:
         Timer() noexcept : m_StartTime(Now()) {}
@@ -88,7 +88,7 @@ namespace Radiant
         MAYBE_UNUSED std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTime = {};
     };
 
-    class Uncopyable
+    struct Uncopyable
     {
       public:
         constexpr Uncopyable(const Uncopyable&) noexcept            = delete;
@@ -99,7 +99,7 @@ namespace Radiant
         constexpr ~Uncopyable() noexcept = default;
     };
 
-    class Unmovable
+    struct Unmovable
     {
       public:
         constexpr Unmovable(Unmovable&&) noexcept            = delete;
@@ -158,7 +158,7 @@ namespace Radiant
         std::string Name{s_DEFAULT_STRING};
         u32 Color{0xFFFFFFFF};
 
-        f64 GetLength() const noexcept { return EndTime - StartTime; }
+        auto GetLength() const noexcept { return EndTime - StartTime; }
     };
 
 }  // namespace Radiant

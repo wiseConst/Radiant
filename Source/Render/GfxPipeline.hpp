@@ -73,6 +73,7 @@ namespace Radiant
                 gpo->DynamicStates.emplace_back(vk::DynamicState::eScissorWithCount);
             }
             Invalidate();
+            LOG_INFO("Created <{}> pipeline.", m_Description.DebugName);
         }
         ~GfxPipeline() noexcept { Destroy(); }
 

@@ -252,9 +252,9 @@ namespace Radiant
             BufferTickFunc(m_HostBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
             BufferTickFunc(m_ReBARBuffers[m_CurrentFrameIndex], m_GlobalFrameNumber);
 
-            m_DeviceRMA.m_ResourceInfoMap.clear();
-            m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.clear();
-            m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.clear();
+            m_DeviceRMA.ClearState();
+            m_HostRMA[m_CurrentFrameIndex].ClearState();
+            m_ReBARRMA[m_CurrentFrameIndex].ClearState();
         }
 
         NODISCARD RGTextureHandle CreateTexture(const GfxTextureDescription& textureDesc, const std::string& textureName,
@@ -380,42 +380,40 @@ namespace Radiant
         };
         std::vector<PooledTexture> m_Textures;
 
-        struct ResourceBucket
+        struct RenderGraphResourceInfo
+        {
+            RGResourceHandleVariant ResourceHandle{};       // To decide which RMA should it go.
+            std::string DebugName{s_DEFAULT_STRING};        // To simply set debug name.
+            vk::MemoryRequirements MemoryRequirements{};    // To properly choose memory allocation size of bucket it'll be assigned to.
+            vk::MemoryPropertyFlags MemoryPropertyFlags{};  // To properly choose memory bucket based on memory type.
+        };
+
+        struct RenderGraphResourceBucket
         {
             vk::MemoryPropertyFlags MemoryPropertyFlags{};
             vk::MemoryRequirements MemoryRequirements{};
             VmaAllocation Allocation{VK_NULL_HANDLE};
 
-            struct OverlappedResource
+            struct RenderGraphOverlappedResource
             {
-                RGResourceHandleVariant ResourceHandle{};
+                RenderGraphResourceInfo ResourceInfo{};
                 RGResourceID ResourceID{};
-                u32 Offset{};
-                std::string DebugName{s_DEFAULT_STRING};
-                vk::MemoryRequirements MemoryRequirements{};
-                vk::MemoryPropertyFlags MemoryPropertyFlags{};
+                u64 Offset{};
             };
 
-            std::vector<OverlappedResource> AlreadyAliasedResources;
-        };
-
-        struct RenderGraphResourceInfo
-        {
-            RGResourceHandleVariant ResourceHandle{};       // To decide which RMA should it go.
-            std::string DebugName{s_DEFAULT_STRING};        // To simply set debug name and other shit.
-            vk::MemoryRequirements MemoryRequirements{};    // To properly choose memory allocation size of bucket it'll be assigned to.
-            vk::MemoryPropertyFlags MemoryPropertyFlags{};  // To properly choose memory bucket based on memory type.
+            std::vector<RenderGraphOverlappedResource> AlreadyAliasedResources;
         };
 
         // NOTE: Now it represents pass IDs, but each of this in future will represent pass or dependency level(if multiple queues)
         struct RenderGraphResourceEffectiveLifetime
         {
-            u32 Begin{0};
-            u32 End{0};
+            u32 Begin{};
+            u32 End{};
         };
 
-        struct ResourceMemoryAliaser
+        struct ResourceMemoryAliaser final
         {
+          public:
             ResourceMemoryAliaser(RenderGraphResourcePool* resourcePool) noexcept : m_ResourcePoolPtr(resourcePool) {}
             ResourceMemoryAliaser() noexcept  = default;  // NOTE: Shouldn't be used!
             ~ResourceMemoryAliaser() noexcept = default;
@@ -445,17 +443,54 @@ namespace Radiant
                 m_MemoryBuckets.clear();
             }
 
+            void ClearState() noexcept
+            {
+                m_ResourceInfoMap.clear();
+                m_ResourceLifetimeMap.clear();
+                m_ResourcesNeededMemoryRebind.clear();
+            }
+
             FORCEINLINE bool DoEffectiveLifetimesIntersect(const RenderGraphResourceEffectiveLifetime& lhs,
                                                            const RenderGraphResourceEffectiveLifetime& rhs) noexcept
             {
                 return lhs.Begin <= rhs.End && rhs.Begin <= lhs.End;
             }
 
+            struct RenderGraphResourceUnaliased
+            {
+                RenderGraphResourceInfo ResourceInfo{};
+                RGResourceID ResourceID{};
+            };
+            // Invalidates all resources present in resource map, and returns ASC sorted by size array of resources to be aliased.
+            NODISCARD std::vector<RenderGraphResourceUnaliased> GetUnaliasedResourcesList(const bool bNeedMemoryDefragmentation) noexcept;
+
+            enum class EMemoryOffsetType : u8
+            {
+                MEMORY_OFFSET_TYPE_START,
+                MEMORY_OFFSET_TYPE_END
+            };
+            using MemoryOffset = std::pair<u64, EMemoryOffsetType>;
+
+            struct MemoryRegion
+            {
+                u64 Offset{};  // Bytes
+                u64 Size{};    // Bytes
+            };
+            NODISCARD std::optional<MemoryRegion> FindBestMemoryRegion(const std::vector<MemoryOffset>& nonAliasableMemoryOffsetList,
+                                                                       const RenderGraphResourceBucket& memoryBucket,
+                                                                       const RenderGraphResourceUnaliased& resourceToBeAssigned) noexcept;
+
+            // Returns non-aliasable memory offsets for every resource,
+            // each time we wanna emplace new resource.
+            // ASC sorts "u64" so-called memory offsets bytes.
+            NODISCARD std::vector<MemoryOffset> BuildNonAliasableMemoryOffsetList(
+                const RenderGraphResourceBucket& memoryBucket, const RenderGraphResourceUnaliased& resourceToBeAssigned) noexcept;
+
             RenderGraphResourcePool* m_ResourcePoolPtr{nullptr};
             UnorderedMap<RGResourceID, RenderGraphResourceInfo> m_ResourceInfoMap;
             UnorderedMap<RGResourceID, RenderGraphResourceEffectiveLifetime> m_ResourceLifetimeMap;
             UnorderedSet<RGResourceID> m_ResourcesNeededMemoryRebind;
-            std::vector<ResourceBucket> m_MemoryBuckets;
+            std::vector<RenderGraphResourceBucket> m_MemoryBuckets;
         };
 
         using ResourceMemoryAliaserPerFrame = std::array<ResourceMemoryAliaser, s_BufferedFrameCount>;

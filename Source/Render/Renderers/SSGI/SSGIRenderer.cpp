@@ -34,7 +34,7 @@ namespace Radiant
                                                          .bDepthWrite{true},
                                                          .DepthCompareOp{vk::CompareOp::eLessOrEqual}};
             const GfxPipelineDescription pipelineDesc = {.DebugName = "Point2DPipeline", .PipelineOptions = gpo, .Shader = point2dShader};
-            m_Point2DPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(),  pipelineDesc);
+            m_Point2DPipeline                         = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
         }
 
         {
@@ -47,8 +47,7 @@ namespace Radiant
                                                    .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
                                                    .PolygonMode{vk::PolygonMode::eFill}};
             GfxPipelineDescription pipelineDesc = {.DebugName = "FullScreenClearPass", .PipelineOptions = gpo, .Shader = testShader};
-            m_FullScreenClearPassPipeline =
-                MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(),  pipelineDesc);
+            m_FullScreenClearPassPipeline       = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
         }
     }
 
@@ -117,8 +116,9 @@ namespace Radiant
                 auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
                 pipelineStateCache.Bind(cmd, m_Point2DPipeline.get());
 
-                auto& cameraUBO = scheduler.GetBuffer(mainPassData.CameraBuffer);
-                cameraUBO->SetData(&m_MainCamera->GetShaderData(), sizeof(Shaders::CameraData));
+                auto& cameraUBO             = scheduler.GetBuffer(mainPassData.CameraBuffer);
+                const auto cameraShaderData = GetShaderMainCameraData();
+                cameraUBO->SetData(&cameraShaderData, sizeof(cameraShaderData));
 
                 auto& point2dUBO = scheduler.GetBuffer(mainPassData.Point2DBuffer);
                 point2dUBO->SetData(m_Points.data(), sizeof(Point2D) * m_Points.size());
@@ -131,7 +131,7 @@ namespace Radiant
                 } pc              = {};
                 pc.CameraData     = (const Shaders::CameraData*)cameraUBO->GetBDA();
                 pc.Points         = (const Point2D*)point2dUBO->GetBDA();
-                pc.FullResolution = m_MainCamera->GetShaderData().FullResolution;
+                pc.FullResolution = m_MainCamera->GetFullResolution();
 
                 cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
                                                      0, pc);

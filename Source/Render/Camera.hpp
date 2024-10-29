@@ -19,18 +19,22 @@ namespace Radiant
         {
             RecalculateProjectionMatrix();
             RecalculateViewMatrix();
-            UpdateShaderData();
         }
 
+        NODISCARD FORCEINLINE const auto& GetPosition() const noexcept { return m_Position; }
+        NODISCARD FORCEINLINE auto GetZoom() const noexcept { return m_Zoom; }
+        NODISCARD FORCEINLINE const auto GetAspectRatio() const noexcept { return m_AR; }
+        NODISCARD FORCEINLINE const auto GetZNear() const noexcept { return m_zNear; }
+        NODISCARD FORCEINLINE const auto GetZFar() const noexcept { return m_zFar; }
+        NODISCARD FORCEINLINE const auto& GetFullResolution() const noexcept { return m_FullResolution; }
         NODISCARD FORCEINLINE const auto& GetProjectionMatrix() const noexcept { return m_ProjectionMatrix; }
         NODISCARD FORCEINLINE const auto& GetViewMatrix() const noexcept { return m_ViewMatrix; }
-        NODISCARD FORCEINLINE const auto GetZFar() const noexcept { return m_zFar; }
-        NODISCARD FORCEINLINE const auto GetZNear() const noexcept { return m_zNear; }
-        NODISCARD FORCEINLINE const auto GetAspectRatio() const noexcept { return m_AR; }
+
+        NODISCARD FORCEINLINE glm::mat4 GetViewProjectionMatrix() const noexcept { return m_ProjectionMatrix * m_ViewMatrix; }
 
         void OnResized(const glm::uvec2& dimensions) noexcept
         {
-            if (dimensions == glm::uvec2{static_cast<u32>(m_FullResolution.x), static_cast<u32>(m_FullResolution.y)}) return;
+            if (dimensions == glm::uvec2{m_FullResolution.x, m_FullResolution.y}) return;
 
             if (dimensions.y > 0) m_AR = static_cast<f32>(dimensions.x) / static_cast<f32>(dimensions.y);
 
@@ -76,17 +80,7 @@ namespace Radiant
             m_ProjectionMatrix = glm::perspective(glm::radians(m_Zoom), m_AR, m_zNear, m_zFar) * glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
         }
 
-        NODISCARD FORCEINLINE const auto& GetShaderData() noexcept
-        {
-            UpdateShaderData();
-            return m_InternalData;
-        }
-
-        NODISCARD FORCEINLINE auto GetZoom() const noexcept { return m_Zoom; }
-        NODISCARD FORCEINLINE glm::mat4 GetViewProjectionMatrix() const noexcept { return m_ProjectionMatrix * m_ViewMatrix; }
-
       private:
-        Shaders::CameraData m_InternalData{};
         glm::vec3 m_Velocity{1.0f};
         glm::vec3 m_Position{0.f};
         f32 m_Zoom{90.f};
@@ -97,7 +91,7 @@ namespace Radiant
         f32 m_zFar{1000.0f};
         glm::vec2 m_LastMousePos{0.0f};
 
-        glm::vec2 m_FullResolution{1.0f, 1.0f};
+        glm::uvec2 m_FullResolution{1, 1};
         glm::mat4 m_ProjectionMatrix{1.f};
         glm::mat4 m_ViewMatrix{1.f};
 
@@ -107,21 +101,6 @@ namespace Radiant
             glm::quat yawRotation   = glm::angleAxis(glm::radians(m_Yaw), glm::vec3(0.f, 1.f, 0.f));    // Rotation around -Y axis
 
             return glm::toMat4(yawRotation) * glm::toMat4(pitchRotation);
-        }
-
-        void UpdateShaderData() noexcept
-        {
-            const auto viewProjMatrix = GetViewProjectionMatrix();
-            m_InternalData            = {.ProjectionMatrix        = m_ProjectionMatrix,
-                                         .ViewMatrix              = m_ViewMatrix,
-                                         .ViewProjectionMatrix    = viewProjMatrix,
-                                         .InvProjectionMatrix     = glm::inverse(m_ProjectionMatrix),
-                                         .InvViewProjectionMatrix = glm::inverse(viewProjMatrix),
-                                         .FullResolution          = m_FullResolution,
-                                         .InvFullResolution       = 1.0f / m_FullResolution,
-                                         .Position                = m_Position,
-                                         .zNearFar                = {m_zNear, m_zFar},
-                                         .Zoom                    = m_Zoom};
         }
     };
 

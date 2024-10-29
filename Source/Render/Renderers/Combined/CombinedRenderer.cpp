@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "CombinedRenderer.hpp"
 
 #include <Core/Application.hpp>
@@ -44,10 +43,12 @@ namespace Radiant
     static glm::vec3 s_SunColor{1.0f};
 
     static f32 s_MeshScale = 0.01f;
+    static glm::vec3 s_MeshTranslation{0.0f, 0.0f, 0.0f};
+    static glm::vec3 s_MeshRotation{0.0f, 0.0f, 0.0f};
 
     static bool s_bComputeTightBounds{false};  // switches whole csm pipeline to GPU.(setup shadows, etc..)
     static bool s_bStabilizeCascades{false};
-    static f32 s_CascadeSplitDelta{0.955f};
+    static f32 s_CascadeSplitDelta{0.95f};
 
     static u64 s_DrawCallCount{0};
 
@@ -64,6 +65,8 @@ namespace Radiant
         const auto viewProjMain = glm::perspective(glm::radians(cameraZoom), cameraAR, zNear, zFar) * cameraView;
         const auto invViewProj  = glm::inverse(viewProjMain);
 
+        const auto L = glm::normalize(sunDirection);
+
         Shaders::CascadedShadowMapsData csmData = {};
         const f32 range                         = zFar - zNear;
         const f32 ratio                         = zFar / zNear;
@@ -74,12 +77,13 @@ namespace Radiant
         for (u32 i{}; i < SHADOW_MAP_CASCADE_COUNT; ++i)
         {
             const f32 p              = (i + 1) / static_cast<f32>(SHADOW_MAP_CASCADE_COUNT);
-            const f32 log            = zNear * glm::pow(ratio, p);
-            const f32 uniform        = zNear + range * p;
-            const f32 d              = uniform + s_CascadeSplitDelta * (log - uniform);
+            const f32 logPart        = zNear * glm::pow(ratio, p);
+            const f32 uniformPart    = zNear + range * p;
+            const f32 d              = uniformPart + s_CascadeSplitDelta * (logPart - uniformPart);
             csmData.CascadeSplits[i] = (d - zNear) / range;
         }
 
+#if 0
         f32 lastCascadeSplit = 0.f;
         for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
         {
@@ -113,7 +117,7 @@ namespace Radiant
             frustumCenter /= std::size(frustumCorners);
 
             const auto lightViewMatrix =
-                glm::lookAt(frustumCenter + sunDirection + Shaders::s_KINDA_SMALL_NUMBER, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::lookAt(frustumCenter + L + Shaders::s_KINDA_SMALL_NUMBER, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
 
             glm::vec3 minExtents{0.0f};
             glm::vec3 maxExtents{1.0f};
@@ -162,6 +166,82 @@ namespace Radiant
             csmData.ViewProjectionMatrix[cascadeIndex] = lightOrthoMatrix * lightViewMatrix;
             lastCascadeSplit                           = splitDist;
         }
+#else
+
+        // Calculate orthographic projection matrix for each cascade
+        float lastSplitDist = 0.0;
+        for (uint32_t i = 0; i < SHADOW_MAP_CASCADE_COUNT; i++)
+        {
+            float splitDist = csmData.CascadeSplits[i];
+
+            glm::vec3 frustumCorners[8] = {
+                glm::vec3(-1.0f, 1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f), glm::vec3(1.0f, -1.0f, 0.0f), glm::vec3(-1.0f, -1.0f, 0.0f),
+                glm::vec3(-1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, -1.0f, 1.0f), glm::vec3(-1.0f, -1.0f, 1.0f),
+            };
+
+            // Project frustum corners into world space
+            for (uint32_t j = 0; j < 8; j++)
+            {
+                glm::vec4 invCorner = invViewProj * glm::vec4(frustumCorners[j], 1.0f);
+                frustumCorners[j]   = invCorner / invCorner.w;
+            }
+
+            for (uint32_t j = 0; j < 4; j++)
+            {
+                glm::vec3 dist        = frustumCorners[j + 4] - frustumCorners[j];
+                frustumCorners[j + 4] = frustumCorners[j] + (dist * splitDist);
+                frustumCorners[j]     = frustumCorners[j] + (dist * lastSplitDist);
+            }
+
+            // Get frustum center
+            glm::vec3 frustumCenter = glm::vec3(0.0f);
+            for (uint32_t j = 0; j < 8; j++)
+            {
+                frustumCenter += frustumCorners[j];
+            }
+            frustumCenter /= 8.0f;
+
+            float radius = 0.0f;
+            for (uint32_t j = 0; j < 8; j++)
+            {
+                float distance = glm::length(frustumCorners[j] - frustumCenter);
+                radius         = glm::max(radius, distance);
+            }
+            radius                = std::ceil(radius * 16.0f) / 16.0f;
+            const float pixelSize = radius / SHADOW_MAP_CASCADE_SIZE;
+            radius                = glm::round(radius / pixelSize) * pixelSize;
+
+            glm::vec3 maxExtents = glm::vec3(radius);
+            glm::vec3 minExtents = -maxExtents;
+
+            glm::mat4 lightViewMatrix =
+                glm::lookAt(frustumCenter + L + Shaders::s_KINDA_SMALL_NUMBER, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::mat4 lightOrthoMatrix = glm::ortho(minExtents.x, maxExtents.x, minExtents.y, maxExtents.y, maxExtents.z, minExtents.z) *
+                                         glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
+
+            glm::mat4 shadowMatrix = lightOrthoMatrix * lightViewMatrix;
+            glm::vec4 shadowOrigin = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            shadowOrigin           = shadowMatrix * shadowOrigin;
+            shadowOrigin           = shadowOrigin * (f32)SHADOW_MAP_CASCADE_SIZE / 2.0f;
+
+            glm::vec4 roundedOrigin = glm::round(shadowOrigin);
+            glm::vec4 roundOffset   = roundedOrigin - shadowOrigin;
+            roundOffset             = roundOffset * 2.0f / (f32)SHADOW_MAP_CASCADE_SIZE;
+            roundOffset.z           = 0.0f;
+            roundOffset.w           = 0.0f;
+
+            glm::mat4 shadowProj = lightOrthoMatrix;
+            shadowProj[3] += roundOffset;
+            lightOrthoMatrix = shadowProj;
+
+            // Store split distance and matrix in cascade
+            csmData.CascadeSplits[i]        = (zNear + splitDist * range) * -1.0f;
+            csmData.ViewProjectionMatrix[i] = lightOrthoMatrix * lightViewMatrix;
+
+            lastSplitDist = splitDist;
+        }
+
+#endif
 
         return csmData;
     }
@@ -172,334 +252,10 @@ namespace Radiant
                                           1000.0f, 0.0001f);
         m_Scene      = MakeUnique<Scene>("CombinedRendererTest");
 
-#if 0
-        {
-            // prepare shaders for transforming equirectangular to cubemap
-            Unique<GfxPipeline> equirectangularToCubemapPipeline{nullptr};
-            {
-                auto equirectangularToCubemapShader =
-                    MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                          GfxShaderDescription{.Path = "../Assets/Shaders/ibl_utils/equirectangular_to_cubemap.slang"});
-                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR32G32B32A32Sfloat},
-                                               //              .CullMode{vk::CullModeFlagBits::eBack},
-                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                             .PolygonMode{vk::PolygonMode::eFill}};
-                const GfxPipelineDescription pipelineDesc = {
-                    .DebugName = "equirectangular_to_cubemap", .PipelineOptions = gpo, .Shader = equirectangularToCubemapShader};
-                equirectangularToCubemapPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-            }
-            // prepare shaders for generating irradiance cube map
-            Unique<GfxPipeline> irradianceCubemapPipeline{nullptr};
-            {
-                auto irradianceCubemapShader = MakeShared<GfxShader>(
-                    m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/ibl_utils/generate_irradiance_cube.slang"});
-                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR32G32B32A32Sfloat},
-                                                          //   .CullMode{vk::CullModeFlagBits::eBack},
-                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
-                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
-                                                             .PolygonMode{vk::PolygonMode::eFill}};
-                const GfxPipelineDescription pipelineDesc = {
-                    .DebugName = "generate_irradiance_cube", .PipelineOptions = gpo, .Shader = irradianceCubemapShader};
-                irradianceCubemapPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-            }
+        Shaders::PrintLightClustersSubdivisions(m_MainCamera->GetZNear(), m_MainCamera->GetZFar());
+        std::vector<std::future<void>> thingsToPrepare{};
 
-            // final convoluted env map
-            m_EnvMapTexture = MakeUnique<GfxTexture>(
-                m_GfxContext->GetDevice(),
-                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(s_IrradianceCubeMapSize, s_IrradianceCubeMapSize, 1),
-                                      vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eColorAttachment,
-                                      vk::SamplerCreateInfo()
-                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
-                                          .setMagFilter(vk::Filter::eLinear)
-                                          .setMinFilter(vk::Filter::eLinear),
-                                      6));
-
-            auto executionContext = m_GfxContext->CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL);
-            executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-            executionContext.CommandBuffer.bindDescriptorSets(
-                vk::PipelineBindPoint::eGraphics, m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), 0,
-                m_GfxContext->GetDevice()->GetCurrentFrameBindlessResources().DescriptorSet, {});
-
-            // load equirectangular hdr texture
-            Unique<GfxTexture> equirectangularEnvMap{nullptr};
-            {
-                i32 width{1}, height{1}, channels{4};
-                void* hdrImageData = GfxTextureUtils::LoadImage("../Assets/env_maps/victoria_sunset_2k.hdr", width, height, channels);
-
-                equirectangularEnvMap = MakeUnique<GfxTexture>(
-                    m_GfxContext->GetDevice(), GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1),
-                                                                     vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eTransferDst,
-                                                                     vk::SamplerCreateInfo()
-                                                                         .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                                         .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                                                         .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
-                                                                         .setMagFilter(vk::Filter::eLinear)
-                                                                         .setMinFilter(vk::Filter::eLinear)));
-
-                const auto imageSize = static_cast<u64>(width * height * channels * sizeof(f32));
-                auto stagingBuffer   = MakeUnique<GfxBuffer>(
-                    m_GfxContext->GetDevice(), GfxBufferDescription(imageSize, /* placeholder */ 1, vk::BufferUsageFlagBits::eTransferSrc,
-                                                                      EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
-                stagingBuffer->SetData(hdrImageData, imageSize);
-                GfxTextureUtils::UnloadImage(hdrImageData);
-
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*equirectangularEnvMap)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(1)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eUndefined)
-                        .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eNone)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
-                        .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eCopy)));
-
-                executionContext.CommandBuffer.copyBufferToImage(
-                    *stagingBuffer, *equirectangularEnvMap, vk::ImageLayout::eTransferDstOptimal,
-                    vk::BufferImageCopy()
-                        .setImageSubresource(vk::ImageSubresourceLayers()
-                                                 .setLayerCount(1)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                                 .setBaseArrayLayer(0)
-                                                 .setMipLevel(0))
-                        .setImageExtent(vk::Extent3D(width, height, 1)));
-
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*equirectangularEnvMap)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(1)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
-                        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eCopy)
-                        .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader)));
-            }
-
-            // Indices for the cube (total 36 indices)
-            constexpr std::array<u8, 36> cubeIndices = {
-                0,  1,  2,  0,  2,  3,   // Back face
-                4,  5,  6,  4,  6,  7,   // Front face
-                8,  9,  10, 8,  10, 11,  // Left face
-                12, 13, 14, 12, 14, 15,  // Right face
-                16, 17, 18, 16, 18, 19,  // Top face
-                20, 21, 22, 20, 22, 23   // Bottom face
-            };
-
-            auto indexBufferReBAR = MakeUnique<GfxBuffer>(m_GfxContext->GetDevice(),
-                                                          GfxBufferDescription(sizeof(u8) * cubeIndices.size(), sizeof(u8),
-                                                                               vk::BufferUsageFlagBits::eIndexBuffer,
-                                                                               EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
-            indexBufferReBAR->SetData(cubeIndices.data(), sizeof(u8) * cubeIndices.size());
-
-            struct EquirectangularToCubemapShaderData
-            {
-                glm::mat4 CaptureViewMatrices[6];
-                glm::mat4 ProjectionMatrix;
-            } etcsd                = {};
-            etcsd.ProjectionMatrix = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f) * glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
-
-            /*          etcsd.CaptureViewMatrices[0] = glm::rotate(glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0.0f, 1.0f,
-                         0.0f)), glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f)); etcsd.CaptureViewMatrices[1] =
-                         glm::rotate(glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f)), glm::radians(180.0f),
-                         glm::vec3(1.0f, 0.0f, 0.0f)); etcsd.CaptureViewMatrices[2] = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f),
-                         glm::vec3(1.0f, 0.0f, 0.0f)); etcsd.CaptureViewMatrices[3] = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f),
-                         glm::vec3(1.0f, 0.0f, 0.0f)); etcsd.CaptureViewMatrices[4] = glm::rotate(glm::mat4(1.0f), glm::radians(180.0f),
-                         glm::vec3(1.0f, 0.0f, 0.0f)); etcsd.CaptureViewMatrices[5] = glm::rotate(glm::mat4(1.0f), glm::radians(180.0f),
-                         glm::vec3(0.0f, 0.0f, 1.0f));*/
-            etcsd.CaptureViewMatrices[0] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
-            etcsd.CaptureViewMatrices[1] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
-            etcsd.CaptureViewMatrices[2] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-            etcsd.CaptureViewMatrices[3] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
-            etcsd.CaptureViewMatrices[4] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f));
-            etcsd.CaptureViewMatrices[5] =
-                glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f));
-
-            auto etcsDataBuffer = MakeUnique<GfxBuffer>(m_GfxContext->GetDevice(),
-                                                        GfxBufferDescription(sizeof(EquirectangularToCubemapShaderData),
-                                                                             sizeof(EquirectangularToCubemapShaderData),
-                                                                             vk::BufferUsageFlagBits::eUniformBuffer,
-                                                                             EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT |
-                                                                                 EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_ADDRESSABLE_BIT));
-            etcsDataBuffer->SetData(&etcsd, sizeof(etcsd));
-
-            auto envCubeMap = MakeUnique<GfxTexture>(
-                m_GfxContext->GetDevice(), GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(512, 512, 1),
-                                                                 vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eColorAttachment,
-                                                                 vk::SamplerCreateInfo()
-                                                                     .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                                     .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                                                     .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
-                                                                     .setMagFilter(vk::Filter::eLinear)
-                                                                     .setMinFilter(vk::Filter::eLinear),
-                                                                 6));
-
-            struct PushConstantBlock
-            {
-                const EquirectangularToCubemapShaderData* ETCSData;
-                u32 SrcTextureID;
-            } pc = {};
-            // transform equirectangular map to cubemap
-            {
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*envCubeMap)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(6)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eUndefined)
-                        .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eNone)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
-                        .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)));
-
-                executionContext.CommandBuffer.beginRendering(
-                    vk::RenderingInfo()
-                        .setLayerCount(6)
-                        .setColorAttachments((vk::RenderingAttachmentInfo&)envCubeMap->GetRenderingAttachmentInfo(
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f})),
-                            vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore))
-                        .setRenderArea(vk::Rect2D().setExtent(vk::Extent2D().setWidth(512).setHeight(512))));
-
-                executionContext.CommandBuffer.setViewportWithCount(
-                    vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(512).setHeight(512));
-                executionContext.CommandBuffer.setScissorWithCount(vk::Rect2D().setExtent(vk::Extent2D().setWidth(512).setHeight(512)));
-                executionContext.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *equirectangularToCubemapPipeline);
-
-                pc              = {};
-                pc.SrcTextureID = equirectangularEnvMap->GetBindlessTextureID();
-                pc.ETCSData     = (const EquirectangularToCubemapShaderData*)etcsDataBuffer->GetBDA();
-
-                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
-                                                                                vk::ShaderStageFlagBits::eAll, 0, pc);
-                executionContext.CommandBuffer.bindIndexBuffer(*indexBufferReBAR, 0, vk::IndexType::eUint8EXT);
-                executionContext.CommandBuffer.drawIndexed(cubeIndices.size(), 6, 0, 0, 0);
-
-                executionContext.CommandBuffer.endRendering();
-            }
-
-            // convolute env cubemap
-            {
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*envCubeMap)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(6)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
-                        .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader)));
-
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*m_EnvMapTexture)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(6)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eUndefined)
-                        .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eNone)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
-                        .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)));
-
-                executionContext.CommandBuffer.beginRendering(
-                    vk::RenderingInfo()
-                        .setLayerCount(6)
-                        .setColorAttachments((vk::RenderingAttachmentInfo&)m_EnvMapTexture->GetRenderingAttachmentInfo(
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f})),
-                            vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore))
-                        .setRenderArea(
-                            vk::Rect2D().setExtent(vk::Extent2D().setWidth(s_IrradianceCubeMapSize).setHeight(s_IrradianceCubeMapSize))));
-
-                executionContext.CommandBuffer.setViewportWithCount(vk::Viewport()
-                                                                        .setMinDepth(0.0f)
-                                                                        .setMaxDepth(1.0f)
-                                                                        .setWidth(s_IrradianceCubeMapSize)
-                                                                        .setHeight(s_IrradianceCubeMapSize));
-                executionContext.CommandBuffer.setScissorWithCount(
-                    vk::Rect2D().setExtent(vk::Extent2D().setWidth(s_IrradianceCubeMapSize).setHeight(s_IrradianceCubeMapSize)));
-
-                executionContext.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *irradianceCubemapPipeline);
-
-                pc              = {};
-                pc.SrcTextureID = envCubeMap->GetBindlessTextureID();
-                pc.ETCSData     = (const EquirectangularToCubemapShaderData*)etcsDataBuffer->GetBDA();
-                executionContext.CommandBuffer.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
-                                                                                vk::ShaderStageFlagBits::eAll, 0, pc);
-                executionContext.CommandBuffer.bindIndexBuffer(*indexBufferReBAR, 0, vk::IndexType::eUint8EXT);
-                executionContext.CommandBuffer.drawIndexed(cubeIndices.size(), 6, 0, 0, 0);
-
-                executionContext.CommandBuffer.endRendering();
-
-                executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
-                    vk::ImageMemoryBarrier2()
-                        .setImage(*m_EnvMapTexture)
-                        .setSubresourceRange(vk::ImageSubresourceRange()
-                                                 .setBaseArrayLayer(0)
-                                                 .setBaseMipLevel(0)
-                                                 .setLevelCount(1)
-                                                 .setLayerCount(6)
-                                                 .setAspectMask(vk::ImageAspectFlagBits::eColor))
-                        .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                        .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
-                        .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
-                        .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
-                        .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader)));
-            }
-
-            executionContext.CommandBuffer.end();
-            m_GfxContext->SubmitImmediateExecuteContext(executionContext);
-        }
-#endif
-
-        LOG_INFO("Light clusters subdivision Z slices: {}", LIGHT_CLUSTERS_SUBDIVISION_Z);
-        for (u32 slice{}; slice < LIGHT_CLUSTERS_SUBDIVISION_Z; ++slice)
-        {
-            const auto sd         = m_MainCamera->GetShaderData();
-            const auto ZSliceNear = sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)slice / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
-            const auto ZSliceFar =
-                sd.zNearFar.x * glm::pow(sd.zNearFar.y / sd.zNearFar.x, (f32)(slice + 1) / (f32)LIGHT_CLUSTERS_SUBDIVISION_Z);
-
-            LOG_TRACE("Slice: {}, Froxel dimensions: [{:.4f}, {:.4f}].", slice, ZSliceNear, ZSliceFar);
-        }
-
-        std::vector<std::future<void>> pipelinesToCreate{};
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -511,7 +267,7 @@ namespace Radiant
                 m_LightClustersBuildPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -523,7 +279,7 @@ namespace Radiant
                 m_LightClustersDetectActivePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -535,7 +291,7 @@ namespace Radiant
                 m_LightClustersAssignmentPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto depthPrePassShader              = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
@@ -543,9 +299,7 @@ namespace Radiant
                 const GfxGraphicsPipelineOptions gpo = {
                     .RenderingFormats{vk::Format::eD32Sfloat},
                     .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
-                    .CullMode{vk::CullModeFlagBits::eBack},
                     .FrontFace{vk::FrontFace::eCounterClockwise},
-                    .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
                     .PolygonMode{vk::PolygonMode::eFill},
                     .bDepthTest{true},
                     .bDepthWrite{true},
@@ -556,18 +310,15 @@ namespace Radiant
                 m_DepthPrePassPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto csmPassShader =
                     MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/csm/csm_pass.slang"});
                 const GfxGraphicsPipelineOptions gpo = {
                     .RenderingFormats{vk::Format::eD32Sfloat},
-                    .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology,
-                                   vk::DynamicState::eDepthClampEnableEXT},
-                    .CullMode{vk::CullModeFlagBits::eBack},
+                    .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
                     .FrontFace{vk::FrontFace::eCounterClockwise},
-                    .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
                     .PolygonMode{vk::PolygonMode::eFill},
                     .bDepthClamp{true},
                     .bDepthTest{true},
@@ -578,7 +329,7 @@ namespace Radiant
                 m_CSMPipeline                             = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 // NOTE: To not create many pipelines for objects, I switch depth compare op based on AlphaMode of object.
@@ -599,7 +350,132 @@ namespace Radiant
                 m_MainLightingPassPipeline                = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                {
+                    const GfxPipelineDescription pipelineDesc = {
+                        .DebugName       = "BrdfLutGen",
+                        .PipelineOptions = GfxGraphicsPipelineOptions{.RenderingFormats{vk::Format::eR16G16Unorm},
+                                                                      //  .CullMode{vk::CullModeFlagBits::eBack},
+                                                                      .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                                      .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                                      .PolygonMode{vk::PolygonMode::eFill}},
+                        .Shader =
+                            MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                  GfxShaderDescription{.Path = "../Assets/Shaders/ibl_utils/generate_brdf_lut.slang"})};
+                    auto brdfLutGenPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+
+                    auto executionContext = m_GfxContext->CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL);
+                    executionContext.CommandBuffer.begin(
+                        vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+#if RDNT_DEBUG
+                    executionContext.CommandBuffer.beginDebugUtilsLabelEXT(
+                        vk::DebugUtilsLabelEXT().setPLabelName("BRDFLutGen").setColor({1.0f, 1.0f, 1.0f, 1.0f}));
+#endif
+
+                    constexpr glm::uvec2 brdfLutDimensions{512, 512};
+                    m_BrdfLutTexture = MakeUnique<GfxTexture>(
+                        m_GfxContext->GetDevice(),
+                        GfxTextureDescription(
+                            vk::ImageType::e2D, glm::uvec3(brdfLutDimensions.x, brdfLutDimensions.y, 1),
+                            /* Idk which format is better Sfloat or Unorm, but I think Unorm fits well since its range is [0, 1]*/
+                            vk::Format::eR16G16Unorm, vk::ImageUsageFlagBits::eColorAttachment,
+                            vk::SamplerCreateInfo()
+                                .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+                                .setMagFilter(vk::Filter::eLinear)
+                                .setMinFilter(vk::Filter::eLinear)
+                                .setBorderColor(vk::BorderColor::eFloatOpaqueWhite)));
+                    m_GfxContext->GetDevice()->SetDebugName("BRDF_LUT", (const vk::Image&)*m_BrdfLutTexture);
+
+                    executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                        vk::ImageMemoryBarrier2()
+                            .setImage(*m_BrdfLutTexture)
+                            .setSubresourceRange(vk::ImageSubresourceRange()
+                                                     .setBaseArrayLayer(0)
+                                                     .setLayerCount(1)
+                                                     .setBaseMipLevel(0)
+                                                     .setLevelCount(1)
+                                                     .setAspectMask(vk::ImageAspectFlagBits::eColor))
+                            .setOldLayout(vk::ImageLayout::eUndefined)
+                            .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                            .setSrcAccessMask(vk::AccessFlagBits2::eNone)
+                            .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
+                            .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                            .setDstStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)));
+
+                    executionContext.CommandBuffer.beginRendering(
+                        vk::RenderingInfo()
+                            .setLayerCount(1)
+                            .setColorAttachments((vk::RenderingAttachmentInfo&)m_BrdfLutTexture->GetRenderingAttachmentInfo(
+                                vk::ImageLayout::eColorAttachmentOptimal,
+                                vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f})),
+                                vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore))
+                            .setRenderArea(
+                                vk::Rect2D().setExtent(vk::Extent2D().setWidth(brdfLutDimensions.x).setHeight(brdfLutDimensions.y))));
+
+                    executionContext.CommandBuffer.setViewportWithCount(
+                        vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(brdfLutDimensions.x).setHeight(brdfLutDimensions.y));
+                    executionContext.CommandBuffer.setScissorWithCount(
+                        vk::Rect2D().setExtent(vk::Extent2D().setWidth(brdfLutDimensions.x).setHeight(brdfLutDimensions.y)));
+                    executionContext.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *brdfLutGenPipeline);
+
+                    executionContext.CommandBuffer.draw(3, 1, 0, 0);
+
+                    executionContext.CommandBuffer.endRendering();
+                    executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                        vk::ImageMemoryBarrier2()
+                            .setImage(*m_BrdfLutTexture)
+                            .setSubresourceRange(vk::ImageSubresourceRange()
+                                                     .setBaseArrayLayer(0)
+                                                     .setLayerCount(1)
+                                                     .setBaseMipLevel(0)
+                                                     .setLevelCount(1)
+                                                     .setAspectMask(vk::ImageAspectFlagBits::eColor))
+                            .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                            .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                            .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                            .setDstAccessMask(vk::AccessFlagBits2::eShaderSampledRead)
+                            .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader)));
+
+#if RDNT_DEBUG
+                    executionContext.CommandBuffer.endDebugUtilsLabelEXT();
+#endif
+                    executionContext.CommandBuffer.end();
+                    m_GfxContext->SubmitImmediateExecuteContext(executionContext);
+                }
+                {
+                    auto [irradianceCubemap, prefilteredCubemap] = GenerateIBLMaps("../Assets/env_maps/evening_field_4k.hdr");
+                    m_IrradianceCubemapTexture                   = std::move(irradianceCubemap);
+                    m_PrefilteredCubemapTexture                  = std::move(prefilteredCubemap);
+                }
+
+                m_CubeIndexBuffer = MakeUnique<GfxBuffer>(m_GfxContext->GetDevice(),
+                                                          GfxBufferDescription(sizeof(Shaders::g_CubeIndices), sizeof(u8),
+                                                                               vk::BufferUsageFlagBits::eIndexBuffer,
+                                                                               EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                m_CubeIndexBuffer->SetData(Shaders::g_CubeIndices, sizeof(Shaders::g_CubeIndices));
+
+                auto envMapSkyboxShader                   = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                                GfxShaderDescription{.Path = "../Assets/Shaders/ibl_utils/skybox.slang"});
+                const GfxGraphicsPipelineOptions gpo      = {.RenderingFormats{vk::Format::eR16G16B16A16Sfloat, vk::Format::eD32Sfloat},
+                                                             //  .CullMode{vk::CullModeFlagBits::eBack},
+                                                             .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                             .PrimitiveTopology{vk::PrimitiveTopology::eTriangleList},
+                                                             .PolygonMode{vk::PolygonMode::eFill},
+                                                             .bDepthTest{true},
+                                                             .bDepthWrite{false},
+                                                             .DepthCompareOp{vk::CompareOp::eEqual}};
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName = "EnvMapSkybox", .PipelineOptions = gpo, .Shader = envMapSkyboxShader};
+                m_EnvMapSkyboxPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
+
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto finalPassShader =
@@ -613,7 +489,7 @@ namespace Radiant
                 m_FinalPassPipeline                       = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -624,7 +500,7 @@ namespace Radiant
                 m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto ssaoShader =
@@ -639,7 +515,7 @@ namespace Radiant
                 m_SSAOPipelineGraphics                    = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto ssaoShader =
@@ -650,7 +526,7 @@ namespace Radiant
                 m_SSAOPipelineCompute = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto ssaoBoxBlurShader = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
@@ -666,7 +542,7 @@ namespace Radiant
                 m_SSAOBoxBlurPipelineGraphics = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto ssaoBoxBlurShader = MakeShared<GfxShader>(
@@ -678,7 +554,7 @@ namespace Radiant
             }));
 
         // Default bloom
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto bloomDownsampleShader = MakeShared<GfxShader>(
@@ -693,7 +569,7 @@ namespace Radiant
                 m_BloomDownsamplePipelineGraphics = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 auto bloomUpsampleBlurShader = MakeShared<GfxShader>(
@@ -710,7 +586,7 @@ namespace Radiant
             }));
 
         // Compute optimized bloom
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -721,7 +597,7 @@ namespace Radiant
                 m_BloomDownsamplePipelineCompute = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -733,7 +609,7 @@ namespace Radiant
                 m_BloomUpsampleBlurPipelineCompute = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -744,7 +620,7 @@ namespace Radiant
                 m_ShadowsSetupPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        pipelinesToCreate.emplace_back(Application::Get().GetThreadPool()->Submit(
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
                 const GfxPipelineDescription pipelineDesc = {
@@ -755,31 +631,34 @@ namespace Radiant
                 m_DepthBoundsComputePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
-        const auto pipelineCreateBegin = Timer::Now();
-        for (auto& pipeline : pipelinesToCreate)
-        {
-            pipeline.get();
-        }
-        LOG_INFO("Time taken to create {} pipelines: {} seconds.", pipelinesToCreate.size(),
-                 Timer::GetElapsedSecondsFromNow(pipelineCreateBegin));
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                m_LightData->Sun.bCastShadows = true;
+                m_LightData->Sun.Direction    = {-0.5f, 0.8f, 0.08f};
+                m_LightData->Sun.Intensity    = 1.0f;
+                m_LightData->Sun.Color        = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
+                m_LightData->PointLightCount  = MAX_POINT_LIGHT_COUNT;
+                constexpr f32 radius          = 2.5f;
+                constexpr f32 intensity       = 1.2f;
+                for (auto& pl : m_LightData->PointLights)
+                {
+                    pl.sphere.Origin = glm::linearRand(s_MinPointLightPos, s_MaxPointLightPos);
+                    pl.sphere.Radius = glm::linearRand(0.1f, radius);
+                    pl.Intensity     = glm::linearRand(0.8f, intensity);
+                    pl.Color         = Shaders::PackUnorm4x8(glm::vec4(glm::linearRand(glm::vec3(0.001f), glm::vec3(1.0f)), 1.0f));
+                }
 
-        m_LightData->Sun.bCastShadows = true;
-        m_LightData->Sun.Direction    = {-0.5f, 0.8f, 0.08f};
-        m_LightData->Sun.Intensity    = 1.0f;
-        m_LightData->Sun.Color        = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
-        m_LightData->PointLightCount  = MAX_POINT_LIGHT_COUNT;
-        constexpr f32 radius          = 2.5f;
-        constexpr f32 intensity       = 1.2f;
-        for (auto& pl : m_LightData->PointLights)
-        {
-            pl.sphere.Origin = glm::linearRand(s_MinPointLightPos, s_MaxPointLightPos);
-            pl.sphere.Radius = glm::linearRand(0.1f, radius);
-            pl.Intensity     = glm::linearRand(0.8f, intensity);
-            pl.Color         = Shaders::PackUnorm4x8(glm::vec4(glm::linearRand(glm::vec3(0.001f), glm::vec3(1.0f)), 1.0f));
-        }
+                m_Scene->LoadMesh(m_GfxContext, "../Assets/Models/sponza/scene.gltf");
+                m_Scene->IterateObjects(m_DrawContext);
+            }));
 
-        m_Scene->LoadMesh(m_GfxContext, "../Assets/Models/sponza/scene.gltf");
-        m_Scene->IterateObjects(m_DrawContext);
+        const auto rendererPrepareBeginTime = Timer::Now();
+        for (auto& thing : thingsToPrepare)
+        {
+            thing.get();
+        }
+        LOG_INFO("Time taken prepare the renderer: {} seconds.", Timer::GetElapsedSecondsFromNow(rendererPrepareBeginTime));
     }
 
     void CombinedRenderer::RenderFrame() noexcept
@@ -817,7 +696,7 @@ namespace Radiant
             //  m_BloomDownsamplePipelineCompute->HotReload();
             //  m_BloomUpsampleBlurPipelineCompute->HotReload();
 
-            //  m_EnvMapSkyboxPipeline->HotReload();
+            // m_EnvMapSkyboxPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -827,8 +706,8 @@ namespace Radiant
                   {
                       if (lhs.AlphaMode == rhs.AlphaMode && lhs.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE)
                       {
-                          const f32 lhsDistToCam = glm::length(m_MainCamera->GetShaderData().Position - glm::vec3(lhs.TRS[3]));
-                          const f32 rhsDistToCam = glm::length(m_MainCamera->GetShaderData().Position - glm::vec3(rhs.TRS[3]));
+                          const f32 lhsDistToCam = glm::length(m_MainCamera->GetPosition() - glm::vec3(lhs.TRS[3]));
+                          const f32 rhsDistToCam = glm::length(m_MainCamera->GetPosition() - glm::vec3(rhs.TRS[3]));
                           return lhsDistToCam > rhsDistToCam;
                       }
 
@@ -862,8 +741,9 @@ namespace Radiant
             },
             [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
             {
-                auto& cameraUBO = scheduler.GetBuffer(fpPassData.CameraBuffer);
-                cameraUBO->SetData(&m_MainCamera->GetShaderData(), sizeof(Shaders::CameraData));
+                auto& cameraUBO             = scheduler.GetBuffer(fpPassData.CameraBuffer);
+                const auto cameraShaderData = GetShaderMainCameraData();
+                cameraUBO->SetData(&cameraShaderData, sizeof(cameraShaderData));
 
                 if (s_bUpdateLights)
                 {
@@ -920,7 +800,7 @@ namespace Radiant
                     struct PushConstantBlock
                     {
                         glm::vec3 scale{1.f};
-                        glm::vec3 translation{0.f};
+                        glm::vec3 translation{0.0f};
                         float4 orientation{1};
                         glm::mat4 ViewProjectionMatrix{1.f};
                         const VertexPosition* VtxPositions{nullptr};
@@ -929,7 +809,11 @@ namespace Radiant
                     glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
-                    glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                    glm::decompose(ro.TRS * glm::rotate(glm::radians(s_MeshRotation.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.z), glm::vec3(0.0f, 0.0f, 1.0f)),
+                                   pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                    pc.translation += s_MeshTranslation;
                     pc.scale *= s_MeshScale;
                     pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
@@ -1055,7 +939,7 @@ namespace Radiant
         }
 
         // reversed z
-        const auto csmShaderData = UpdateCSM(glm::normalize(m_LightData->Sun.Direction), m_MainCamera->GetZFar(), m_MainCamera->GetZNear(),
+        const auto csmShaderData = UpdateCSM(m_LightData->Sun.Direction, m_MainCamera->GetZFar(), m_MainCamera->GetZNear(),
                                              m_MainCamera->GetZoom(), m_MainCamera->GetAspectRatio(), m_MainCamera->GetViewMatrix());
 
         // Shadow Map Atlas Generation.
@@ -1156,7 +1040,6 @@ namespace Radiant
 
                     auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
                     pipelineStateCache.Bind(cmd, m_CSMPipeline.get());
-                    pipelineStateCache.SetDepthClamp(cmd, true);
 
                     auto& csmDataBuffer = scheduler.GetBuffer(cmsPassDatas[cascadeIndex].CSMDataBuffer);
                     if (cascadeIndex == 0 && !s_bComputeTightBounds)
@@ -1178,7 +1061,11 @@ namespace Radiant
                         glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
                         glm::vec3 decomposePlaceholder0{1.0f};
                         glm::vec4 decomposePlaceholder1{1.0f};
-                        glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                        glm::decompose(ro.TRS * glm::rotate(glm::radians(s_MeshRotation.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                           glm::rotate(glm::radians(s_MeshRotation.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                           glm::rotate(glm::radians(s_MeshRotation.z), glm::vec3(0.0f, 0.0f, 1.0f)),
+                                       pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                        pc.translation += s_MeshTranslation;
                         pc.scale *= s_MeshScale;
                         pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
@@ -1186,7 +1073,9 @@ namespace Radiant
                         pc.CSMData      = (const Shaders::CascadedShadowMapsData*)csmDataBuffer->GetBDA();
                         pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
 
-                        pipelineStateCache.Set(cmd, ro.CullMode);
+                        // Better to render shadows backface culled, but wont work on sprites/foliage that dont have front face.
+                        pipelineStateCache.Set(cmd, vk::CullModeFlagBits::eBack);
+                        //   pipelineStateCache.Set(cmd, ro.CullMode);
                         pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
 
                         cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
@@ -1656,7 +1545,10 @@ namespace Radiant
 
         struct MainPassShaderData
         {
-            u32 EnvironmentMapTextureCubeID{0};
+            u32 IrradianceMapTextureCubeID{};
+            u32 PrefilteredMapTextureCubeID{};
+            u32 PrefilteredMapLodCount{};
+            u32 BRDFIntegrationTextureID{};
             u32 SSAOTextureID{0};
             u32 SSSTextureID{0};
             float2 ScaleBias{0.0f, 0.0f};  // For clustered shading, x - scale, y - bias
@@ -1746,9 +1638,14 @@ namespace Radiant
                 MainPassShaderData mpsData      = {};
                 mpsData.ShadowMapAtlasTextureID = scheduler.GetTexture(mainPassData.CSMShadowMapAtlasTexture)->GetBindlessTextureID();
                 mpsData.CSMData = (const Shaders::CascadedShadowMapsData*)scheduler.GetBuffer(mainPassData.CSMDataBuffer)->GetBDA();
+                mpsData.IrradianceMapTextureCubeID  = m_IrradianceCubemapTexture->GetBindlessTextureID();
+                mpsData.PrefilteredMapTextureCubeID = m_PrefilteredCubemapTexture->GetBindlessTextureID();
+                mpsData.PrefilteredMapLodCount      = GfxTextureUtils::GetMipLevelCount(
+                    m_PrefilteredCubemapTexture->GetDescription().Dimensions.x, m_PrefilteredCubemapTexture->GetDescription().Dimensions.y);
+                mpsData.BRDFIntegrationTextureID = m_BrdfLutTexture->GetBindlessTextureID();
 
-                const auto zFar   = m_MainCamera->GetZFar();
                 const auto zNear  = m_MainCamera->GetZNear();
+                const auto zFar   = m_MainCamera->GetZFar();
                 mpsData.ScaleBias = {static_cast<f32>(LIGHT_CLUSTERS_SUBDIVISION_Z) / glm::log2(zFar / zNear),
                                      -static_cast<f32>(LIGHT_CLUSTERS_SUBDIVISION_Z) * glm::log2(zNear) / glm::log2(zFar / zNear)};
                 if (s_bEnableSSAO)
@@ -1759,7 +1656,6 @@ namespace Radiant
                 //                mpsData.EnvironmentMapTextureCubeID = m_EnvMapTexture->GetBindlessTextureID();
 
                 mainPassShaderDataBuffer->SetData(&mpsData, sizeof(mpsData));
-
                 for (const auto& ro : m_DrawContext.RenderObjects)
                 {
                     ++s_DrawCallCount;
@@ -1767,7 +1663,7 @@ namespace Radiant
                     struct PushConstantBlock
                     {
                         glm::vec3 scale{1.f};
-                        glm::vec3 translation{0.f};
+                        glm::vec3 translation{0.0f};
                         float4 orientation{1};
                         const Shaders::CameraData* CameraData{nullptr};
                         const VertexPosition* VtxPositions{nullptr};
@@ -1786,8 +1682,11 @@ namespace Radiant
                     glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
                     glm::vec3 decomposePlaceholder0{1.0f};
                     glm::vec4 decomposePlaceholder1{1.0f};
-                    glm::decompose(ro.TRS, pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-                    pc.orientation = glm::packHalf(glm::vec4(q.w, q.x, q.y, q.z) * 0.5f + 0.5f);
+                    glm::decompose(ro.TRS * glm::rotate(glm::radians(s_MeshRotation.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.z), glm::vec3(0.0f, 0.0f, 1.0f)),
+                                   pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                    pc.translation += s_MeshTranslation;
                     pc.scale *= s_MeshScale;
                     pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
@@ -1807,8 +1706,21 @@ namespace Radiant
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
                 }
 
-                /*      auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
-                            pipelineStateCache.Bind(cmd, m_EnvMapSkyboxPipeline.get());*/
+                {
+                    pipelineStateCache.Bind(cmd, m_EnvMapSkyboxPipeline.get());
+                    struct PushConstantBlock
+                    {
+                        const Shaders::CameraData* CameraData{nullptr};
+                        u32 CubemapTextureID{};
+                    } pc                = {};
+                    pc.CameraData       = (const Shaders::CameraData*)cameraUBO->GetBDA();
+                    pc.CubemapTextureID = m_IrradianceCubemapTexture->GetBindlessTextureID();
+
+                    cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                         vk::ShaderStageFlagBits::eAll, 0, pc);
+                    pipelineStateCache.Bind(cmd, m_CubeIndexBuffer.get(), 0, vk::IndexType::eUint8EXT);
+                    cmd.drawIndexed(m_CubeIndexBuffer->GetElementCount(), 1, 0, 0, 0);
+                }
             });
 
         // TODO: Cleanup bloom code
@@ -2120,9 +2032,6 @@ namespace Radiant
             m_ViewportExtent, m_RenderGraph, finalPassAfterDebugTextureView,
             [&]()
             {
-                static bool bShowDemoWindow = true;
-                if (bShowDemoWindow) ImGui::ShowDemoWindow(&bShowDemoWindow);
-
                 m_ProfilerWindow.Render();
 
                 if (ImGui::Begin("Application Info"))
@@ -2184,7 +2093,7 @@ namespace Radiant
                     }
 
                     ImGui::Separator();
-                    ImGui::Text("Camera Position: %s", glm::to_string(m_MainCamera->GetShaderData().Position).data());
+                    ImGui::Text("Camera Position: %s", glm::to_string(m_MainCamera->GetPosition()).data());
 
                     if (ImGui::TreeNodeEx("Sun Parameters", ImGuiTreeNodeFlags_Framed))
                     {
@@ -2201,6 +2110,11 @@ namespace Radiant
                         ImGui::TreePop();
                     }
                 }
+
+                ImGui::SeparatorText("Mesh Transform");
+                ImGui::DragFloat3("Translation", (float*)&s_MeshTranslation, 0.5f);
+                ImGui::DragFloat3("Rotation", (float*)&s_MeshRotation, 1.f, -360.0f, 360.0f);
+                ImGui::DragFloat("Scale", &s_MeshScale, 0.01f, 0.0f);
 
                 ImGui::Separator();
                 ImGui::Checkbox("Bloom Use Compute", &s_bBloomComputeBased);

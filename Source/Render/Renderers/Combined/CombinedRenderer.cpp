@@ -449,7 +449,7 @@ namespace Radiant
                     m_GfxContext->SubmitImmediateExecuteContext(executionContext);
                 }
                 {
-                    auto [irradianceCubemap, prefilteredCubemap] = GenerateIBLMaps("../Assets/env_maps/evening_field_4k.hdr");
+                    auto [irradianceCubemap, prefilteredCubemap] = GenerateIBLMaps("../Assets/env_maps/the_sky_is_on_fire_4k.hdr");
                     m_IrradianceCubemapTexture                   = std::move(irradianceCubemap);
                     m_PrefilteredCubemapTexture                  = std::move(prefilteredCubemap);
                 }
@@ -672,9 +672,9 @@ namespace Radiant
         {
             m_DebugRenderer->HotReload();
 
-            m_LightClustersBuildPipeline->HotReload();
-            m_LightClustersDetectActivePipeline->HotReload();
-            m_LightClustersAssignmentPipeline->HotReload();
+            // m_LightClustersBuildPipeline->HotReload();
+            // m_LightClustersDetectActivePipeline->HotReload();
+            // m_LightClustersAssignmentPipeline->HotReload();
 
             //   m_DepthPrePassPipeline->HotReload();
             m_MainLightingPassPipeline->HotReload();
@@ -696,7 +696,7 @@ namespace Radiant
             //  m_BloomDownsamplePipelineCompute->HotReload();
             //  m_BloomUpsampleBlurPipelineCompute->HotReload();
 
-            // m_EnvMapSkyboxPipeline->HotReload();
+            //  m_EnvMapSkyboxPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -1315,7 +1315,7 @@ namespace Radiant
                 auto& cameraUBO    = scheduler.GetBuffer(sssPassData.CameraBuffer);
                 pc.CameraData      = (const Shaders::CameraData*)cameraUBO->GetBDA();
                 auto& sssTexture   = scheduler.GetTexture(sssPassData.SSSTexture);
-                pc.SSSTextureID    = sssTexture->GetBindlessImageID();
+                pc.SSSTextureID    = sssTexture->GetBindlessRWImageID();
                 auto& depthTexture = scheduler.GetTexture(sssPassData.DepthTexture);
                 pc.DepthTextureID  = depthTexture->GetBindlessTextureID();
                 pc.SunDirection    = m_LightData.Sun.Direction;
@@ -1387,7 +1387,7 @@ namespace Radiant
 #if USE_THREAD_GROUP_TILING_X
                         pc.WorkGroupNum = workGroupNum;
 #endif
-                        pc.DstSSAOTextureID = scheduler.GetTexture(ssaoPassData.SSAOTexture)->GetBindlessImageID();
+                        pc.DstSSAOTextureID = scheduler.GetTexture(ssaoPassData.SSAOTexture)->GetBindlessRWImageID();
                         pc.DepthTextureID   = scheduler.GetTexture(ssaoPassData.DepthTexture)->GetBindlessTextureID();
                         pc.CameraData       = (const Shaders::CameraData*)scheduler.GetBuffer(ssaoPassData.CameraBuffer)->GetBDA();
 
@@ -1430,7 +1430,7 @@ namespace Radiant
                             u32 SSAOTextureID{0};
                             glm::vec2 SrcTexelSize{1.f};
                         } pc                    = {};
-                        pc.SSAOBlurredTextureID = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTextureBlurred)->GetBindlessImageID();
+                        pc.SSAOBlurredTextureID = scheduler.GetTexture(ssaoBoxBlurPassData.SSAOTextureBlurred)->GetBindlessRWImageID();
                         pc.SSAOTextureID        = ssaoTexture->GetBindlessTextureID();
                         pc.SrcTexelSize         = 1.0f / glm::vec2(ssaoTexture->GetDescription().Dimensions);
 
@@ -1640,9 +1640,8 @@ namespace Radiant
                 mpsData.CSMData = (const Shaders::CascadedShadowMapsData*)scheduler.GetBuffer(mainPassData.CSMDataBuffer)->GetBDA();
                 mpsData.IrradianceMapTextureCubeID  = m_IrradianceCubemapTexture->GetBindlessTextureID();
                 mpsData.PrefilteredMapTextureCubeID = m_PrefilteredCubemapTexture->GetBindlessTextureID();
-                mpsData.PrefilteredMapLodCount      = GfxTextureUtils::GetMipLevelCount(
-                    m_PrefilteredCubemapTexture->GetDescription().Dimensions.x, m_PrefilteredCubemapTexture->GetDescription().Dimensions.y);
-                mpsData.BRDFIntegrationTextureID = m_BrdfLutTexture->GetBindlessTextureID();
+                mpsData.PrefilteredMapLodCount      = m_PrefilteredCubemapTexture->GetMipCount();
+                mpsData.BRDFIntegrationTextureID    = m_BrdfLutTexture->GetBindlessTextureID();
 
                 const auto zNear  = m_MainCamera->GetZNear();
                 const auto zFar   = m_MainCamera->GetZFar();
@@ -1764,16 +1763,17 @@ namespace Radiant
                         if (i == 0)
                         {
                             scheduler.CreateTexture(
-                                textureName, GfxTextureDescription(
-                                                 vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                 vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eStorage,
-                                                 vk::SamplerCreateInfo()
-                                                     .setMinFilter(vk::Filter::eLinear)
-                                                     .setMagFilter(vk::Filter::eLinear)
-                                                     .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                     .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                                     .setAddressModeW(vk::SamplerAddressMode::eClampToEdge),
-                                                 1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT));
+                                textureName,
+                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                      vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eStorage,
+                                                      vk::SamplerCreateInfo()
+                                                          .setMinFilter(vk::Filter::eLinear)
+                                                          .setMagFilter(vk::Filter::eLinear)
+                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge),
+                                                      1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT,
+                                                      s_BloomMipCount));
 
                             bdPassDatas[i].SrcTexture =
                                 scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
@@ -1800,7 +1800,7 @@ namespace Radiant
                             u32 MipLevel;
                             glm::vec2 SrcTexelSize;  // rcp(SrcTextureResolution)
                         } pc            = {};
-                        pc.DstTextureID = scheduler.GetTexture(bdPassDatas[i].DstTexture)->GetBindlessImageID(i + 1);
+                        pc.DstTextureID = scheduler.GetTexture(bdPassDatas[i].DstTexture)->GetBindlessRWImageID(i + 1);
                         pc.SrcTextureID = scheduler.GetTexture(bdPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
                         pc.MipLevel     = i;
                         pc.SrcTexelSize = 1.0f / bloomMipChain[i].Size;
@@ -1820,16 +1820,17 @@ namespace Radiant
                         if (i == 0)
                         {
                             scheduler.CreateTexture(
-                                textureName, GfxTextureDescription(
-                                                 vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
-                                                 vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eColorAttachment,
-                                                 vk::SamplerCreateInfo()
-                                                     .setMinFilter(vk::Filter::eLinear)
-                                                     .setMagFilter(vk::Filter::eLinear)
-                                                     .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                                     .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                                     .setAddressModeW(vk::SamplerAddressMode::eClampToEdge),
-                                                 1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT));
+                                textureName,
+                                GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(m_ViewportExtent.width, m_ViewportExtent.height, 1.0f),
+                                                      vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eColorAttachment,
+                                                      vk::SamplerCreateInfo()
+                                                          .setMinFilter(vk::Filter::eLinear)
+                                                          .setMagFilter(vk::Filter::eLinear)
+                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToEdge),
+                                                      1, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT,
+                                                      s_BloomMipCount));
 
                             bdPassDatas[i].SrcTexture =
                                 scheduler.ReadTexture(ResourceNames::GBufferAlbedo, MipSet::FirstMip(),
@@ -1923,7 +1924,7 @@ namespace Radiant
                             float2 SrcTexelSize;  // rcp(SrcTextureResolution)
                         } pc            = {};
                         pc.MipLevel     = i - 1;
-                        pc.DstTextureID = scheduler.GetTexture(bubPassDatas[i].DstTexture)->GetBindlessImageID(i - 1);
+                        pc.DstTextureID = scheduler.GetTexture(bubPassDatas[i].DstTexture)->GetBindlessRWImageID(i - 1);
                         pc.SrcTextureID = scheduler.GetTexture(bubPassDatas[i].SrcTexture)->GetBindlessTextureID(i);
                         pc.SrcTexelSize = 1.0f / (bloomMipChain[i].Size * 4.0f);
 
@@ -2071,10 +2072,11 @@ namespace Radiant
 
                     if (ImGui::TreeNodeEx("Bindless Resources Statistics", ImGuiTreeNodeFlags_Framed))
                     {
-                        ImGui::Text("Storage Images and Textures can overlap.");
+                        ImGui::Text("Storage Images, Combined Image Samplers, Sampled Images can overlap.");
                         const auto bindlessStatistics = m_GfxContext->GetDevice()->GetBindlessStatistics();
-                        ImGui::Text("Storage Images Used: %zu", bindlessStatistics.ImagesUsed);
-                        ImGui::Text("Textures Used: %zu", bindlessStatistics.TexturesUsed);
+                        ImGui::Text("Storage Images Used: %zu", bindlessStatistics.StorageImagesUsed);
+                        ImGui::Text("Combined Image Samplers Used: %zu", bindlessStatistics.CombinedImageSamplersUsed);
+                        ImGui::Text("Sampled Images Used: %zu", bindlessStatistics.SampledImagesUsed);
                         ImGui::Text("Samplers Used: %zu", bindlessStatistics.SamplersUsed);
 
                         ImGui::TreePop();

@@ -323,8 +323,6 @@ namespace Radiant
                     m_HostRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
                 else if (m_DeviceRMA.m_ResourceInfoMap.contains(resourceID))
                     m_DeviceRMA.m_ResourceLifetimeMap[resourceID] = el;
-                else
-                    RDNT_ASSERT(false, "Unknown resource id?! It isn't present in any resource info map!");
             }
         }
 

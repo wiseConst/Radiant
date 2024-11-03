@@ -183,19 +183,13 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     }
 
     float3 emissive = materialData->EmissiveFactor;
-    if (materialData->EmissiveTextureID != 0)
-    {
-        emissive *= Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
-    }
+    if (materialData->EmissiveTextureID != 0) emissive *= Shaders::sRGB2Linear(Shaders::Texture_Heap[materialData->EmissiveTextureID].Sample(fsInput.UV)).rgb;
     float3 irradiance = emissive;
-
+    
     const float3 V = normalize(u_PC.CameraData->Position - fsInput.FragPosWS);
     const float3 N = EvaluateNormalMap(fsInput.Tangent, fsInput.Bitangent, fsInput.Normal, fsInput.UV, materialData);
     float2 metallicRoughness = float2(Shaders::UnpackUnorm2x8(materialData->PbrData.MetallicFactor), Shaders::UnpackUnorm2x8(materialData->PbrData.RoughnessFactor));
-    if (materialData->PbrData.MetallicRoughnessTextureID != 0)
-    {
-        metallicRoughness *= Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg;
-    }
+    if (materialData->PbrData.MetallicRoughnessTextureID != 0) metallicRoughness *= Shaders::Texture_Heap[materialData->PbrData.MetallicRoughnessTextureID].Sample(fsInput.UV).bg;
 
     const float3 F0 = lerp(Shaders::s_BASE_REFLECTIVITY, albedo.rgb, metallicRoughness.x); // Initial reflectivity based on metallness
 
@@ -253,26 +247,24 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const uint froxelIndex = Shaders::GetLightClusterIndex(fragCoord.xy, u_PC.CameraData.FullResolution, slice);
     ProcessPointLights(irradiance, froxelIndex, fsInput.FragPosWS, F0, albedoOverPi, metallicRoughness, V, N);
 
-    // Ambient / indirect part
-    float3 ambient = float3(0.0f);
+    // Indirect part
     float3 ao = float3(1.0f);
     if (u_PC.MPSData.SSAOTextureID != 0)
-    {
         ao *= Shaders::Texture_Heap[u_PC.MPSData.SSAOTextureID].Sample(globalUV).r;
-    }
+    
     if (materialData->OcclusionTextureID != 0)
-    {
         ao *= Shaders::Texture_Heap[materialData->OcclusionTextureID].Sample(fsInput.UV).r * Shaders::UnpackUnorm2x8(materialData->OcclusionStrength);
-    }
+    
+    float3 ambient = float3(0.0f); 
     if (u_PC.MPSData.IrradianceMapTextureCubeID != 0 && u_PC.MPSData.PrefilteredMapTextureCubeID != 0 && u_PC.MPSData.BRDFIntegrationTextureID != 0) {
         const float NdotV = max(dot(N, V), Shaders::s_KINDA_SMALL_NUMBER);
-
         const float3 cubemapIrradiance = Shaders::Texture_Cube_Heap[u_PC.MPSData.IrradianceMapTextureCubeID].Sample(N).rgb;
         const float3 F = Shaders::EvaluateFresnelSchlickRoughness(NdotV, F0, metallicRoughness.y);
         const float3 kD = (1.0f - F) * (1.0f - metallicRoughness.x);
-        const float3 indirectDiffuse = kD * cubemapIrradiance * albedoOverPi;
-
-        const float3 cubemapPrefilteredColor = Shaders::Texture_Cube_Heap[u_PC.MPSData.PrefilteredMapTextureCubeID] .SampleLevel(reflect(-V, N), metallicRoughness.y * u_PC.MPSData.PrefilteredMapLodCount) .rgb;
+        const float3 indirectDiffuse = kD * cubemapIrradiance * albedo.rgb; // there was albedoOverPi but it gets discarded by irradiance cube map, so I removed it from both sides
+       
+        const float3 R = reflect(-V, N);
+        const float3 cubemapPrefilteredColor = Shaders::Texture_Cube_Heap[u_PC.MPSData.PrefilteredMapTextureCubeID].SampleLevel(R, metallicRoughness.y * u_PC.MPSData.PrefilteredMapLodCount) .rgb;
         const float2 brdf = Shaders::Texture_Heap[u_PC.MPSData.BRDFIntegrationTextureID].Sample(float2(NdotV, metallicRoughness.y)).rg;
         const float3 indirectSpecular = cubemapPrefilteredColor * (F * brdf.r + brdf.g);
 
@@ -280,7 +272,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     }
     else
     {
-        ambient = 0.03f * albedoOverPi * ao;
+        ambient = 0.03f * albedo.rgb * ao;
     }
     irradiance += ambient;
 

@@ -47,8 +47,9 @@ namespace Radiant
 
     struct GfxBindlessStatistics
     {
-        u64 ImagesUsed{0};
-        u64 TexturesUsed{0};
+        u64 StorageImagesUsed{0};
+        u64 CombinedImageSamplersUsed{0};
+        u64 SampledImagesUsed{0};
         u64 SamplersUsed{0};
     };
 
@@ -174,20 +175,25 @@ namespace Radiant
         void PushBindlessThing(const vk::DescriptorImageInfo& imageInfo, std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
             std::scoped_lock lock(m_BindlessThingsMtx);
-            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
-                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
+            RDNT_ASSERT(binding == Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING,
                         "Unknown binding!");
             RDNT_ASSERT(!bindlessID.has_value(), "BindlessID is already populated!");
 
             if (binding != Shaders::s_BINDLESS_SAMPLER_BINDING) RDNT_ASSERT(imageInfo.imageView, "ImageView is invalid!");
-            if (binding != Shaders::s_BINDLESS_IMAGE_BINDING) RDNT_ASSERT(imageInfo.sampler, "Sampler is invalid!");
+            if (binding == Shaders::s_BINDLESS_SAMPLER_BINDING || binding == Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING)
+                RDNT_ASSERT(imageInfo.sampler, "Sampler is invalid!");
 
             bindlessID = static_cast<u32>(m_BindlessThingsIDs[binding].Emplace(m_BindlessThingsIDs[binding].GetSize()));
 
-            const auto descriptorType = (binding == Shaders::s_BINDLESS_IMAGE_BINDING) ? vk::DescriptorType::eStorageImage
-                                                                                       : ((binding == Shaders::s_BINDLESS_SAMPLER_BINDING)
-                                                                                              ? vk::DescriptorType::eSampler
-                                                                                              : vk::DescriptorType::eCombinedImageSampler);
+            const auto descriptorType =
+                (binding == Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING)
+                    ? vk::DescriptorType::eStorageImage
+                    : (binding == Shaders::s_BINDLESS_SAMPLER_BINDING
+                           ? vk::DescriptorType::eSampler
+                           : (binding == Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING ? vk::DescriptorType::eSampledImage
+                                                                                   : vk::DescriptorType::eCombinedImageSampler));
 
             std::array<vk::WriteDescriptorSet, s_BufferedFrameCount> writes{};
             for (u8 frame{}; frame < s_BufferedFrameCount; ++frame)
@@ -207,8 +213,9 @@ namespace Radiant
         void PopBindlessThing(std::optional<u32>& bindlessID, const u32 binding) noexcept
         {
             std::scoped_lock lock(m_BindlessThingsMtx);
-            RDNT_ASSERT(binding == Shaders::s_BINDLESS_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
-                            binding == Shaders::s_BINDLESS_TEXTURE_BINDING,
+            RDNT_ASSERT(binding == Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING || binding == Shaders::s_BINDLESS_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING ||
+                            binding == Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING,
                         "Unknown binding!");
             RDNT_ASSERT(bindlessID.has_value(), "BindlessID is invalid!");
             m_BindlessThingsIDs[binding].Release(static_cast<PoolID>(*bindlessID));
@@ -222,8 +229,9 @@ namespace Radiant
 
         NODISCARD auto GetBindlessStatistics() const noexcept
         {
-            return GfxBindlessStatistics{m_BindlessThingsIDs[Shaders::s_BINDLESS_IMAGE_BINDING].GetPresentObjectsSize(),
-                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_TEXTURE_BINDING].GetPresentObjectsSize(),
+            return GfxBindlessStatistics{m_BindlessThingsIDs[Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING].GetPresentObjectsSize(),
+                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING].GetPresentObjectsSize(),
+                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING].GetPresentObjectsSize(),
                                          m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLER_BINDING].GetPresentObjectsSize()};
         }
 
@@ -249,7 +257,7 @@ namespace Radiant
         vk::UniquePipelineLayout m_PipelineLayout{};
 
         // Bindless resources part3
-        std::array<Pool<u32>, 3> m_BindlessThingsIDs{};
+        std::array<Pool<u32>, 4> m_BindlessThingsIDs{};
 
         vk::UniquePipelineCache m_PipelineCache{};
         mutable UnorderedMap<vk::SamplerCreateInfo, std::pair<vk::UniqueSampler, std::optional<u32>>> m_SamplerMap{};

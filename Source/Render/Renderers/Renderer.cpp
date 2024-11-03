@@ -85,9 +85,10 @@ namespace Radiant
     NODISCARD std::pair<Unique<GfxTexture>, Unique<GfxTexture>> Renderer::GenerateIBLMaps(
         const std::string_view& equirectangularMapPath) noexcept
     {
-        static constexpr u32 s_IrradianceCubeMapSize          = 64;
+        static constexpr u32 s_IrradianceCubeMapSize          = 64u;
         static constexpr u32 s_PrefilteredCubeMapSize         = s_IrradianceCubeMapSize * 2;
-        static constexpr u32 s_FromEquirectangularCubeMapSize = 1024;
+        static constexpr u32 s_FromEquirectangularCubeMapSize = 1024u;
+        static constexpr u8 s_CubemapMipCount                 = 5;  // used globally across all cubemaps to mititgate bright dots
 
         // Prepare pipelines for:
         // 1) Transforming equirectangular to cubemap.
@@ -238,9 +239,10 @@ namespace Radiant
                                       .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
                                       .setMagFilter(vk::Filter::eLinear)
                                       .setMinFilter(vk::Filter::eLinear)
+                                      .setMipmapMode(vk::SamplerMipmapMode::eLinear)
                                       .setMinLod(0.0f)
                                       .setMaxLod(vk::LodClampNone),
-                                  6, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT));
+                                  6, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT, s_CubemapMipCount));
 
         struct PushConstantBlock
         {
@@ -253,8 +255,6 @@ namespace Radiant
         pc.SrcTextureID = equirectangularEnvMap->GetBindlessTextureID();
 
         // Transform equirectangular map to cubemap.
-        const auto envCubeMapMipCount =
-            GfxTextureUtils::GetMipLevelCount(s_FromEquirectangularCubeMapSize, s_FromEquirectangularCubeMapSize);
 #if RDNT_DEBUG
         executionContext.CommandBuffer.beginDebugUtilsLabelEXT(
             vk::DebugUtilsLabelEXT().setPLabelName("Equirectangular Map To CubeMap").setColor({1.0f, 1.0f, 1.0f, 1.0f}));
@@ -267,7 +267,7 @@ namespace Radiant
                                                                                      .setBaseArrayLayer(0)
                                                                                      .setLayerCount(6)
                                                                                      .setBaseMipLevel(0)
-                                                                                     .setLevelCount(envCubeMapMipCount)
+                                                                                     .setLevelCount(s_CubemapMipCount)
                                                                                      .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                                             .setOldLayout(vk::ImageLayout::eUndefined)
                                                             .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
@@ -307,7 +307,7 @@ namespace Radiant
                                                                                      .setBaseArrayLayer(0)
                                                                                      .setLayerCount(6)
                                                                                      .setBaseMipLevel(0)
-                                                                                     .setLevelCount(envCubeMapMipCount)
+                                                                                     .setLevelCount(s_CubemapMipCount)
                                                                                      .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                                             .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
                                                             .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
@@ -335,22 +335,22 @@ namespace Radiant
 
         // Final prefiltered environment map.
         auto prefilteredCubemap = MakeUnique<GfxTexture>(
-            device, GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(s_PrefilteredCubeMapSize, s_PrefilteredCubeMapSize, 1),
-                                          vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eTransferDst,
-                                          vk::SamplerCreateInfo()
-                                              .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-                                              .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-                                              .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
-                                              .setMagFilter(vk::Filter::eLinear)
-                                              .setMinFilter(vk::Filter::eLinear)
-                                              .setMipmapMode(vk::SamplerMipmapMode::eLinear)
-                                              .setMinLod(0.0f)
-                                              .setMaxLod(vk::LodClampNone),
-                                          6, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT));
+            device,
+            GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(s_PrefilteredCubeMapSize, s_PrefilteredCubeMapSize, 1),
+                                  vk::Format::eB10G11R11UfloatPack32, vk::ImageUsageFlagBits::eTransferDst,
+                                  vk::SamplerCreateInfo()
+                                      .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+                                      .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+                                      .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+                                      .setMagFilter(vk::Filter::eLinear)
+                                      .setMinFilter(vk::Filter::eLinear)
+                                      .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+                                      .setMinLod(0.0f)
+                                      .setMaxLod(vk::LodClampNone),
+                                  6, vk::SampleCountFlagBits::e1, EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT, s_CubemapMipCount));
 
         // Convolute environment cubemap into prefiltered cubemap.
-        pc.SrcTextureID                       = envCubeMap->GetBindlessTextureID();
-        const auto prefilteredCubemapMipCount = GfxTextureUtils::GetMipLevelCount(s_PrefilteredCubeMapSize, s_PrefilteredCubeMapSize);
+        pc.SrcTextureID = envCubeMap->GetBindlessTextureID();
 
 #if RDNT_DEBUG
         executionContext.CommandBuffer.beginDebugUtilsLabelEXT(
@@ -364,7 +364,7 @@ namespace Radiant
                                                                                       .setBaseArrayLayer(0)
                                                                                       .setLayerCount(6)
                                                                                       .setBaseMipLevel(0)
-                                                                                      .setLevelCount(prefilteredCubemapMipCount)
+                                                                                      .setLevelCount(s_CubemapMipCount)
                                                                                       .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                                              .setOldLayout(vk::ImageLayout::eUndefined)
                                                              .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
@@ -442,9 +442,9 @@ namespace Radiant
         executionContext.CommandBuffer.setScissorWithCount(
             vk::Rect2D().setExtent(vk::Extent2D().setWidth(s_PrefilteredCubeMapSize * 0.5f).setHeight(s_PrefilteredCubeMapSize * 0.5f)));
         pc.Data1 = 1.0f / static_cast<f32>(s_FromEquirectangularCubeMapSize);
-        for (u32 mipLevel{1}; mipLevel < prefilteredCubemapMipCount; ++mipLevel)
+        for (u32 mipLevel{1}; mipLevel < s_CubemapMipCount; ++mipLevel)
         {
-            pc.Data0                 = static_cast<f32>(mipLevel) / static_cast<f32>(prefilteredCubemapMipCount - 1);  // roughness
+            pc.Data0                 = static_cast<f32>(mipLevel) / static_cast<f32>(s_CubemapMipCount - 1);  // roughness
             const u32 mipCubemapSize = s_PrefilteredCubeMapSize * std::pow(0.5f, mipLevel);
 
             executionContext.CommandBuffer.beginRendering(
@@ -516,7 +516,7 @@ namespace Radiant
                                                                                      .setBaseArrayLayer(0)
                                                                                      .setLayerCount(6)
                                                                                      .setBaseMipLevel(0)
-                                                                                     .setLevelCount(prefilteredCubemapMipCount)
+                                                                                     .setLevelCount(s_CubemapMipCount)
                                                                                      .setAspectMask(vk::ImageAspectFlagBits::eColor))
                                                             .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
                                                             .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
@@ -543,6 +543,7 @@ namespace Radiant
 
         // Convolute environment cubemap into irradiance cubemap.
         pc.SrcTextureID = envCubeMap->GetBindlessTextureID();
+        pc.Data1        = 1.0f / static_cast<f32>(s_FromEquirectangularCubeMapSize);
 
 #if RDNT_DEBUG
         executionContext.CommandBuffer.beginDebugUtilsLabelEXT(

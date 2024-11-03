@@ -19,18 +19,18 @@ float2 IntegrateBRDF(const float inputNdotV, const float roughness)
         const float3 H = Shaders::ImportanceSampleGGX(Xi, N, roughness);
         
         const float3 L = normalize(reflect(-V, H));
-        const float NdotL = saturate(dot(N, L));
+        const float NdotL = max(L.z, 0.0f);
         if (NdotL > 0.0)
         {
-            const float NdotV = saturate(dot(N, V));
+            const float NdotV = max(V.z, 0.0f);
             const float VdotH = saturate(dot(V, H));
-            const float NdotH = saturate(dot(H, N));
+            const float NdotH = max(H.z, 0.0f);
 
             const float G = Shaders::EvaluateGeometrySmith_IBL(NdotV, NdotL, roughness);
             const float G_Vis = (G * VdotH) / (NdotH * NdotV);
             const float Fc = pow(1.0 - VdotH, 5.0);
 
-            lut += float2((1.0 - Fc), Fc) * G_Vis;
+            lut += float2(1.0 - Fc, Fc) * G_Vis;
         }
     }
     return lut * s_InvSampleCount;

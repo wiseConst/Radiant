@@ -310,7 +310,8 @@ namespace Radiant
                                 gfxContext->GetDevice(),
                                 GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(width, height, 1), format,
                                                       vk::ImageUsageFlagBits::eTransferDst, samplerCI, 1, vk::SampleCountFlagBits::e1,
-                                                      c_bGenerateMipMaps ? EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT : 0));
+                                                      EResourceCreateBits::RESOURCE_CREATE_DONT_TOUCH_SAMPLED_IMAGES_BIT |
+                                                          (c_bGenerateMipMaps ? EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT : 0)));
                             textureMap[textureName] = loadedTexture;
                             gfxContext->GetDevice()->SetDebugName(textureName, (const vk::Image&)*loadedTexture);
                         }

@@ -108,7 +108,7 @@ if (NOT EXISTS ${GRAPHVIZ_ROOT})
 endif()
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.14.2)
+set(SLANG_VERSION 2024.14.4)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")
@@ -129,25 +129,20 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/include)
 
 if (WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${SLANG_ROOT}/lib/slang.lib)
-
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang.dll
-    )
-	
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang-glslang.dll
+    
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang.dll
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG}/slang-glslang.dll
     )
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang.dll)
-		
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang-glslang.dll
-    )
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${SLANG_ROOT}/bin/slang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang.dll
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${SLANG_ROOT}/bin/slang-glslang.dll ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE}/slang-glslang.dll
+	)
 
 endif()
 

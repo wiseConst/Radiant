@@ -97,11 +97,11 @@ namespace Radiant
     {
         GfxTextureDescription(const vk::ImageType type, const glm::uvec3& dimensions, const vk::Format format,
                               const vk::ImageUsageFlags usageFlags,
-                              const std::optional<vk::SamplerCreateInfo> samplerCreateInfo = std::nullopt, const u32 layerCount = 1,
+                              const std::optional<vk::SamplerCreateInfo> samplerCreateInfo = std::nullopt, const u16 layerCount = 1,
                               const vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1,
-                              const ResourceCreateFlags createFlags = {}) noexcept
+                              const ResourceCreateFlags createFlags = {}, const std::optional<u8> mipNum = std::nullopt) noexcept
             : Type(type), Dimensions(dimensions), Format(format), UsageFlags(usageFlags), SamplerCreateInfo(samplerCreateInfo),
-              LayerCount(layerCount), Samples(samples), CreateFlags(createFlags)
+              LayerCount(layerCount), Samples(samples), CreateFlags(createFlags), MipNum(mipNum)
         {
             UsageFlags |= vk::ImageUsageFlagBits::eSampled;
 
@@ -112,21 +112,22 @@ namespace Radiant
             default;  // NOTE: NEVER USE IT, IT'S NOT DELETED ONLY FOR COMPATIBILITY WITH maps/other containers!
         ~GfxTextureDescription() noexcept = default;
 
+        std::optional<vk::SamplerCreateInfo> SamplerCreateInfo{std::nullopt};
         vk::ImageType Type{vk::ImageType::e2D};
         glm::uvec3 Dimensions{1};
         vk::Format Format{vk::Format::eR8G8B8A8Unorm};
         vk::ImageUsageFlags UsageFlags{vk::ImageUsageFlagBits::eSampled};
-        std::optional<vk::SamplerCreateInfo> SamplerCreateInfo{std::nullopt};
-        u32 LayerCount{1};
+        u16 LayerCount{1};                       // maxImageArrayLayers/ maxFramebufferLayers is 2048 for rtx 4090, so u16 is highly enough.
+        std::optional<u8> MipNum{std::nullopt};  // Why would you need more than 256 mips?
         vk::SampleCountFlagBits Samples{vk::SampleCountFlagBits::e1};
         ResourceCreateFlags CreateFlags{};
 
         // NOTE: We don't care about dimensions cuz we can resize wherever we want.
         FORCEINLINE constexpr bool operator!=(const GfxTextureDescription& other) const noexcept
         {
-            return std::tie(Type, CreateFlags, LayerCount, Format, UsageFlags, SamplerCreateInfo, Samples) !=
+            return std::tie(Type, CreateFlags, LayerCount, Format, UsageFlags, SamplerCreateInfo, Samples, MipNum) !=
                    std::tie(other.Type, other.CreateFlags, other.LayerCount, other.Format, other.UsageFlags, other.SamplerCreateInfo,
-                            other.Samples);
+                            other.Samples, other.MipNum);
         }
     };
 
@@ -135,12 +136,8 @@ namespace Radiant
     {
       public:
         GfxTexture(const Unique<GfxDevice>& device, const GfxTextureDescription& textureDesc) noexcept
-            : m_Device(device), m_Description(textureDesc)
+            : m_Device(device), m_UUID(ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture))), m_Description(textureDesc)
         {
-            m_UUID                   = ankerl::unordered_dense::detail::wyhash::hash(this, sizeof(GfxTexture));
-            const bool bExposeMips   = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_EXPOSE_MIPS_BIT;
-            const bool bGenerateMips = m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_CREATE_MIPS_BIT;
-            RDNT_ASSERT((bExposeMips && bGenerateMips) == false, "GfxTexture can't have both bExposeMips && bGenerateMips specified!");
             Invalidate();
         }
         ~GfxTexture() noexcept { Destroy(); }
@@ -151,6 +148,13 @@ namespace Radiant
         {
             RDNT_ASSERT(m_Image.has_value(), "Image is invalid!");
             return *m_Image;
+        }
+
+        const u8 GetMipCount() const noexcept
+        {
+            return m_Description.MipNum.has_value()
+                       ? m_Description.MipNum.value()
+                       : GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
         }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept
@@ -172,7 +176,7 @@ namespace Radiant
         bool Resize(const glm::uvec3& dimensions) noexcept;
 
         FORCEINLINE u32 GetMipChainSize() const noexcept { return m_MipChain.size(); }
-        NODISCARD FORCEINLINE u32 GetBindlessImageID(const u32 mipLevel = 0) const noexcept
+        NODISCARD FORCEINLINE u32 GetBindlessRWImageID(const u32 mipLevel = 0) const noexcept
         {
             RDNT_ASSERT(mipLevel < m_MipChain.size() && m_MipChain[mipLevel].BindlessImageID.has_value(),
                         "Invalid mip level or BindlessImageID!");
@@ -183,6 +187,12 @@ namespace Radiant
             RDNT_ASSERT(mipLevel < m_MipChain.size() && m_MipChain[mipLevel].BindlessTextureID.has_value(),
                         "Invalid mip level or BindlessTextureID!");
             return *m_MipChain[mipLevel].BindlessTextureID;
+        }
+        NODISCARD FORCEINLINE u32 GetBindlessSampledImageID(const u32 mipLevel = 0) const noexcept
+        {
+            RDNT_ASSERT(mipLevel < m_MipChain.size() && m_MipChain[mipLevel].BindlessSampledImageID.has_value(),
+                        "Invalid mip level or BindlessSampledImageID!");
+            return *m_MipChain[mipLevel].BindlessSampledImageID;
         }
 
         NODISCARD FORCEINLINE const auto& GetDescription() const noexcept { return m_Description; }
@@ -211,6 +221,7 @@ namespace Radiant
             vk::ImageView ImageView{};
             std::optional<u32> BindlessImageID{std::nullopt};
             std::optional<u32> BindlessTextureID{std::nullopt};
+            std::optional<u32> BindlessSampledImageID{std::nullopt};
         };
         std::vector<MipInfo> m_MipChain{};
         VmaAllocation m_Allocation{VK_NULL_HANDLE};

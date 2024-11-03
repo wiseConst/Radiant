@@ -626,14 +626,19 @@ namespace Radiant
     {
         for (auto& [textureName, textureDesc] : m_TextureCreates)
         {
-            textureDesc.CreateFlags |= s_bUseResourceMemoryAliasing
-                                           ? EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT
-                                           : EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
+            if constexpr (s_bUseResourceMemoryAliasing)
+                textureDesc.CreateFlags |= EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT;
+
+            const bool bForceNoMemoryAliasing =
+                textureDesc.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
+            if (bForceNoMemoryAliasing)
+                textureDesc.CreateFlags &= ~(EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT);
+
             const auto resourceID                   = GetResourceID(textureName);
             const auto resourceHandle               = m_ResourcePool->CreateTexture(textureDesc, textureName, resourceID);
             m_ResourceIDToTextureHandle[resourceID] = resourceHandle;
 
-            if constexpr (s_bUseResourceMemoryAliasing)
+            if (s_bUseResourceMemoryAliasing && !bForceNoMemoryAliasing)
             {
                 auto& gfxTextureHandle = m_ResourcePool->GetTexture(m_ResourceIDToTextureHandle[resourceID])->Get();
                 m_ResourcePool->FillResourceInfo(
@@ -645,14 +650,19 @@ namespace Radiant
 
         for (auto& [bufferName, bufferDesc] : m_BufferCreates)
         {
-            bufferDesc.CreateFlags |= s_bUseResourceMemoryAliasing
-                                          ? EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT
-                                          : EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
+            if constexpr (s_bUseResourceMemoryAliasing)
+                bufferDesc.CreateFlags |= EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT;
+
+            const bool bForceNoMemoryAliasing =
+                bufferDesc.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
+            if (bForceNoMemoryAliasing)
+                bufferDesc.CreateFlags &= ~(EResourceCreateBits::RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT);
+
             const auto resourceID                  = GetResourceID(bufferName);
             const auto resourceHandle              = m_ResourcePool->CreateBuffer(bufferDesc, bufferName, resourceID);
             m_ResourceIDToBufferHandle[resourceID] = resourceHandle;
 
-            if constexpr (s_bUseResourceMemoryAliasing)
+            if (s_bUseResourceMemoryAliasing && !bForceNoMemoryAliasing)
             {
                 vk::MemoryPropertyFlags memoryPropertyFlags{};
                 if (bufferDesc.ExtraFlags & EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)
@@ -776,7 +786,7 @@ namespace Radiant
             auto stencilAttachmentInfo = vk::RenderingAttachmentInfo();
             auto depthAttachmentInfo   = vk::RenderingAttachmentInfo();
             std::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
-            u32 layerCount{1};
+            u16 layerCount{1};
 
             for (const auto& subresourceID : currentPass->m_TextureReads)
             {
@@ -1311,9 +1321,12 @@ namespace Radiant
             }
 
             lastUsedFrame = m_GlobalFrameNumber;
+            const bool bForceNoMemoryAliasing =
+                textureDesc.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
 
             auto& gfxTextureHandle = RGTexture->Get();
-            if (gfxTextureHandle->Resize(textureDesc.Dimensions)) m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
+            if (gfxTextureHandle->Resize(textureDesc.Dimensions) && !bForceNoMemoryAliasing)
+                m_DeviceRMA.m_ResourcesNeededMemoryRebind.emplace(resourceID);
 
             SetTextureDebugNameFunc(textureName, *gfxTextureHandle);
             return handleID;
@@ -1349,7 +1362,9 @@ namespace Radiant
                 lastUsedFrame         = m_GlobalFrameNumber;
                 auto& gfxBufferHandle = RGBuffer->Get();
 
-                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize))
+                const bool bForceNoMemoryAliasing =
+                    bufferDesc.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT;
+                if (gfxBufferHandle->Resize(bufferDesc.Capacity, bufferDesc.ElementSize) && !bForceNoMemoryAliasing)
                     rma.m_ResourcesNeededMemoryRebind.emplace(resourceID);
 
                 SetBufferDebugNameFunc(bufferName, *gfxBufferHandle);
@@ -1513,12 +1528,14 @@ namespace Radiant
                 if (auto* rgTextureHandle = std::get_if<RGTextureHandle>(&resourceInfo.ResourceHandle))
                 {
                     auto& gfxTextureHandle = m_ResourcePoolPtr->GetTexture(*rgTextureHandle)->Get();
+
                     gfxTextureHandle->Invalidate();
                     memoryRequirements = GfxContext::Get().GetDevice()->GetLogicalDevice()->getImageMemoryRequirements(*gfxTextureHandle);
                 }
                 else if (auto* rgBufferHandle = std::get_if<RGBufferHandle>(&resourceInfo.ResourceHandle))
                 {
                     auto& gfxBufferHandle = m_ResourcePoolPtr->GetBuffer(*rgBufferHandle)->Get();
+
                     gfxBufferHandle->Invalidate();
                     memoryRequirements = GfxContext::Get().GetDevice()->GetLogicalDevice()->getBufferMemoryRequirements(*gfxBufferHandle);
                 }

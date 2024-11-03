@@ -12,11 +12,12 @@ namespace Radiant
     static constexpr u8 s_MaxTransferQueueCount = 2;
 
     static constexpr bool s_bUseResourceMemoryAliasing = true;
-    static constexpr bool s_bForceGfxValidation        = true;
-    static constexpr bool s_bRequireRayTracing         = false;
-    static constexpr bool s_bRequireMeshShading        = false;
-    static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
+    static constexpr bool s_bForceGfxValidation        = false;
     static constexpr bool s_bUseTextureCompressionBC   = true;
+    static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
+
+    static constexpr bool s_bRequireRayTracing  = false;
+    static constexpr bool s_bRequireMeshShading = true;
 
     enum class ECommandQueueType : u8
     {
@@ -36,7 +37,7 @@ namespace Radiant
                                               EXTRA_BUFFER_FLAG_HOST_BIT,  // NOTE: Implies memory that can be used by both CPU and GPU!
     };
 
-    using ResourceCreateFlags = u8;
+    using ResourceCreateFlags = u16;
     enum EResourceCreateBits : ResourceCreateFlags
     {
         RESOURCE_CREATE_CREATE_MIPS_BIT                    = BIT(0),  // 1 image view for all mips.
@@ -45,6 +46,7 @@ namespace Radiant
         RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT =
             BIT(3),  // Create resource & bind to memory, this flag is needed cuz RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT being
                      // set by render graph, so we can disable memory aliasing
+        RESOURCE_CREATE_DONT_TOUCH_SAMPLED_IMAGES_BIT = BIT(4)  // Used only for mesh textures, since they're prebaked with sampler.
     };
 
     using ResourceStateFlags = u32;

@@ -43,11 +43,10 @@ namespace Radiant
         int16_t TSign;  // NOTE: Maybe put in the last tangent's bit?
     };
 
-    // TODO: Instancing + culling(instance frustum occlusion meshlet triangle cone culling)
     struct ObjectInstanceData
     {
-        float3 scale;
         float3 translation;
+        float3 scale;
         // x - real part, yzw - imaginary part.
         // TODO: on c++ side convert from range[-1. 1] to [0,1] (*0.5 + 0.5) and then halfPackUnorm
         // unpacking *2-1
@@ -199,23 +198,30 @@ namespace Radiant
                                 // transparency.
         };
 
-        static const uint32_t s_BINDLESS_IMAGE_BINDING   = 0;
-        static const uint32_t s_BINDLESS_TEXTURE_BINDING = 1;
-        static const uint32_t s_BINDLESS_SAMPLER_BINDING = 2;
+        static const uint32_t s_BINDLESS_STORAGE_IMAGE_BINDING          = 0;  // RW Image.
+        static const uint32_t s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING = 1;  // Texture tied with sampler.
+        static const uint32_t s_BINDLESS_SAMPLED_IMAGE_BINDING          = 2;  // Texture not tied with sampler.
+        static const uint32_t s_BINDLESS_SAMPLER_BINDING                = 3;  // Sampler state.
 
-        static const uint32_t s_MAX_BINDLESS_IMAGES   = 1 << 16;
-        static const uint32_t s_MAX_BINDLESS_TEXTURES = 1 << 16;
-        static const uint32_t s_MAX_BINDLESS_SAMPLERS = 1 << 10;
+        static const uint32_t s_MAX_BINDLESS_STORAGE_IMAGES          = 1 << 14;
+        static const uint32_t s_MAX_BINDLESS_COMBINED_IMAGE_SAMPLERS = 1 << 16;
+        static const uint32_t s_MAX_BINDLESS_SAMPLED_IMAGES          = 1 << 14;
+        static const uint32_t s_MAX_BINDLESS_SAMPLERS                = 1 << 10;
 
 #ifndef __cplusplus
 
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<unorm float> RWImage2D_Heap_R8UNORM[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_R32F[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float2> RWImage2D_Heap_RG32F[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_RGB32F[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_RGBA32F[s_MAX_BINDLESS_IMAGES];
-        [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] Sampler2D Texture_Heap[s_MAX_BINDLESS_TEXTURES];
-        [vk::binding(s_BINDLESS_TEXTURE_BINDING, 0)] SamplerCube Texture_Cube_Heap[s_MAX_BINDLESS_TEXTURES];
+        [vk::binding(s_BINDLESS_STORAGE_IMAGE_BINDING, 0)] RWTexture2D<unorm float> RWImage2D_Heap_R8UNORM[s_MAX_BINDLESS_STORAGE_IMAGES];
+        [vk::binding(s_BINDLESS_STORAGE_IMAGE_BINDING, 0)] RWTexture2D<float> RWImage2D_Heap_R32F[s_MAX_BINDLESS_STORAGE_IMAGES];
+        [vk::binding(s_BINDLESS_STORAGE_IMAGE_BINDING, 0)] RWTexture2D<float2> RWImage2D_Heap_RG32F[s_MAX_BINDLESS_STORAGE_IMAGES];
+        [vk::binding(s_BINDLESS_STORAGE_IMAGE_BINDING, 0)] RWTexture2D<float3> RWImage2D_Heap_RGB32F[s_MAX_BINDLESS_STORAGE_IMAGES];
+        [vk::binding(s_BINDLESS_STORAGE_IMAGE_BINDING, 0)] RWTexture2D<float4> RWImage2D_Heap_RGBA32F[s_MAX_BINDLESS_STORAGE_IMAGES];
+
+        [vk::binding(s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING, 0)] Sampler2D Texture_Heap[s_MAX_BINDLESS_COMBINED_IMAGE_SAMPLERS];
+        [vk::binding(s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING, 0)] SamplerCube Texture_Cube_Heap[s_MAX_BINDLESS_COMBINED_IMAGE_SAMPLERS];
+
+        [vk::binding(s_BINDLESS_SAMPLED_IMAGE_BINDING, 0)] Texture2D SampledImage_Heap[s_MAX_BINDLESS_SAMPLED_IMAGES];
+        [vk::binding(s_BINDLESS_SAMPLED_IMAGE_BINDING, 0)] TextureCube SampledImage_Cube_Heap[s_MAX_BINDLESS_SAMPLED_IMAGES];
+
         [vk::binding(s_BINDLESS_SAMPLER_BINDING, 0)] SamplerState Sampler_Heap[s_MAX_BINDLESS_SAMPLERS];
 
         // converting from 2D array index to 1D array index
@@ -385,8 +391,9 @@ namespace Radiant
         float EvaluateGeometrySmith_IBL(const float NdotV, const float NdotL, const float roughness)
         {
             const float k  = roughness * roughness * 0.5f;
-            const float GL = NdotL / (NdotL * (1.0 - k) + k);
-            const float GV = NdotV / (NdotV * (1.0 - k) + k);
+            const float d  = (1.0 - k);
+            const float GL = NdotL / (NdotL * d + k);
+            const float GV = NdotV / (NdotV * d + k);
             return GL * GV;
         }
 

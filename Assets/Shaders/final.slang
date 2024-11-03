@@ -18,9 +18,9 @@ float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 
     // Tonemap(HDR->LDR)
     finalColor.rgb =
-        //    Shaders::TonemapReinhard(finalColor.rgb);
-        Shaders::TonemapACES(finalColor.rgb);
-   // Shaders::ToneMapUncharted2(finalColor.rgb)
+     // Shaders::TonemapReinhard(finalColor.rgb);
+      Shaders::TonemapACES(finalColor.rgb);
+     // Shaders::ToneMapUncharted2(finalColor.rgb)
     ;
 
     // Gamma correction

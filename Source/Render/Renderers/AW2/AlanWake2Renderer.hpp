@@ -17,6 +17,8 @@ namespace Radiant
             void RenderFrame() noexcept final override;
 
           private:
+            Unique<GfxPipeline> m_MSTriPipeline{nullptr};
+            Unique<GfxPipeline> m_HZBPipeline{nullptr};
         };
 
     }  // namespace AW2

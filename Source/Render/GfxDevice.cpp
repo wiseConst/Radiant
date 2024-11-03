@@ -66,6 +66,7 @@ namespace Radiant
                 .setShaderOutputLayer(vk::True)  // Used for transforming equirectangular map to cube map(instance rendering cube 6 times).
                 .setTimelineSemaphore(vk::True)
                 .setHostQueryReset(vk::True)
+                .setSamplerFilterMinmax(vk::True)
                 .setDescriptorIndexing(vk::True)
                 .setDescriptorBindingPartiallyBound(vk::True)
                 .setDescriptorBindingSampledImageUpdateAfterBind(vk::True)
@@ -125,7 +126,7 @@ namespace Radiant
                                                                 .setSamplerAnisotropy(vk::True)
                                                                 .setPipelineStatisticsQuery(vk::True)
                                                                 .setDepthClamp(vk::True)
-                                                                // .setGeometryShader(vk::True)
+                                                                .setGeometryShader(vk::True)
                                                                 .setTextureCompressionBC(s_bUseTextureCompressionBC ? vk::True : vk::False)
                                                                 .setShaderStorageImageArrayDynamicIndexing(vk::True)
                                                                 .setShaderSampledImageArrayDynamicIndexing(vk::True);
@@ -154,14 +155,14 @@ namespace Radiant
                             gpuProperties.deviceName.data());
 
                 const auto supportedDeviceExtensions = gpu.enumerateDeviceExtensionProperties();
-                if (std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
-                                 [](const vk::ExtensionProperties& deviceExtension) {
-                                     return strcmp(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME, deviceExtension.extensionName) == 0;
-                                 }) != supportedDeviceExtensions.cend() &&
-                    std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
-                                 [](const vk::ExtensionProperties& deviceExtension) {
-                                     return strcmp(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, deviceExtension.extensionName) == 0;
-                                 }) != supportedDeviceExtensions.cend())
+                if (std::ranges::find_if(supportedDeviceExtensions,
+                                         [](const vk::ExtensionProperties& deviceExtension) {
+                                             return strcmp(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME,
+                                                           deviceExtension.extensionName) == 0;
+                                         }) != supportedDeviceExtensions.end() &&
+                    std::ranges::find_if(supportedDeviceExtensions, [](const vk::ExtensionProperties& deviceExtension)
+                                         { return strcmp(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, deviceExtension.extensionName) == 0; }) !=
+                        supportedDeviceExtensions.end())
                 {
                     requiredDeviceExtensions.emplace_back(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
                     requiredDeviceExtensions.emplace_back(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
@@ -170,10 +171,10 @@ namespace Radiant
 
                 for (const auto& rde : requiredDeviceExtensions)
                 {
-                    const bool bExtensionFound = std::find_if(supportedDeviceExtensions.cbegin(), supportedDeviceExtensions.cend(),
-                                                              [&rde](const vk::ExtensionProperties& deviceExtension) {
-                                                                  return strcmp(rde, deviceExtension.extensionName) == 0;
-                                                              }) != supportedDeviceExtensions.end();
+                    const bool bExtensionFound = std::ranges::find_if(supportedDeviceExtensions,
+                                                                      [&rde](const vk::ExtensionProperties& deviceExtension) {
+                                                                          return strcmp(rde, deviceExtension.extensionName) == 0;
+                                                                      }) != supportedDeviceExtensions.end();
 
                     RDNT_ASSERT(bExtensionFound, "Device extension: {} not supported!", rde);
                 }
@@ -422,23 +423,30 @@ namespace Radiant
 
     void GfxDevice::CreateBindlessSystem() noexcept
     {
-        constexpr std::array<vk::DescriptorSetLayoutBinding, 3> bindings{vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_IMAGE_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eStorageImage),
-                                                                         vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_TEXTURE_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler),
-                                                                         vk::DescriptorSetLayoutBinding()
-                                                                             .setBinding(Shaders::s_BINDLESS_SAMPLER_BINDING)
-                                                                             .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS)
-                                                                             .setStageFlags(vk::ShaderStageFlagBits::eAll)
-                                                                             .setDescriptorType(vk::DescriptorType::eSampler)};
+        constexpr std::array<vk::DescriptorSetLayoutBinding, 4> bindings{
+            vk::DescriptorSetLayoutBinding()
+                .setBinding(Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING)
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_STORAGE_IMAGES)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                .setDescriptorType(vk::DescriptorType::eStorageImage),
+            vk::DescriptorSetLayoutBinding()
+                .setBinding(Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING)
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_COMBINED_IMAGE_SAMPLERS)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler),
+            vk::DescriptorSetLayoutBinding()
+                .setBinding(Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING)
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLED_IMAGES)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                .setDescriptorType(vk::DescriptorType::eSampledImage),
+            vk::DescriptorSetLayoutBinding()
+                .setBinding(Shaders::s_BINDLESS_SAMPLER_BINDING)
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS)
+                .setStageFlags(vk::ShaderStageFlagBits::eAll)
+                .setDescriptorType(vk::DescriptorType::eSampler)};
 
-        constexpr std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
+        constexpr std::array<vk::DescriptorBindingFlags, 4> bindingFlags{
+            vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
             vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
             vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount,
             vk::FlagTraits<vk::DescriptorBindingFlagBits>::allFlags ^ vk::DescriptorBindingFlagBits::eVariableDescriptorCount};
@@ -460,11 +468,12 @@ namespace Radiant
                                            .setStageFlags(vk::ShaderStageFlagBits::eAll)));
         SetDebugName("RDNT_BINDLESS_PIPELINE_LAYOUT", *m_PipelineLayout);
 
-        constexpr std::array<vk::DescriptorPoolSize, 3> poolSizes{
-            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_IMAGES).setType(vk::DescriptorType::eStorageImage),
+        constexpr std::array<vk::DescriptorPoolSize, 4> poolSizes{
+            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_STORAGE_IMAGES).setType(vk::DescriptorType::eStorageImage),
             vk::DescriptorPoolSize()
-                .setDescriptorCount(Shaders::s_MAX_BINDLESS_TEXTURES)
+                .setDescriptorCount(Shaders::s_MAX_BINDLESS_COMBINED_IMAGE_SAMPLERS)
                 .setType(vk::DescriptorType::eCombinedImageSampler),
+            vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLED_IMAGES).setType(vk::DescriptorType::eSampledImage),
             vk::DescriptorPoolSize().setDescriptorCount(Shaders::s_MAX_BINDLESS_SAMPLERS).setType(vk::DescriptorType::eSampler)};
         for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {

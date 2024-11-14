@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "Renderer.hpp"
 
 #include <Core/Application.hpp>

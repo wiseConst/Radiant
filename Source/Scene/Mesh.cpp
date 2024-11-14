@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "Mesh.hpp"
 
 #include <Core/Application.hpp>
@@ -239,7 +238,7 @@ namespace Radiant
         }
 
         constexpr bool c_bGenerateMipMaps      = true;
-        constexpr bool c_bUseSamplerAnisotropy = true;
+        constexpr bool c_bUseSamplerAnisotropy = false;
         // NOTE: For simplicity, usage of the same texture with multiple samplers isn't supported at least for now!
         NODISCARD static std::string LoadTexture(std::mutex& loaderMutex, UnorderedMap<std::string, Shared<GfxTexture>>& textureMap,
                                                  const std::filesystem::path& meshParentPath, const Unique<GfxContext>& gfxContext,
@@ -830,9 +829,8 @@ namespace Radiant
                 ibData        = indicesUint8.data();
             }
 
-            const auto [cmd, queue] =
-                gfxContext->AllocateSingleUseCommandBufferWithQueue(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
-            cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+            auto executionContext = gfxContext->CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
+            executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
             // Handle vertex positions.
             auto vbpStagingBuffer = MakeUnique<GfxBuffer>(
@@ -845,8 +843,8 @@ namespace Radiant
                 gfxContext->GetDevice(),
                 GfxBufferDescription(vertexPositions.size() * sizeof(vertexPositions[0]), sizeof(vertexPositions[0]),
                                      vk::BufferUsageFlagBits::eVertexBuffer, EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
-            cmd->copyBuffer(*vbpStagingBuffer, *vtxPosBuffer,
-                            vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
+            executionContext.CommandBuffer.copyBuffer(*vbpStagingBuffer, *vtxPosBuffer,
+                                                      vk::BufferCopy().setSize(vertexPositions.size() * sizeof(vertexPositions[0])));
 
             // Handle vertex attributes.
             auto vabStagingBuffer = MakeUnique<GfxBuffer>(
@@ -859,8 +857,8 @@ namespace Radiant
                 gfxContext->GetDevice(),
                 GfxBufferDescription(vertexAttributes.size() * sizeof(vertexAttributes[0]), sizeof(vertexAttributes[0]),
                                      vk::BufferUsageFlagBits::eVertexBuffer, EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
-            cmd->copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
-                            vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
+            executionContext.CommandBuffer.copyBuffer(*vabStagingBuffer, *vtxAttribBuffer,
+                                                      vk::BufferCopy().setSize(vertexAttributes.size() * sizeof(vertexAttributes[0])));
 
             auto ibStagingBuffer = MakeUnique<GfxBuffer>(gfxContext->GetDevice(),
                                                          GfxBufferDescription(ibSize, ibElementSize, vk::BufferUsageFlagBits::eTransferSrc,
@@ -870,11 +868,10 @@ namespace Radiant
             auto& ibBuffer = IndexBuffers.emplace_back(MakeShared<GfxBuffer>(
                 gfxContext->GetDevice(), GfxBufferDescription(ibSize, ibElementSize, vk::BufferUsageFlagBits::eIndexBuffer,
                                                               EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_DEVICE_LOCAL_BIT)));
-            cmd->copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(ibSize));
+            executionContext.CommandBuffer.copyBuffer(*ibStagingBuffer, *ibBuffer, vk::BufferCopy().setSize(ibSize));
 
-            cmd->end();
-            queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
-            queue.waitIdle();
+            executionContext.CommandBuffer.end();
+            gfxContext->SubmitImmediateExecuteContext(executionContext);
         }
         meshAssetLUT.shrink_to_fit();
 

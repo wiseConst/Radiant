@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "DebugRenderer.hpp"
 
 #include <Render/GfxContext.hpp>
@@ -33,22 +32,25 @@ namespace Radiant
     }
 
     std::string DebugRenderer::DrawTextureView(const vk::Extent2D& viewportExtent, Unique<RenderGraph>& renderGraph,
-                                               const std::vector<std::string>& textureNames, const std::string& backBufferSrcName) noexcept
+                                               const std::vector<TextureViewDescription>& textureViewDescriptions,
+                                               const std::string& backBufferSrcName) noexcept
     {
-        RDNT_ASSERT(!textureNames.empty(), "Texture name array is empty!");
+        RDNT_ASSERT(!textureViewDescriptions.empty(), "Texture name array is empty!");
 
-        m_DebugTextureViewsPassData.resize(textureNames.size());
+        m_DebugTextureViewsPassData.resize(textureViewDescriptions.size());
         renderGraph->AddPass(
-            "DebugTextureViewPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "DebugTextureViewPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.WriteRenderTarget(backBufferSrcName, MipSet::FirstMip(), vk::AttachmentLoadOp::eLoad,
-                                            vk::AttachmentStoreOp::eStore, {}, ResourceNames::DebugAliasTexture);
+                                            vk::AttachmentStoreOp::eStore, {}, 0, ResourceNames::DebugAliasTexture);
 
                 for (u32 i{}; i < m_DebugTextureViewsPassData.size(); ++i)
                 {
-                    m_DebugTextureViewsPassData[i] = scheduler.ReadTexture(textureNames[i], MipSet::FirstMip(),
-                                                                           EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                    const auto& textureViewDescription = textureViewDescriptions[i];
+                    m_DebugTextureViewsPassData[i]     = scheduler.ReadTexture(
+                        textureViewDescription.name, MipSet::Explicit(textureViewDescription.mipIndex),
+                        EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT, textureViewDescription.layerIndex);
                 }
 
                 scheduler.SetViewportScissors(
@@ -65,15 +67,21 @@ namespace Radiant
 
                 glm::vec2 currMin = tilePadding;
 
-                for (auto& textureView : m_DebugTextureViewsPassData)
+                for (u32 i{}; i < m_DebugTextureViewsPassData.size(); ++i)
                 {
+                    const auto& textureView            = m_DebugTextureViewsPassData[i];
+                    const auto& textureViewDescription = textureViewDescriptions[i];
                     struct PushConstantBlock
                     {
                         u32 TextureID;
+                        u32 LayerIndex;
+                        u32 MipIndex;
                         glm::vec4 MinMax;
-                    } pc         = {};
-                    pc.TextureID = scheduler.GetTexture(textureView)->GetBindlessTextureID();
-                    pc.MinMax    = glm::vec4(currMin.x, currMin.y, currMin.x + tileSize.x, currMin.y + tileSize.y);
+                    } pc          = {};
+                    pc.LayerIndex = textureViewDescription.layerIndex;
+                    pc.MipIndex   = textureViewDescription.mipIndex;
+                    pc.TextureID  = scheduler.GetTexture(textureView)->GetBindlessTextureID();
+                    pc.MinMax     = glm::vec4(currMin.x, currMin.y, currMin.x + tileSize.x, currMin.y + tileSize.y);
 
                     cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                          vk::ShaderStageFlagBits::eAll, 0, pc);

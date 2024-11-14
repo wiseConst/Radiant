@@ -18,7 +18,7 @@ struct VSOutput
 };
 
 [shader("vertex")]
-VSOutput vertexMain(uint32_t vertexID: SV_VertexID)
+VSOutput vertexMain(const uint vertexID: SV_VertexID)
 {
     const float3 worldPos = Shaders::RotateByQuat(u_PC.VtxPositions[vertexID].Position * u_PC.scale, u_PC.orientation) + u_PC.translation;
     return VSOutput(mul(u_PC.ViewProjectionMatrix, float4(worldPos, 1.0f)));
@@ -28,5 +28,5 @@ VSOutput vertexMain(uint32_t vertexID: SV_VertexID)
 [shader("fragment")]
 float4 fragmentMain(): SV_Target
 {
-    return float4(1, 0, 0, 1);
+    return float4(1, 1, 1, 1);
 }

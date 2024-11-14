@@ -45,7 +45,7 @@ namespace Radiant
                 u32 MipCount{};
             };
 
-            struct RadiantTextureFileWriter : nvtt::OutputHandler
+            struct RadiantTextureFileWriter final : nvtt::OutputHandler
             {
               public:
                 RadiantTextureFileWriter(const std::string& path, const glm::uvec2& dimensions, const u32 mipCount)
@@ -61,12 +61,12 @@ namespace Radiant
                 ~RadiantTextureFileWriter() { m_RawDataFile.close(); }
 
                 virtual void beginImage(const i32 size, const i32 width, const i32 height, const i32 depth, const i32 face,
-                                        const i32 miplevel) override
+                                        const i32 miplevel) override final
                 {
                 }
-                virtual void endImage() override {}
+                virtual void endImage() override final {}
 
-                virtual bool writeData(const void* data, const i32 size) override
+                virtual bool writeData(const void* data, const i32 size) override final
                 {
                     m_RawDataFile.write((const char*)&size, sizeof(size));
                     m_RawDataFile.write((const char*)data, size);
@@ -155,6 +155,18 @@ namespace Radiant
             return m_Description.MipNum.has_value()
                        ? m_Description.MipNum.value()
                        : GfxTextureUtils::GetMipLevelCount(m_Description.Dimensions.x, m_Description.Dimensions.y);
+        }
+
+        NODISCARD FORCEINLINE static bool IsStencilFormat(const vk::Format format) noexcept
+        {
+            switch (format)
+            {
+                case vk::Format::eD16UnormS8Uint:
+                case vk::Format::eD24UnormS8Uint:
+                case vk::Format::eD32SfloatS8Uint: return true;
+            }
+
+            return false;
         }
 
         NODISCARD FORCEINLINE static bool IsDepthFormat(const vk::Format format) noexcept

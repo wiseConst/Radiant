@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "SSGIRenderer.hpp"
 
 #include <Core/Application.hpp>
@@ -74,7 +73,7 @@ namespace Radiant
             RGResourceID CameraBuffer;
         } mainPassData = {};
         m_RenderGraph->AddPass(
-            "MainPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "MainPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(
@@ -144,7 +143,7 @@ namespace Radiant
            RGResourceID MainPassTexture;
        } finalPassData = {};
         m_RenderGraph->AddPass(
-            "FinalPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "FinalPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(

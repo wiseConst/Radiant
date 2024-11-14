@@ -4,7 +4,6 @@
 #include <Core/Window/GLFWWindow.hpp>
 
 #include <clustered_shading/light_clusters_defines.hpp>
-#include <csm/csm_defines.hpp>
 #include <ssao/ssao_defines.hpp>
 #include <bloom/bloom_defines.hpp>
 
@@ -12,11 +11,12 @@ namespace Radiant
 {
     namespace ResourceNames
     {
+        const std::string CSMDataBuffer{"Resource_CSMDataBuffer"};
         const std::string ShadowsDepthBoundsBuffer{"Resource_Shadows_Depth_Bounds_Buffer"};
+        const std::string CSMShadowMapTexture{"Resource_CSM_TextureArray"};
+
         const std::string LightBuffer{"Resource_Light_Buffer"};
         const std::string CameraBuffer{"Resource_Camera_Buffer"};
-        const std::string CSMDataBuffer{"Resource_CSMDataBuffer"};
-        const std::string CSMShadowMapAtlasTexture{"Resource_CSM_ShadowMap_Atlas_Texture"};
         const std::string MainPassShaderDataBuffer{"Resource_MainPassShaderDataBuffer"};
 
         const std::string GBufferDepth{"Resource_DepthBuffer"};
@@ -36,220 +36,33 @@ namespace Radiant
 
     }  // namespace ResourceNames
 
-    static bool s_bEnableSSAO{false};
-    static bool s_bSSAOComputeBased{false};
+    static bool s_bAsyncComputeSSAO{false};
+    static bool s_bEnableSSAO{true};
+    static bool s_bSSAOComputeBased{true};
     static bool s_bBloomComputeBased{false};
     static bool s_bUpdateLights{true};
     static glm::vec3 s_SunColor{1.0f};
 
     static f32 s_MeshScale = 0.01f;
+
     static glm::vec3 s_MeshTranslation{0.0f, 0.0f, 0.0f};
     static glm::vec3 s_MeshRotation{0.0f, 0.0f, 0.0f};
 
-    static bool s_bComputeTightBounds{false};  // switches whole csm pipeline to GPU.(setup shadows, etc..)
-    static bool s_bStabilizeCascades{false};
+    static bool s_bComputeTightBounds{true};  // switches whole csm pipeline to GPU.(setup shadows, etc..)
+    static bool s_bCascadeTexelSizedIncrements{true};
     static f32 s_CascadeSplitDelta{0.95f};
+    static f32 s_CascadeMinDistance{0.01f};   // zNear
+    static f32 s_CascadeMaxDistance{350.0f};  // zFar
 
     static u64 s_DrawCallCount{0};
 
     static constexpr glm::vec3 s_MinPointLightPos{-15, -4, -5};
     static constexpr glm::vec3 s_MaxPointLightPos{15, 14, 5};
 
-    /*
-        Calculate frustum split depths and matrices for the shadow map cascades
-        Based on https://johanmedestrom.wordpress.com/2016/03/18/opengl-cascaded-shadow-maps/
-    */
-    static Shaders::CascadedShadowMapsData UpdateCSM(const glm::vec3& sunDirection, const f32 zNear, const f32 zFar, const f32 cameraZoom,
-                                                     const f32 cameraAR, const glm::mat4& cameraView) noexcept
-    {
-        const auto viewProjMain = glm::perspective(glm::radians(cameraZoom), cameraAR, zNear, zFar) * cameraView;
-        const auto invViewProj  = glm::inverse(viewProjMain);
-
-        const auto L = glm::normalize(sunDirection);
-
-        Shaders::CascadedShadowMapsData csmData = {};
-        const f32 range                         = zFar - zNear;
-        const f32 ratio                         = zFar / zNear;
-
-        // Calculate split depths based on view camera frustum
-        // Based on method presented in
-        // https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-10-parallel-split-shadow-maps-programmable-gpus
-        for (u32 i{}; i < SHADOW_MAP_CASCADE_COUNT; ++i)
-        {
-            const f32 p              = (i + 1) / static_cast<f32>(SHADOW_MAP_CASCADE_COUNT);
-            const f32 logPart        = zNear * glm::pow(ratio, p);
-            const f32 uniformPart    = zNear + range * p;
-            const f32 d              = uniformPart + s_CascadeSplitDelta * (logPart - uniformPart);
-            csmData.CascadeSplits[i] = (d - zNear) / range;
-        }
-
-#if 0
-        f32 lastCascadeSplit = 0.f;
-        for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
-        {
-            f32 splitDist                           = csmData.CascadeSplits[cascadeIndex];
-            std::array<glm::vec3, 8> frustumCorners = {
-                glm::vec3(-1.0f, 1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f), glm::vec3(1.0f, -1.0f, 0.0f), glm::vec3(-1.0f, -1.0f, 0.0f),
-                glm::vec3(-1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, -1.0f, 1.0f), glm::vec3(-1.0f, -1.0f, 1.0f),
-            };
-
-            // Project frustum corners into world space.
-            for (auto& frustumCorner : frustumCorners)
-            {
-                glm::vec4 invCorner = invViewProj * glm::vec4(frustumCorner, 1.0f);
-                frustumCorner       = invCorner / invCorner.w;
-            }
-
-            // Get the corners of the current cascade slice of the view frustum.
-            for (u32 j = 0; j < 4; ++j)
-            {
-                const auto dist       = frustumCorners[j + 4] - frustumCorners[j];
-                frustumCorners[j + 4] = frustumCorners[j] + (dist * splitDist);
-                frustumCorners[j]     = frustumCorners[j] + (dist * lastCascadeSplit);
-            }
-
-            // Get frustum center in WS of current cascade slice.
-            glm::vec3 frustumCenter = glm::vec3(0.0f);
-            for (const auto& frustumCorner : frustumCorners)
-            {
-                frustumCenter += frustumCorner;
-            }
-            frustumCenter /= std::size(frustumCorners);
-
-            const auto lightViewMatrix =
-                glm::lookAt(frustumCenter + L + Shaders::s_KINDA_SMALL_NUMBER, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
-
-            glm::vec3 minExtents{0.0f};
-            glm::vec3 maxExtents{1.0f};
-            if (s_bStabilizeCascades)
-            {
-                f32 radius = 0.0f;
-                for (u32 j = 0; j < 8; ++j)
-                {
-                    const f32 distance = glm::length(frustumCorners[j] - frustumCenter);
-                    radius             = glm::max(radius, distance);
-                }
-                radius = std::ceil(radius * 16.0f) / 16.0f;
-
-                maxExtents = glm::vec3(radius);
-                minExtents = -maxExtents;
-            }
-            else
-            {
-                glm::vec3 minPointLVS{std::numeric_limits<f32>::max()};
-                glm::vec3 maxPointLVS{std::numeric_limits<f32>::lowest()};
-                for (const auto& frustumCorner : frustumCorners)
-                {
-                    const auto cornerLVS = glm::vec3(lightViewMatrix * glm::vec4(frustumCorner, 1.0f));
-                    minPointLVS          = glm::min(minPointLVS, cornerLVS);
-                    maxPointLVS          = glm::max(maxPointLVS, cornerLVS);
-                }
-
-                // Adjust the min/max to accommodate the filtering size
-                const f32 scale = (SHADOW_MAP_CASCADE_SIZE + 9.0f) / f32(SHADOW_MAP_CASCADE_SIZE);
-
-                minExtents = minPointLVS;
-                minExtents.x *= scale;
-                minExtents.y *= scale;
-
-                maxExtents = maxPointLVS;
-                maxExtents.x *= scale;
-                maxExtents.y *= scale;
-            }
-
-            const auto cascadeExtents  = maxExtents - minExtents;
-            glm::mat4 lightOrthoMatrix = glm::ortho(minExtents.x, maxExtents.x, minExtents.y, maxExtents.y, maxExtents.z, minExtents.z) *
-                                         glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
-
-            // Store split distance and matrix in cascade
-            csmData.CascadeSplits[cascadeIndex]        = (zNear + splitDist * range) * -1.0f;
-            csmData.ViewProjectionMatrix[cascadeIndex] = lightOrthoMatrix * lightViewMatrix;
-            lastCascadeSplit                           = splitDist;
-        }
-#else
-
-        // Calculate orthographic projection matrix for each cascade
-        float lastSplitDist = 0.0;
-        for (uint32_t i = 0; i < SHADOW_MAP_CASCADE_COUNT; i++)
-        {
-            float splitDist = csmData.CascadeSplits[i];
-
-            glm::vec3 frustumCorners[8] = {
-                glm::vec3(-1.0f, 1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f), glm::vec3(1.0f, -1.0f, 0.0f), glm::vec3(-1.0f, -1.0f, 0.0f),
-                glm::vec3(-1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 1.0f, 1.0f), glm::vec3(1.0f, -1.0f, 1.0f), glm::vec3(-1.0f, -1.0f, 1.0f),
-            };
-
-            // Project frustum corners into world space
-            for (uint32_t j = 0; j < 8; j++)
-            {
-                glm::vec4 invCorner = invViewProj * glm::vec4(frustumCorners[j], 1.0f);
-                frustumCorners[j]   = invCorner / invCorner.w;
-            }
-
-            for (uint32_t j = 0; j < 4; j++)
-            {
-                glm::vec3 dist        = frustumCorners[j + 4] - frustumCorners[j];
-                frustumCorners[j + 4] = frustumCorners[j] + (dist * splitDist);
-                frustumCorners[j]     = frustumCorners[j] + (dist * lastSplitDist);
-            }
-
-            // Get frustum center
-            glm::vec3 frustumCenter = glm::vec3(0.0f);
-            for (uint32_t j = 0; j < 8; j++)
-            {
-                frustumCenter += frustumCorners[j];
-            }
-            frustumCenter /= 8.0f;
-
-            float radius = 0.0f;
-            for (uint32_t j = 0; j < 8; j++)
-            {
-                float distance = glm::length(frustumCorners[j] - frustumCenter);
-                radius         = glm::max(radius, distance);
-            }
-            radius                = std::ceil(radius * 16.0f) / 16.0f;
-            const float pixelSize = radius / SHADOW_MAP_CASCADE_SIZE;
-            radius                = glm::round(radius / pixelSize) * pixelSize;
-
-            glm::vec3 maxExtents = glm::vec3(radius);
-            glm::vec3 minExtents = -maxExtents;
-
-            glm::mat4 lightViewMatrix =
-                glm::lookAt(frustumCenter + L + Shaders::s_KINDA_SMALL_NUMBER, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
-            glm::mat4 lightOrthoMatrix = glm::ortho(minExtents.x, maxExtents.x, minExtents.y, maxExtents.y, maxExtents.z, minExtents.z) *
-                                         glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
-
-            glm::mat4 shadowMatrix = lightOrthoMatrix * lightViewMatrix;
-            glm::vec4 shadowOrigin = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            shadowOrigin           = shadowMatrix * shadowOrigin;
-            shadowOrigin           = shadowOrigin * (f32)SHADOW_MAP_CASCADE_SIZE / 2.0f;
-
-            glm::vec4 roundedOrigin = glm::round(shadowOrigin);
-            glm::vec4 roundOffset   = roundedOrigin - shadowOrigin;
-            roundOffset             = roundOffset * 2.0f / (f32)SHADOW_MAP_CASCADE_SIZE;
-            roundOffset.z           = 0.0f;
-            roundOffset.w           = 0.0f;
-
-            glm::mat4 shadowProj = lightOrthoMatrix;
-            shadowProj[3] += roundOffset;
-            lightOrthoMatrix = shadowProj;
-
-            // Store split distance and matrix in cascade
-            csmData.CascadeSplits[i]        = (zNear + splitDist * range) * -1.0f;
-            csmData.ViewProjectionMatrix[i] = lightOrthoMatrix * lightViewMatrix;
-
-            lastSplitDist = splitDist;
-        }
-
-#endif
-
-        return csmData;
-    }
-
     CombinedRenderer::CombinedRenderer() noexcept
     {
         m_MainCamera = MakeShared<Camera>(70.0f, static_cast<f32>(m_ViewportExtent.width) / static_cast<f32>(m_ViewportExtent.height),
-                                          1000.0f, 0.0001f);
+                                          1000.0f, 0.001f);
         m_Scene      = MakeUnique<Scene>("CombinedRendererTest");
 
         Shaders::PrintLightClustersSubdivisions(m_MainCamera->GetZNear(), m_MainCamera->GetZFar());
@@ -310,23 +123,48 @@ namespace Radiant
                 m_DepthPrePassPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
+        // CSMPass
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
-                auto csmPassShader =
-                    MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/csm/csm_pass.slang"});
-                const GfxGraphicsPipelineOptions gpo = {
-                    .RenderingFormats{vk::Format::eD32Sfloat},
-                    .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
-                    .FrontFace{vk::FrontFace::eCounterClockwise},
-                    .PolygonMode{vk::PolygonMode::eFill},
-                    .bDepthClamp{true},
-                    .bDepthTest{true},
-                    .bDepthWrite{true},
-                    .DepthCompareOp{vk::CompareOp::eGreaterOrEqual},
-                };
-                const GfxPipelineDescription pipelineDesc = {.DebugName = "csm_pass", .PipelineOptions = gpo, .Shader = csmPassShader};
-                m_CSMPipeline                             = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "CSMPass",
+                    .PipelineOptions = GfxGraphicsPipelineOptions{.RenderingFormats{vk::Format::eD32Sfloat},
+                                                                  .DynamicStates{vk::DynamicState::ePrimitiveTopology},
+                                                                  .CullMode{vk::CullModeFlagBits::eFront},  // fuck peter pan
+                                                                  .FrontFace{vk::FrontFace::eCounterClockwise},
+                                                                  .PolygonMode{vk::PolygonMode::eFill},
+                                                                  .bDepthClamp{true},
+                                                                  .bDepthTest{true},
+                                                                  .bDepthWrite{true},
+                                                                  .DepthCompareOp{vk::CompareOp::eGreaterOrEqual}},
+                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/shadows/csm_pass.slang"})};
+                m_CSMPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
+
+        // SDSM Tight Bounds Compute GPU.
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "DepthBoundsCompute",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/shadows/depth_reduction.slang"})};
+                m_DepthBoundsComputePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
+            }));
+
+        // SetupShadows GPU.
+        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
+            [&]() noexcept
+            {
+                const GfxPipelineDescription pipelineDesc = {
+                    .DebugName       = "SetupShadows",
+                    .PipelineOptions = GfxComputePipelineOptions{},
+                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/shadows/setup_csm.slang"})};
+                m_ShadowsSetupPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
@@ -474,7 +312,7 @@ namespace Radiant
                     .DebugName = "EnvMapSkybox", .PipelineOptions = gpo, .Shader = envMapSkyboxShader};
                 m_EnvMapSkyboxPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
-
+        // final composition pass
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
@@ -488,7 +326,7 @@ namespace Radiant
                 const GfxPipelineDescription pipelineDesc = {.DebugName = "FinalPass", .PipelineOptions = gpo, .Shader = finalPassShader};
                 m_FinalPassPipeline                       = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
-
+        // sss
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
@@ -500,6 +338,7 @@ namespace Radiant
                 m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
+        // ssao
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
@@ -612,28 +451,6 @@ namespace Radiant
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
-                const GfxPipelineDescription pipelineDesc = {
-                    .DebugName       = "SetupShadows",
-                    .PipelineOptions = GfxComputePipelineOptions{},
-                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                    GfxShaderDescription{.Path = "../Assets/Shaders/csm/setup_csm.slang"})};
-                m_ShadowsSetupPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-            }));
-
-        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
-            [&]() noexcept
-            {
-                const GfxPipelineDescription pipelineDesc = {
-                    .DebugName       = "DepthBoundsCompute",
-                    .PipelineOptions = GfxComputePipelineOptions{},
-                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                    GfxShaderDescription{.Path = "../Assets/Shaders/csm/depth_reduction.slang"})};
-                m_DepthBoundsComputePipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
-            }));
-
-        thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
-            [&]() noexcept
-            {
                 m_LightData->Sun.bCastShadows = true;
                 m_LightData->Sun.Direction    = {-0.5f, 0.8f, 0.08f};
                 m_LightData->Sun.Intensity    = 1.0f;
@@ -670,33 +487,31 @@ namespace Radiant
         static bool bHotReloadQueued{false};
         if (bHotReloadQueued && mainWindow->IsKeyReleased(GLFW_KEY_V))  // Check state frame before and current
         {
-            m_DebugRenderer->HotReload();
-
             // m_LightClustersBuildPipeline->HotReload();
             // m_LightClustersDetectActivePipeline->HotReload();
             // m_LightClustersAssignmentPipeline->HotReload();
 
-            //   m_DepthPrePassPipeline->HotReload();
+            // m_DepthPrePassPipeline->HotReload();
             m_MainLightingPassPipeline->HotReload();
             m_FinalPassPipeline->HotReload();
 
-            m_DepthBoundsComputePipeline->HotReload();
-            m_ShadowsSetupPipeline->HotReload();
-            //            m_CSMPipeline->HotReload();
+            // m_DepthBoundsComputePipeline->HotReload();
+            // m_ShadowsSetupPipeline->HotReload();
+            // m_CSMPipeline->HotReload();
 
-            //   m_SSSPipeline->HotReload();
+            // m_SSSPipeline->HotReload();
 
-            //   m_SSAOPipelineGraphics->HotReload();
-            //   m_SSAOPipelineCompute->HotReload();
-            //   m_SSAOBoxBlurPipelineGraphics->HotReload();
-            //   m_SSAOBoxBlurPipelineCompute->HotReload();
+            // m_SSAOPipelineGraphics->HotReload();
+            // m_SSAOPipelineCompute->HotReload();
+            // _SSAOBoxBlurPipelineGraphics->HotReload();
+            // m_SSAOBoxBlurPipelineCompute->HotReload();
 
-            //  m_BloomDownsamplePipelineGraphics->HotReload();
-            //  m_BloomUpsampleBlurPipelineGraphics->HotReload();
-            //  m_BloomDownsamplePipelineCompute->HotReload();
-            //  m_BloomUpsampleBlurPipelineCompute->HotReload();
+            // m_BloomDownsamplePipelineGraphics->HotReload();
+            // m_BloomUpsampleBlurPipelineGraphics->HotReload();
+            // m_BloomDownsamplePipelineCompute->HotReload();
+            // m_BloomUpsampleBlurPipelineCompute->HotReload();
 
-            //  m_EnvMapSkyboxPipeline->HotReload();
+            // m_EnvMapSkyboxPipeline->HotReload();
         }
         bHotReloadQueued = mainWindow->IsKeyPressed(GLFW_KEY_V);
 
@@ -722,7 +537,7 @@ namespace Radiant
             RGResourceID LightBuffer;
         } fpPassData = {};
         m_RenderGraph->AddPass(
-            "FramePreparePass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_TRANSFER,
+            "FramePreparePass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateBuffer(ResourceNames::CameraBuffer,
@@ -763,7 +578,7 @@ namespace Radiant
             RGResourceID CameraBuffer;
         } depthPrePassData = {};
         m_RenderGraph->AddPass(
-            "DepthPrePass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "DepthPrePass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(ResourceNames::GBufferDepth,
@@ -829,12 +644,11 @@ namespace Radiant
                     cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
                 }
             });
-
         struct ShadowsDepthReductionPassData
         {
             RGResourceID DepthTexture;
-            RGResourceID DepthBoundsBuffer;
             RGResourceID CameraBuffer;
+            RGResourceID DepthBoundsBuffer;
         } sdrPassData = {};
         struct ShadowsSetupPassData
         {
@@ -845,7 +659,7 @@ namespace Radiant
         if (s_bComputeTightBounds)
         {
             m_RenderGraph->AddPass(
-                "ShadowsDepthReductionPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                "ShadowsDepthReductionPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                 [&](RenderGraphResourceScheduler& scheduler)
                 {
                     scheduler.CreateBuffer(ResourceNames::ShadowsDepthBoundsBuffer,
@@ -893,7 +707,7 @@ namespace Radiant
                 });
 
             m_RenderGraph->AddPass(
-                "ShadowsSetupPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                "ShadowsSetupPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                 [&](RenderGraphResourceScheduler& scheduler)
                 {
                     scheduler.CreateBuffer(ResourceNames::CSMDataBuffer,
@@ -938,56 +752,45 @@ namespace Radiant
                 });
         }
 
-        // reversed z
-        const auto csmShaderData = UpdateCSM(m_LightData->Sun.Direction, m_MainCamera->GetZFar(), m_MainCamera->GetZNear(),
-                                             m_MainCamera->GetZoom(), m_MainCamera->GetAspectRatio(), m_MainCamera->GetViewMatrix());
+        // NOTE: Auto cascade split delta computation unfortunately sucks if s_CascadeMinDistance < 1, cuz f32 precision below gives 1.
+        // s_CascadeSplitDelta = (s_CascadeMaxDistance - s_CascadeMinDistance) / s_CascadeMaxDistance;
 
-        // Shadow Map Atlas Generation.
         struct CascadedShadowMapsPassData
         {
             RGResourceID CSMDataBuffer;
         };
-        std::vector<CascadedShadowMapsPassData> cmsPassDatas(SHADOW_MAP_CASCADE_COUNT);
-        for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
-        {
-            const auto passName       = "CSMPass" + std::to_string(cascadeIndex);
-            const auto tmpTextureName = "CSMTexture" + std::to_string(cascadeIndex);
+        std::array<CascadedShadowMapsPassData, SHADOW_MAP_CASCADE_COUNT> cmsPassDatas{};
 
-            m_RenderGraph->AddPass(
-                passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
-                [&](RenderGraphResourceScheduler& scheduler)
+        m_RenderGraph->AddPass(
+            "CSMPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
+            [&](RenderGraphResourceScheduler& scheduler)
+            {
+                for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
                 {
-                    if (s_bComputeTightBounds)
+                    if (cascadeIndex == 0 && !s_bComputeTightBounds)
                     {
-                        cmsPassDatas[cascadeIndex].CSMDataBuffer = scheduler.ReadBuffer(
-                            ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
-                                                              EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT);
+                        scheduler.CreateBuffer(ResourceNames::CSMDataBuffer,
+                                               GfxBufferDescription(sizeof(Shaders::CascadedShadowMapsData),
+                                                                    sizeof(Shaders::CascadedShadowMapsData),
+                                                                    vk::BufferUsageFlagBits::eUniformBuffer,
+                                                                    EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
+                        cmsPassDatas[cascadeIndex].CSMDataBuffer =
+                            scheduler.WriteBuffer(ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
                     }
                     else
                     {
-                        if (cascadeIndex == 0)
-                        {
-                            scheduler.CreateBuffer(ResourceNames::CSMDataBuffer,
-                                                   GfxBufferDescription(sizeof(Shaders::CascadedShadowMapsData),
-                                                                        sizeof(Shaders::CascadedShadowMapsData),
-                                                                        vk::BufferUsageFlagBits::eUniformBuffer,
-                                                                        EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
-                            cmsPassDatas[cascadeIndex].CSMDataBuffer =
-                                scheduler.WriteBuffer(ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
-                        }
-                        else
-                        {
-                            cmsPassDatas[cascadeIndex].CSMDataBuffer = scheduler.ReadBuffer(
-                                ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
-                                                                  EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
-                        }
+                        cmsPassDatas[cascadeIndex].CSMDataBuffer =
+                            scheduler.ReadBuffer(ResourceNames::CSMDataBuffer,
+                                                 EResourceStateBits::RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT |
+                                                     (s_bComputeTightBounds ? EResourceStateBits::RESOURCE_STATE_STORAGE_BUFFER_BIT
+                                                                            : EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT));
                     }
 
                     if (cascadeIndex == 0)
                     {
                         scheduler.CreateTexture(
-                            tmpTextureName,
-                            GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(SHADOW_MAP_ATLAS_SIZE, SHADOW_MAP_ATLAS_SIZE, 1),
+                            ResourceNames::CSMShadowMapTexture,
+                            GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(SHADOW_MAP_CASCADE_SIZE, SHADOW_MAP_CASCADE_SIZE, 1),
                                                   vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment,
                                                   vk::SamplerCreateInfo()
                                                       .setAddressModeU(vk::SamplerAddressMode::eClampToBorder)
@@ -995,96 +798,70 @@ namespace Radiant
                                                       .setAddressModeW(vk::SamplerAddressMode::eClampToBorder)
                                                       .setMagFilter(vk::Filter::eNearest)
                                                       .setMinFilter(vk::Filter::eNearest)
-                                                      .setBorderColor(vk::BorderColor::eFloatOpaqueBlack)));
-
-                        scheduler.WriteDepthStencil(tmpTextureName, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                                    vk::AttachmentStoreOp::eStore,
-                                                    vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0));
-                    }
-                    else if (cascadeIndex == SHADOW_MAP_CASCADE_COUNT - 1)
-                    {
-
-                        const auto prevTmpTextureName = "CSMTexture" + std::to_string(cascadeIndex - 1);
-                        scheduler.WriteDepthStencil(
-                            prevTmpTextureName, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-                            vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0), vk::AttachmentLoadOp::eDontCare,
-                            vk::AttachmentStoreOp::eDontCare, ResourceNames::CSMShadowMapAtlasTexture);
-                    }
-                    else
-                    {
-                        const auto prevTmpTextureName = "CSMTexture" + std::to_string(cascadeIndex - 1);
-                        scheduler.WriteDepthStencil(prevTmpTextureName, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                                    vk::AttachmentStoreOp::eStore,
-                                                    vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0),
-                                                    vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare, tmpTextureName);
+                                                      .setBorderColor(vk::BorderColor::eFloatOpaqueBlack),
+                                                  SHADOW_MAP_CASCADE_COUNT));
                     }
 
-                    const glm::uvec2 csmTextureAtlasOffsets = Shaders::CalculateCSMTextureAtlasOffsets(cascadeIndex);
-                    const auto offset                       = vk::Offset2D().setX(csmTextureAtlasOffsets.x).setY(csmTextureAtlasOffsets.y);
+                    scheduler.WriteDepthStencil(ResourceNames::CSMShadowMapTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
+                                                vk::AttachmentStoreOp::eStore, vk::ClearDepthStencilValue().setDepth(0.0f).setStencil(0),
+                                                vk::AttachmentLoadOp::eNoneKHR, vk::AttachmentStoreOp::eNone, cascadeIndex);
+                }
 
-                    scheduler.SetViewportScissors(
-                        vk::Viewport()
-                            .setMinDepth(0.0f)
-                            .setMaxDepth(1.0f)
-                            .setWidth(SHADOW_MAP_CASCADE_SIZE)
-                            .setHeight(SHADOW_MAP_CASCADE_SIZE)
-                            .setX(offset.x)
-                            .setY(offset.y),
-                        vk::Rect2D()
-                            .setExtent(vk::Extent2D().setWidth(SHADOW_MAP_CASCADE_SIZE).setHeight(SHADOW_MAP_CASCADE_SIZE))
-                            .setOffset(offset));
-                },
-                [&, cascadeIndex](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+                scheduler.SetViewportScissors(
+                    vk::Viewport().setMinDepth(0.0f).setMaxDepth(1.0f).setWidth(SHADOW_MAP_CASCADE_SIZE).setHeight(SHADOW_MAP_CASCADE_SIZE),
+                    vk::Rect2D().setExtent(vk::Extent2D().setWidth(SHADOW_MAP_CASCADE_SIZE).setHeight(SHADOW_MAP_CASCADE_SIZE)));
+            },
+            [&](const RenderGraphResourceScheduler& scheduler, const vk::CommandBuffer& cmd)
+            {
+                if (!m_LightData->Sun.bCastShadows) return;
+
+                auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
+                pipelineStateCache.Bind(cmd, m_CSMPipeline.get());
+
+                auto& csmDataBuffer = scheduler.GetBuffer(cmsPassDatas[0].CSMDataBuffer);
+
+                if (!s_bComputeTightBounds)
                 {
-                    if (!m_LightData->Sun.bCastShadows) return;
+                    const auto csmShaderData =
+                        UpdateCSMData(glm::radians(m_MainCamera->GetZoom()), m_MainCamera->GetAspectRatio(), s_CascadeMinDistance,
+                                      s_CascadeMaxDistance, m_MainCamera->GetViewMatrix(), glm::normalize(m_LightData->Sun.Direction));
 
-                    auto& pipelineStateCache = m_GfxContext->GetPipelineStateCache();
-                    pipelineStateCache.Bind(cmd, m_CSMPipeline.get());
+                    csmDataBuffer->SetData(&csmShaderData, sizeof(csmShaderData));  // NOTE: will be used further in main pass
+                }
 
-                    auto& csmDataBuffer = scheduler.GetBuffer(cmsPassDatas[cascadeIndex].CSMDataBuffer);
-                    if (cascadeIndex == 0 && !s_bComputeTightBounds)
-                        csmDataBuffer->SetData(&csmShaderData, sizeof(csmShaderData));  // NOTE: will be used further in main pass
+                for (const auto& ro : m_DrawContext.RenderObjects)
+                {
+                    if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
 
-                    for (const auto& ro : m_DrawContext.RenderObjects)
+                    struct PushConstantBlock
                     {
-                        if (ro.AlphaMode != EAlphaMode::ALPHA_MODE_OPAQUE) continue;
+                        glm::vec3 scale{1.0f};
+                        glm::vec3 translation{0.0f};
+                        float4 orientation{1.0f};
+                        const Shaders::CascadedShadowMapsData* CSMData{nullptr};
+                        const VertexPosition* VtxPositions{nullptr};
+                    } pc = {};
+                    glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
+                    glm::vec3 decomposePlaceholder0{1.0f};
+                    glm::vec4 decomposePlaceholder1{1.0f};
+                    glm::decompose(ro.TRS * glm::rotate(glm::radians(s_MeshRotation.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                       glm::rotate(glm::radians(s_MeshRotation.z), glm::vec3(0.0f, 0.0f, 1.0f)),
+                                   pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
+                    pc.scale *= s_MeshScale;
+                    pc.translation += s_MeshTranslation;
+                    pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
 
-                        struct PushConstantBlock
-                        {
-                            glm::vec3 scale{1.0f};
-                            glm::vec3 translation{0.0f};
-                            float4 orientation{1.0f};
-                            u32 cascadeIndex;
-                            const Shaders::CascadedShadowMapsData* CSMData{nullptr};
-                            const VertexPosition* VtxPositions{nullptr};
-                        } pc = {};
-                        glm::quat q{1.0f, 0.0f, 0.0f, 0.0f};
-                        glm::vec3 decomposePlaceholder0{1.0f};
-                        glm::vec4 decomposePlaceholder1{1.0f};
-                        glm::decompose(ro.TRS * glm::rotate(glm::radians(s_MeshRotation.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
-                                           glm::rotate(glm::radians(s_MeshRotation.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
-                                           glm::rotate(glm::radians(s_MeshRotation.z), glm::vec3(0.0f, 0.0f, 1.0f)),
-                                       pc.scale, q, pc.translation, decomposePlaceholder0, decomposePlaceholder1);
-                        pc.translation += s_MeshTranslation;
-                        pc.scale *= s_MeshScale;
-                        pc.orientation = glm::vec4(q.w, q.x, q.y, q.z);
+                    pc.CSMData      = (const Shaders::CascadedShadowMapsData*)csmDataBuffer->GetBDA();
+                    pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
 
-                        pc.cascadeIndex = cascadeIndex;
-                        pc.CSMData      = (const Shaders::CascadedShadowMapsData*)csmDataBuffer->GetBDA();
-                        pc.VtxPositions = (const VertexPosition*)ro.VertexPositionBuffer->GetBDA();
-
-                        // Better to render shadows backface culled, but wont work on sprites/foliage that dont have front face.
-                        pipelineStateCache.Set(cmd, vk::CullModeFlagBits::eBack);
-                        //   pipelineStateCache.Set(cmd, ro.CullMode);
-                        pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
-
-                        cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
-                                                             vk::ShaderStageFlagBits::eAll, 0, pc);
-                        pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
-                        cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
-                    }
-                });
-        }
+                    pipelineStateCache.Set(cmd, ro.PrimitiveTopology);
+                    cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
+                                                         vk::ShaderStageFlagBits::eAll, 0, pc);
+                    pipelineStateCache.Bind(cmd, ro.IndexBuffer.get(), 0, ro.IndexType);
+                    cmd.drawIndexed(ro.IndexCount, 1, ro.FirstIndex, 0, 0);
+                }
+            });
 
         struct LightClustersBuildPassData
         {
@@ -1092,7 +869,7 @@ namespace Radiant
             RGResourceID LightClusterBuffer;
         } lcbPassData = {};
         m_RenderGraph->AddPass(
-            "LightClustersBuildPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+            "LightClustersBuildPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 constexpr u64 lcbCapacity = sizeof(AABB) * LIGHT_CLUSTERS_COUNT;
@@ -1138,7 +915,7 @@ namespace Radiant
             RGResourceID LightClusterDetectActiveBuffer;
         } lcdaPassData = {};
         m_RenderGraph->AddPass(
-            "LightClustersDetectActive", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+            "LightClustersDetectActive", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateBuffer(ResourceNames::LightClusterDetectActiveBuffer,
@@ -1197,7 +974,7 @@ namespace Radiant
             RGResourceID LightClusterDetectActiveBuffer;
         } lcaPassData = {};
         m_RenderGraph->AddPass(
-            "LightClustersAssignmentPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+            "LightClustersAssignmentPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateBuffer(ResourceNames::LightClusterListBuffer,
@@ -1282,7 +1059,7 @@ namespace Radiant
             RGResourceID SSSTexture;
         } sssPassData = {};
         m_RenderGraph->AddPass(
-            "ScreenSpaceShadowsPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+            "ScreenSpaceShadowsPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(
@@ -1343,8 +1120,13 @@ namespace Radiant
         {
             if (s_bSSAOComputeBased)
             {
+                const auto passType                = s_bAsyncComputeSSAO ? ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE
+                                                                         : ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL;
+                const u8 ssaoCommandQueueIndex     = 0;
+                const u8 ssaoBlurCommandQueueIndex = ssaoCommandQueueIndex;
+
                 m_RenderGraph->AddPass(
-                    "SSAOPassCompute", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    "SSAOPassCompute", passType,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         scheduler.CreateTexture(ResourceNames::SSAOTexture,
@@ -1394,10 +1176,11 @@ namespace Radiant
                         cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(),
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.dispatch(workGroupNum.x, workGroupNum.y, workGroupNum.z);
-                    });
+                    },
+                    ssaoCommandQueueIndex);
 
                 m_RenderGraph->AddPass(
-                    "SSAOBoxBlurPassCompute", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    "SSAOBoxBlurPassCompute", passType,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
@@ -1438,12 +1221,13 @@ namespace Radiant
                                                              vk::ShaderStageFlagBits::eAll, 0, pc);
                         cmd.dispatch(glm::ceil(m_ViewportExtent.width / (f32)SSAO_WG_SIZE_X),
                                      glm::ceil(m_ViewportExtent.height / (f32)SSAO_WG_SIZE_Y), 1);
-                    });
+                    },
+                    ssaoBlurCommandQueueIndex);
             }
             else
             {
                 m_RenderGraph->AddPass(
-                    "SSAOPassGraphics", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                    "SSAOPassGraphics", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         scheduler.CreateTexture(ResourceNames::SSAOTexture,
@@ -1493,7 +1277,7 @@ namespace Radiant
                     });
 
                 m_RenderGraph->AddPass(
-                    "SSAOBoxBlurPassGraphics", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                    "SSAOBoxBlurPassGraphics", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         scheduler.CreateTexture(ResourceNames::SSAOTextureBlurred,
@@ -1553,7 +1337,7 @@ namespace Radiant
             u32 SSSTextureID{0};
             float2 ScaleBias{0.0f, 0.0f};  // For clustered shading, x - scale, y - bias
             const Shaders::CascadedShadowMapsData* CSMData{nullptr};
-            u32 ShadowMapAtlasTextureID{0};
+            u32 CSMShadowMapTextureArray{0};
         };
 
         struct MainPassData
@@ -1562,16 +1346,15 @@ namespace Radiant
             RGResourceID CameraBuffer;
             RGResourceID LightBuffer;
             RGResourceID LightClusterListBuffer;
-            RGResourceID DebugDataBuffer;
             RGResourceID SSSTexture;
             RGResourceID SSAOTexture;
 
-            RGResourceID CSMShadowMapAtlasTexture;
+            RGResourceID CSMShadowMapTextureArray;
             RGResourceID CSMDataBuffer;
             RGResourceID MainPassShaderDataBuffer;
         } mainPassData = {};
         m_RenderGraph->AddPass(
-            "MainPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "MainPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(ResourceNames::GBufferAlbedo,
@@ -1580,8 +1363,7 @@ namespace Radiant
                                                               vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment));
 
                 scheduler.WriteRenderTarget(ResourceNames::GBufferAlbedo, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
-                                            vk::AttachmentStoreOp::eStore,
-                                            vk::ClearColorValue().setFloat32({s_SunColor.x, s_SunColor.y, s_SunColor.z, 1.0f}));
+                                            vk::AttachmentStoreOp::eStore, vk::ClearColorValue().setFloat32({1.0f, 1.0f, 1.0f, 1.0f}));
                 mainPassData.DepthTexture = scheduler.ReadTexture(ResourceNames::GBufferDepth, MipSet::FirstMip(),
                                                                   EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT);
 
@@ -1601,15 +1383,15 @@ namespace Radiant
                                        GfxBufferDescription(sizeof(MainPassShaderData), sizeof(MainPassShaderData),
                                                             vk::BufferUsageFlagBits::eUniformBuffer,
                                                             EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_RESIZABLE_BAR_BIT));
-                mainPassData.MainPassShaderDataBuffer = scheduler.WriteBuffer(
-                    ResourceNames::MainPassShaderDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT |
-                                                                 EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                mainPassData.MainPassShaderDataBuffer =
+                    scheduler.WriteBuffer(ResourceNames::MainPassShaderDataBuffer, EResourceStateBits::RESOURCE_STATE_UNIFORM_BUFFER_BIT);
 
                 mainPassData.CSMDataBuffer =
                     scheduler.ReadBuffer(ResourceNames::CSMDataBuffer, EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
-                mainPassData.CSMShadowMapAtlasTexture =
-                    scheduler.ReadTexture(ResourceNames::CSMShadowMapAtlasTexture, MipSet::FirstMip(),
-                                          EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
+                for (u32 cascadeIndex{}; cascadeIndex < SHADOW_MAP_CASCADE_COUNT; ++cascadeIndex)
+                    mainPassData.CSMShadowMapTextureArray =
+                        scheduler.ReadTexture(ResourceNames::CSMShadowMapTexture, MipSet::FirstMip(),
+                                              EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT, cascadeIndex);
 
                 // mainPassData.SSSTexture = scheduler.ReadTexture(ResourceNames::SSSTexture,
                 // EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
@@ -1635,8 +1417,8 @@ namespace Radiant
 
                 auto& mainPassShaderDataBuffer = scheduler.GetBuffer(mainPassData.MainPassShaderDataBuffer);
 
-                MainPassShaderData mpsData      = {};
-                mpsData.ShadowMapAtlasTextureID = scheduler.GetTexture(mainPassData.CSMShadowMapAtlasTexture)->GetBindlessTextureID();
+                MainPassShaderData mpsData       = {};
+                mpsData.CSMShadowMapTextureArray = scheduler.GetTexture(mainPassData.CSMShadowMapTextureArray)->GetBindlessTextureID();
                 mpsData.CSMData = (const Shaders::CascadedShadowMapsData*)scheduler.GetBuffer(mainPassData.CSMDataBuffer)->GetBDA();
                 mpsData.IrradianceMapTextureCubeID  = m_IrradianceCubemapTexture->GetBindlessTextureID();
                 mpsData.PrefilteredMapTextureCubeID = m_PrefilteredCubemapTexture->GetBindlessTextureID();
@@ -1757,7 +1539,7 @@ namespace Radiant
             if (s_bBloomComputeBased)
             {
                 m_RenderGraph->AddPass(
-                    passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    passName, ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&, i](RenderGraphResourceScheduler& scheduler)
                     {
                         if (i == 0)
@@ -1814,7 +1596,7 @@ namespace Radiant
             else
             {
                 m_RenderGraph->AddPass(
-                    passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                    passName, ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&, i](RenderGraphResourceScheduler& scheduler)
                     {
                         if (i == 0)
@@ -1898,7 +1680,7 @@ namespace Radiant
             if (s_bBloomComputeBased)
             {
                 m_RenderGraph->AddPass(
-                    passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    passName, ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         const std::string prevTextureName =
@@ -1906,7 +1688,7 @@ namespace Radiant
 
                         bubPassDatas[i].DstTexture =
                             scheduler.WriteTexture(prevTextureName, MipSet::Explicit(i - 1),
-                                                   EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT, textureName);
+                                                   EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT, 0, textureName);
 
                         bubPassDatas[i].SrcTexture = scheduler.ReadTexture(prevTextureName, MipSet::Explicit(i),
                                                                            EResourceStateBits::RESOURCE_STATE_COMPUTE_SHADER_RESOURCE_BIT);
@@ -1936,14 +1718,14 @@ namespace Radiant
             else
             {
                 m_RenderGraph->AddPass(
-                    passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                    passName, ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         const std::string prevTextureName =
                             (i == s_BloomMipCount - 1 ? "BloomDownsampleTexture" : "BloomUpsampleBlurTexture" + std::to_string(i));
                         const auto loadOp = i - 1 == 0 ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
                         scheduler.WriteRenderTarget(prevTextureName, MipSet::Explicit(i - 1), loadOp, vk::AttachmentStoreOp::eStore,
-                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}), textureName);
+                                                    vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f}), 0, textureName);
 
                         bubPassDatas[i].SrcTexture = scheduler.ReadTexture(prevTextureName, MipSet::Explicit(i),
                                                                            EResourceStateBits::RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT);
@@ -1980,7 +1762,7 @@ namespace Radiant
             RGResourceID MainPassTexture;
         } finalPassData = {};
         m_RenderGraph->AddPass(
-            "FinalPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+            "FinalPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
             [&](RenderGraphResourceScheduler& scheduler)
             {
                 scheduler.CreateTexture(
@@ -2018,19 +1800,11 @@ namespace Radiant
                 cmd.draw(3, 1, 0, 0);
             });
 
-        std::string finalPassAfterDebugTextureView = ResourceNames::FinalPassTexture;
-        {
-            std::vector<std::string> debugTextureViewNames;
-            debugTextureViewNames.emplace_back(ResourceNames::CSMShadowMapAtlasTexture);
-            finalPassAfterDebugTextureView =
-                m_DebugRenderer->DrawTextureView(m_ViewportExtent, m_RenderGraph, debugTextureViewNames, finalPassAfterDebugTextureView);
-        }
-
         m_ProfilerWindow.m_GPUGraph.LoadFrameData(m_GfxContext->GetLastFrameGPUProfilerData());
         m_ProfilerWindow.m_CPUGraph.LoadFrameData(m_GfxContext->GetLastFrameCPUProfilerData());
 
         m_UIRenderer->RenderFrame(
-            m_ViewportExtent, m_RenderGraph, finalPassAfterDebugTextureView,
+            m_ViewportExtent, m_RenderGraph, ResourceNames::FinalPassTexture,
             [&]()
             {
                 m_ProfilerWindow.Render();
@@ -2122,13 +1896,17 @@ namespace Radiant
                 ImGui::Checkbox("Bloom Use Compute", &s_bBloomComputeBased);
                 ImGui::Checkbox("Enable SSAO", &s_bEnableSSAO);
                 ImGui::Checkbox("SSAO Use Compute (Better Quality)", &s_bSSAOComputeBased);
+                ImGui::Checkbox("SSAO Use Async Compute (Run on a different HW queue)", &s_bAsyncComputeSSAO);
                 ImGui::Checkbox("Update Lights", &s_bUpdateLights);
 
+                ImGui::Separator();
                 if (ImGui::TreeNodeEx("Cascaded Shadow Maps", ImGuiTreeNodeFlags_Framed))
                 {
                     ImGui::Checkbox("Compute Tight Bounds (SDSM)", &s_bComputeTightBounds);
-                    ImGui::Checkbox("Stabilize Cascades", &s_bStabilizeCascades);
-                    ImGui::DragFloat("Cascade Split Delta", &s_CascadeSplitDelta, 0.001f, 0.0f, 1.0f);
+                    ImGui::Checkbox("Cascade Texel-Sized Incrementing", &s_bCascadeTexelSizedIncrements);
+                    ImGui::DragFloat("Cascade Split Delta", &s_CascadeSplitDelta, 0.001f, 0.001f, 0.999f);
+                    ImGui::DragFloat("Cascade Min Distance(zNear start)", &s_CascadeMinDistance, 0.001f, 0.0f);
+                    ImGui::DragFloat("Cascade Max Distance(zFar end)", &s_CascadeMaxDistance, 1.0f, 10.0f);
                     ImGui::TreePop();
                 }
 
@@ -2139,6 +1917,109 @@ namespace Radiant
         m_RenderGraph->Execute();
 
         m_RenderGraphStats = m_RenderGraph->GetStatistics();
+    }
+
+    /*
+        Calculate frustum split depths and matrices for the shadow map cascades
+        Based on https://johanmedestrom.wordpress.com/2016/03/18/opengl-cascaded-shadow-maps/
+    */
+    Shaders::CascadedShadowMapsData CombinedRenderer::UpdateCSMData(const f32 cameraFovY, const f32 cameraAR, const f32 zNear,
+                                                                    const f32 zFar, const glm::mat4& cameraView,
+                                                                    const glm::vec3& L) noexcept
+    {
+        Shaders::CascadedShadowMapsData csmData = {.MinMaxCascadeDistance = glm::vec2{zNear, zFar}};
+
+        // Calculate split depths based on view camera frustum
+        // Based on method presented in
+        // https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-10-parallel-split-shadow-maps-programmable-gpus
+        const f32 range = zFar - zNear;
+        const f32 ratio = zFar / zNear;
+        for (u32 i{}; i < SHADOW_MAP_CASCADE_COUNT; ++i)
+        {
+            const f32 p              = (i + 1) / static_cast<f32>(SHADOW_MAP_CASCADE_COUNT);
+            const f32 logPart        = zNear * glm::pow(ratio, p);
+            const f32 uniformPart    = zNear + range * p;
+            const f32 d              = uniformPart + s_CascadeSplitDelta * (logPart - uniformPart);
+            csmData.CascadeSplits[i] = (d - zNear) / range;
+        }
+
+        const auto shadowCameraProj      = glm::perspective(cameraFovY, cameraAR, zNear, zFar) * glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
+        const auto NDCToWorldSpaceMatrix = glm::inverse(shadowCameraProj * cameraView);
+        f32 lastSplitDist                = 0.0f;
+        for (u32 i{}; i < SHADOW_MAP_CASCADE_COUNT; ++i)
+        {
+            const f32 splitDist = csmData.CascadeSplits[i];
+
+            // Starting with vulkan NDC coords, ending with frustum world space.
+            std::array<glm::vec3, 8> frustumCornersWS = {
+                glm::vec3(-1.0f, 1.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f),    //
+                glm::vec3(1.0f, -1.0f, 0.0f), glm::vec3(-1.0f, -1.0f, 0.0f),  //
+                glm::vec3(-1.0f, 1.0f, 1.0f), glm::vec3(1.0f, 1.0f, 1.0f),    //
+                glm::vec3(1.0f, -1.0f, 1.0f), glm::vec3(-1.0f, -1.0f, 1.0f)   //
+            };
+
+            // Project frustum corners into world space.
+            for (u32 j{}; j < frustumCornersWS.size(); ++j)
+            {
+                const auto cornerWS = NDCToWorldSpaceMatrix * glm::vec4(frustumCornersWS[j], 1.0f);
+                frustumCornersWS[j] = cornerWS / cornerWS.w;
+            }
+
+            // Adjust frustum to current subfrustum.
+            for (u32 j{}; j < frustumCornersWS.size() / 2; ++j)
+            {
+                const auto cornerRay    = frustumCornersWS[j + 4] - frustumCornersWS[j];
+                frustumCornersWS[j + 4] = frustumCornersWS[j] + cornerRay * splitDist;
+                frustumCornersWS[j] += cornerRay * lastSplitDist;
+            }
+
+            // Get frustum center.
+            glm::vec3 frustumCenterWS{0.0f};
+            for (const auto& frustumCornerWS : frustumCornersWS)
+                frustumCenterWS += frustumCornerWS;
+
+            frustumCenterWS /= frustumCornersWS.size();
+
+            // Find the longest radius of the frustum.
+            f32 radius{std::numeric_limits<f32>::lowest()};
+            for (const auto& frustumCornerWS : frustumCornersWS)
+            {
+                const f32 diff = glm::length(frustumCornerWS - frustumCenterWS);
+                radius         = glm::max(radius, diff);
+            }
+            radius = glm::ceil(radius * 16.0f) / 16.0f;
+
+            const auto maxExtents = glm::vec3(radius);
+            const auto minExtents = -maxExtents;
+
+            const auto lightView = glm::lookAt(frustumCenterWS + L + glm::vec3(Shaders::s_KINDA_SMALL_NUMBER, 0.0f, 0.0f), frustumCenterWS,
+                                               glm::vec3(0.0f, 1.0f, 0.0f));
+            auto lightOrthoProj  = glm::ortho(minExtents.x, maxExtents.x, minExtents.y, maxExtents.y, maxExtents.z, minExtents.z) *
+                                  glm::scale(glm::vec3(1.0f, -1.0f, 1.0f));
+
+            // https://www.gamedev.net/forums/topic/591684-xna-40---shimmering-shadow-maps/
+            if (s_bCascadeTexelSizedIncrements)
+            {
+                // Shimmering fix: move in texel-sized increments.
+                // (finding out how much we need to move the orthographic matrix so it matches up with shadow map)
+                const auto shadowMatrix = lightOrthoProj * lightView;
+                glm::vec4 shadowOrigin  = shadowMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                shadowOrigin *= (f32)SHADOW_MAP_CASCADE_SIZE * 0.5f;
+
+                const auto roundedOrigin = glm::round(shadowOrigin);
+                glm::vec4 roundOffset    = roundedOrigin - shadowOrigin;
+                roundOffset              = roundOffset * 2.0f / (f32)SHADOW_MAP_CASCADE_SIZE;
+                roundOffset.z = roundOffset.w = 0.0f;
+
+                lightOrthoProj[3] += roundOffset;
+            }
+
+            lastSplitDist                   = splitDist;
+            csmData.ViewProjectionMatrix[i] = lightOrthoProj * lightView;
+            csmData.CascadeSplits[i]        = zNear + splitDist * range;
+        }
+
+        return csmData;
     }
 
 }  // namespace Radiant

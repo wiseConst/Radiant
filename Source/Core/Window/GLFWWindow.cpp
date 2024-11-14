@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GLFWWindow.hpp"
 
 #define GLFW_INCLUDE_NONE

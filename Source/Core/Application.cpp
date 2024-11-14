@@ -1,10 +1,10 @@
-#include <pch.hpp>
 #include "Application.hpp"
 
 #include <Render/Renderers/Combined/CombinedRenderer.hpp>
 #include <Render/Renderers/Particle/ParticleRenderer.hpp>
 #include <Render/Renderers/SSGI/SSGIRenderer.hpp>
 #include <Render/Renderers/AW2/AlanWake2Renderer.hpp>
+#include <Render/Renderers/Shadows/ShadowsRenderer.hpp>
 
 namespace Radiant
 {
@@ -20,10 +20,11 @@ namespace Radiant
 
         m_MainWindow = MakeUnique<GLFWWindow>(WindowDescription{.Name = m_Description.Name, .Extent = m_Description.WindowExtent});
 
-        m_Renderer = MakeUnique<CombinedRenderer>();
-        // m_Renderer = MakeUnique<AW2::AlanWake2Renderer>();
+        // m_Renderer = MakeUnique<CombinedRenderer>();
+        m_Renderer = MakeUnique<ShadowsRenderer>();
+        //  m_Renderer = MakeUnique<AW2::AlanWake2Renderer>();
         //  m_Renderer = MakeUnique<ParticleRenderer>();
-        //   m_Renderer = MakeUnique<SSGIRenderer>();
+        //  m_Renderer = MakeUnique<SSGIRenderer>();
     }
 
     void Application::Run() noexcept

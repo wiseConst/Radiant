@@ -6,7 +6,7 @@ namespace Radiant
 {
 
     static constexpr f32 s_MouseSensitivity = 15.f;
-    static constexpr f32 s_CameraSpeed      = 5.0f;
+    static constexpr f32 s_CameraSpeed      = 3.0f;
 
     class Camera final : private Uncopyable, private Unmovable
     {

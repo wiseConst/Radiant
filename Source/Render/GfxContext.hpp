@@ -174,43 +174,38 @@ namespace Radiant
                                       const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
         {
             const auto& logicalDevice = m_Device->GetLogicalDevice();
-            std::scoped_lock lock(m_Mtx);
-
+            GfxDevice::Queue* queue{nullptr};
             GfxImmediateExecuteContext context = {};
             switch (commandQueueType)
             {
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
                 {
+                    queue                    = (GfxDevice::Queue*)&m_Device->GetGeneralQueue();
                     context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL;
-                    context.CommandPool =
-                        logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
-                                                                   .setQueueFamilyIndex(m_Device->GetGeneralQueue().QueueFamilyIndex)
-                                                                   .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
-                    context.QueueIndex = 0;
+                    context.QueueIndex       = 0;
                     break;
                 }
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
                 {
+                    queue                    = (GfxDevice::Queue*)&m_Device->GetComputeQueue(queueIndex);
                     context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE;
-                    context.CommandPool      = logicalDevice->createCommandPoolUnique(
-                        vk::CommandPoolCreateInfo()
-                            .setQueueFamilyIndex(m_Device->GetComputeQueue(queueIndex).QueueFamilyIndex)
-                            .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
-                    context.QueueIndex = queueIndex;
+                    context.QueueIndex       = queueIndex;
                     break;
                 }
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
                 {
+                    queue                    = (GfxDevice::Queue*)&m_Device->GetTransferQueue(queueIndex);
                     context.CommandQueueType = ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER;
-                    context.CommandPool      = logicalDevice->createCommandPoolUnique(
-                        vk::CommandPoolCreateInfo()
-                            .setQueueFamilyIndex(m_Device->GetTransferQueue(queueIndex).QueueFamilyIndex)
-                            .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
-                    context.QueueIndex = queueIndex;
+                    context.QueueIndex       = queueIndex;
                     break;
                 }
-                default: RDNT_ASSERT(false, "Unknown command buffer type!");
             }
+            RDNT_ASSERT(queue, "Failed to retreive queue!");
+            std::scoped_lock lock(queue->QueueMutex);  // Synchronizing access to single queue
+
+            context.CommandPool = logicalDevice->createCommandPoolUnique(vk::CommandPoolCreateInfo()
+                                                                             .setQueueFamilyIndex(queue->QueueFamilyIndex)
+                                                                             .setFlags(vk::CommandPoolCreateFlagBits::eTransient));
 
             context.CommandBuffer = logicalDevice
                                         ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
@@ -218,79 +213,40 @@ namespace Radiant
                                                                      .setLevel(commandBufferLevel)
                                                                      .setCommandBufferCount(1))
                                         .back();
+
             return context;
         }
 
         void SubmitImmediateExecuteContext(const GfxImmediateExecuteContext& ieContext) const noexcept
         {
-            vk::Queue queue{};
+            GfxDevice::Queue* queue{nullptr};
             switch (ieContext.CommandQueueType)
             {
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
                 {
-                    queue = m_Device->GetGeneralQueue().Handle;
+                    queue = (GfxDevice::Queue*)&m_Device->GetGeneralQueue();
                     break;
                 }
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
                 {
-                    queue = m_Device->GetComputeQueue(ieContext.QueueIndex).Handle;
+                    queue = (GfxDevice::Queue*)&m_Device->GetComputeQueue(ieContext.QueueIndex);
                     break;
                 }
                 case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
                 {
-                    queue = m_Device->GetTransferQueue(ieContext.QueueIndex).Handle;
+                    queue = (GfxDevice::Queue*)&m_Device->GetTransferQueue(ieContext.QueueIndex);
                     break;
                 }
-                default: RDNT_ASSERT(false, "Unknown command buffer type!");
             }
+            RDNT_ASSERT(queue, "Failed to retreive queue!");
+            std::scoped_lock lock(queue->QueueMutex);  // Synchronizing access to single queue
 
-            std::scoped_lock lock(m_Mtx);  // Synchronizing access to single queue
-            queue.submit(vk::SubmitInfo().setCommandBuffers(ieContext.CommandBuffer));
-            queue.waitIdle();
-        }
+            // Creating temporary fence to avoid stalling the whole command queue.
+            auto waitFence = m_Device->GetLogicalDevice()->createFenceUnique(vk::FenceCreateInfo());
+            queue->Handle.submit(vk::SubmitInfo().setCommandBuffers(ieContext.CommandBuffer), *waitFence);
 
-        NODISCARD std::tuple<vk::UniqueCommandBuffer, vk::Queue> AllocateSingleUseCommandBufferWithQueue(
-            const ECommandQueueType commandQueueType,
-            const vk::CommandBufferLevel commandBufferLevel = vk::CommandBufferLevel::ePrimary) const noexcept
-        {
-            std::scoped_lock lock(m_Mtx);
-            switch (commandQueueType)
-            {
-                case ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL:
-                {
-                    return {std::move(m_Device->GetLogicalDevice()
-                                          ->allocateCommandBuffersUnique(
-                                              vk::CommandBufferAllocateInfo()
-                                                  .setCommandBufferCount(1)
-                                                  .setLevel(commandBufferLevel)
-                                                  .setCommandPool(*m_FrameData[m_CurrentFrameIndex].GeneralCommandPool))
-                                          .back()),
-                            m_Device->GetGeneralQueue().Handle};
-                }
-                case ECommandQueueType::COMMAND_QUEUE_TYPE_ASYNC_COMPUTE:
-                {
-                    return {std::move(m_Device->GetLogicalDevice()
-                                          ->allocateCommandBuffersUnique(
-                                              vk::CommandBufferAllocateInfo()
-                                                  .setCommandBufferCount(1)
-                                                  .setLevel(commandBufferLevel)
-                                                  .setCommandPool(*m_FrameData[m_CurrentFrameIndex].AsyncComputeCommandPool))
-                                          .back()),
-                            m_Device->GetComputeQueue().Handle};
-                }
-                case ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER:
-                {
-                    return {std::move(m_Device->GetLogicalDevice()
-                                          ->allocateCommandBuffersUnique(
-                                              vk::CommandBufferAllocateInfo()
-                                                  .setCommandBufferCount(1)
-                                                  .setLevel(commandBufferLevel)
-                                                  .setCommandPool(*m_FrameData[m_CurrentFrameIndex].DedicatedTransferCommandPool))
-                                          .back()),
-                            m_Device->GetTransferQueue().Handle};
-                }
-                default: RDNT_ASSERT(false, "Unknown command buffer type!");
-            }
+            RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*waitFence, vk::True, UINT64_MAX) == vk::Result::eSuccess, "{}",
+                        __FUNCTION__);
         }
 
         NODISCARD FORCEINLINE auto& GetPipelineStateCache() noexcept { return m_PipelineStateCache; }
@@ -300,8 +256,6 @@ namespace Radiant
             RDNT_ASSERT(s_Instance, "GfxContext instance is invalid!");
             return *s_Instance;
         }
-
-        NODISCARD FORCEINLINE auto& GetMutex() noexcept { return m_Mtx; }
 
         NODISCARD FORCEINLINE const auto GetLastFrameCPUProfilerData() const noexcept
         {
@@ -314,7 +268,6 @@ namespace Radiant
         }
 
       private:
-        mutable std::mutex m_Mtx{};
         static inline GfxContext* s_Instance{nullptr};  // NOTE: Used only for safely pushing objects through device into deletion queue.
         vk::UniqueInstance m_Instance{};
         vk::UniqueDebugUtilsMessengerEXT m_DebugUtilsMessenger{};
@@ -333,11 +286,20 @@ namespace Radiant
             mutable std::vector<ProfilerTask> GPUProfilerData;
             mutable std::vector<ProfilerTask> CPUProfilerData;
 
-            vk::UniqueCommandPool GeneralCommandPool{};
-            vk::CommandBuffer GeneralCommandBuffer{};
+            vk::UniqueCommandPool GeneralCommandPoolVK{};
+            //       Pool<vk::CommandBuffer> GeneralCommandPool{};
+            //       std::optional<u8> LastUsedGeneralCommandBuffer{std::nullopt};  // Stores index inside pool, u8 is enough.
 
-            vk::UniqueCommandPool AsyncComputeCommandPool{};
-            vk::UniqueCommandPool DedicatedTransferCommandPool{};
+            vk::CommandBuffer GeneralCommandBuffer{};  // Latest submitted cmdbuf, used in Present.
+
+            vk::UniqueCommandPool AsyncComputeCommandPoolVK{};
+            Pool<vk::CommandBuffer> AsyncComputeCommandPool{};
+            std::optional<u8> LastUsedAsyncComputeCommandBuffer{
+                std::nullopt};  // Stores index inside pool, u8 is enough, no fucking buddy gonna submit >256 cmd buffs omg
+
+            vk::UniqueCommandPool DedicatedTransferCommandPoolVK{};
+            Pool<vk::CommandBuffer> DedicatedTransferCommandPool{};
+            std::optional<u8> LastUsedDedicatedTransferCommandBuffer{std::nullopt};  // Stores index inside pool, u8 is enough.
 
             vk::UniqueFence RenderFinishedFence{};
             vk::UniqueSemaphore ImageAvailableSemaphore{};

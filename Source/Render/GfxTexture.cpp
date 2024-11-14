@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GfxTexture.hpp"
 
 #include <Render/GfxContext.hpp>
@@ -123,7 +122,7 @@ namespace Radiant
             else
                 LOG_INFO("[TextureCompressor]: No CUDA for you. AMD card or old drivers?");
 
-            static constexpr u64 batchSizeLimitBytes = 64 * 1024 * 1024;  // 64 MB
+            static constexpr u64 batchSizeLimitBytes = 128 * 1024 * 1024;  // 128 MB
             u64 currentBatchSize                     = 0;
             u32 currentBatchCount{};
 
@@ -425,6 +424,14 @@ namespace Radiant
         const bool bDontTouchSampledImageDescriptors =
             m_Description.CreateFlags & EResourceCreateBits::RESOURCE_CREATE_DONT_TOUCH_SAMPLED_IMAGES_BIT;
 
+        vk::ImageAspectFlags aspectMask{};
+        if (IsDepthFormat(m_Description.Format))
+            aspectMask = vk::ImageAspectFlagBits::eDepth;
+        else
+            aspectMask = vk::ImageAspectFlagBits::eColor;
+
+        if (IsStencilFormat(m_Description.Format)) aspectMask |= vk::ImageAspectFlagBits::eStencil;
+
         m_MipChain.resize(bExposeMips ? mipLevelCount : 1);
         for (u32 baseMipLevel{}; baseMipLevel < m_MipChain.size(); ++baseMipLevel)
         {
@@ -443,8 +450,7 @@ namespace Radiant
                                      ? vk::ImageViewType::e2D
                                      : (m_Description.LayerCount == 6 ? vk::ImageViewType::eCube : vk::ImageViewType::e2DArray))
                     .setSubresourceRange(vk::ImageSubresourceRange()
-                                             .setAspectMask(IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth
-                                                                                                : vk::ImageAspectFlagBits::eColor)
+                                             .setAspectMask(aspectMask)
                                              .setBaseArrayLayer(0)
                                              .setBaseMipLevel(baseMipLevel)
                                              .setLayerCount(m_Description.LayerCount)
@@ -462,8 +468,7 @@ namespace Radiant
                                                  .setBaseMipLevel(baseMipLevel)
                                                  .setLevelCount(currentMipCount)
                                                  .setLayerCount(m_Description.LayerCount)
-                                                 .setAspectMask(IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth
-                                                                                                    : vk::ImageAspectFlagBits::eColor))
+                                                 .setAspectMask(aspectMask))
                         .setOldLayout(vk::ImageLayout::eUndefined)
                         .setSrcAccessMask(vk::AccessFlagBits2::eNone)
                         .setSrcStageMask(vk::PipelineStageFlagBits2::eNone)
@@ -536,7 +541,14 @@ namespace Radiant
                                                          vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst),
                     "Texture image format doesn't support linear blitting!");
 
-        const auto aspectMask = IsDepthFormat(m_Description.Format) ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+        vk::ImageAspectFlags aspectMask{};
+        if (IsDepthFormat(m_Description.Format))
+            aspectMask = vk::ImageAspectFlagBits::eDepth;
+        else
+            aspectMask = vk::ImageAspectFlagBits::eColor;
+
+        if (IsStencilFormat(m_Description.Format)) aspectMask |= vk::ImageAspectFlagBits::eStencil;
+
         auto imageMemoryBarrier =
             vk::ImageMemoryBarrier2().setImage(*m_Image).setSubresourceRange(vk::ImageSubresourceRange()
                                                                                  .setBaseArrayLayer(0)

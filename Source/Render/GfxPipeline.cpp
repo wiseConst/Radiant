@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GfxPipeline.hpp"
 
 #include <Core/Application.hpp>

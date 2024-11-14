@@ -42,12 +42,30 @@ namespace Radiant
         std::optional<MipVariant> Combination{std::nullopt};
     };
 
-    // RenderGraphPass
-    enum class ERenderGraphPassType : u8
+    struct RenderGraphDetectedQueue
     {
-        RENDER_GRAPH_PASS_TYPE_GRAPHICS,
-        RENDER_GRAPH_PASS_TYPE_COMPUTE,
-        RENDER_GRAPH_PASS_TYPE_TRANSFER
+        RenderGraphDetectedQueue(const ECommandQueueType commandQueueType, const u8 commandQueueIndex) noexcept
+            : CommandQueueType(commandQueueType), CommandQueueIndex(commandQueueIndex)
+        {
+        }
+        RenderGraphDetectedQueue() noexcept = default;
+
+        ECommandQueueType CommandQueueType{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL};
+        u8 CommandQueueIndex{0};
+
+        FORCEINLINE auto IsCompetent() const noexcept { return CommandQueueType == ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL; }
+        FORCEINLINE bool operator==(const RenderGraphDetectedQueue& other) const noexcept
+        {
+            return std::tie(CommandQueueType, CommandQueueIndex) == std::tie(other.CommandQueueType, other.CommandQueueIndex);
+        }
+    };
+
+    struct RenderGraphDetectedQueueEqual
+    {
+        FORCEINLINE bool operator()(const RenderGraphDetectedQueue& lhs, const RenderGraphDetectedQueue& rhs) const noexcept
+        {
+            return lhs == rhs;
+        }
     };
 
     using RenderGraphSetupFunc   = std::function<void(RenderGraphResourceScheduler&)>;
@@ -76,21 +94,46 @@ namespace Radiant
 
     struct RenderGraphSubresourceID
     {
-        RenderGraphSubresourceID(const std::string& resourceName, const RGResourceID& resourceID, const u32 subresourceIndex) noexcept
-            : ResourceName(resourceName), ResourceID(resourceID), SubresourceIndex(subresourceIndex)
+        RenderGraphSubresourceID(const std::string& resourceName, const RGResourceID& resourceID, const u16 resourceMipIndex,
+                                 const u16 resourceLayerIndex) noexcept
+            : ResourceName(resourceName), ResourceID(resourceID), ResourceMipIndex(resourceMipIndex), ResourceLayerIndex(resourceLayerIndex)
         {
         }
         ~RenderGraphSubresourceID() noexcept = default;
 
         FORCEINLINE bool operator==(const RenderGraphSubresourceID& other) const noexcept
         {
-            return std::tie(ResourceName, ResourceID, SubresourceIndex) ==
-                   std::tie(other.ResourceName, other.ResourceID, other.SubresourceIndex);
+            return std::tie(ResourceName, ResourceID, ResourceMipIndex, ResourceLayerIndex) ==
+                   std::tie(other.ResourceName, other.ResourceID, other.ResourceMipIndex, other.ResourceLayerIndex);
         }
 
         std::string ResourceName{s_DEFAULT_STRING};
         RGResourceID ResourceID{};
-        u32 SubresourceIndex{0};
+        u16 ResourceMipIndex{};  // Up to 65k resolution images.
+        // NOTE: In future if I'll need case of writing into multiple layers of texture, I'll add kind of LayerSet.
+        u16 ResourceLayerIndex{};  // Up to 65k layers. (actual HW limit is 2048 on RTX 4090)
     };
 
 }  // namespace Radiant
+
+template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphSubresourceID>
+{
+    using is_avalanching = void;
+
+    [[nodiscard]] auto operator()(const Radiant::RenderGraphSubresourceID& x) const noexcept -> std::uint64_t
+    {
+        return detail::wyhash::hash(x.ResourceID) + detail::wyhash::hash(x.ResourceLayerIndex) + detail::wyhash::hash(x.ResourceMipIndex);
+    }
+};
+
+template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphDetectedQueue>
+{
+    using is_avalanching = void;
+
+    [[nodiscard]] auto operator()(const Radiant::RenderGraphDetectedQueue& x) const noexcept -> std::uint64_t
+    {
+        const auto commandQueueTypeHash = detail::wyhash::hash((std::uint64_t)x.CommandQueueType);
+        const auto commandQueueIndex    = detail::wyhash::hash(x.CommandQueueIndex);
+        return detail::wyhash::hash(commandQueueTypeHash + commandQueueIndex);
+    }
+};

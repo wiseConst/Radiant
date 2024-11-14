@@ -12,13 +12,13 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
 
-if (MSVC)
-    set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+# To fix fmt encodings issue.
+add_compile_options(/utf-8)
 
-    # Multithreaded project compilation using MSVC
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
-endif()
+# Multithreaded project compilation using MSVC
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
 
 # Set the output directory for executables based on configuration type
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Binaries/Debug)
@@ -302,19 +302,22 @@ set_target_properties(unordered_dense PROPERTIES FOLDER "ThirdParty")
 message(STATUS "Looking for openmp...")
 find_package(OpenMP REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenMP::OpenMP_CXX)
-if (OpenMP_CXX_FOUND)
-    if (MSVC)
+if(OpenMP_CXX_FOUND)
+    if(MSVC)
         set(OpenMP_CXX_FLAGS "/openmp")
-    else ()
+    else()
         set(OpenMP_CXX_FLAGS "-fopenmp")
-    endif ()
+    endif()
 
     target_compile_options(${PROJECT_NAME} PRIVATE ${OpenMP_CXX_FLAGS})
-endif ()
+endif()
 
 add_compile_options($<$<CONFIG:Debug>:-Og>)
 add_compile_options($<$<CONFIG:Release>:-O3 -lto>)
-
-set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
 add_compile_options(-H) # Print all files that will be precompiled
 add_compile_options(-ftime-report) # Print overall stats
+
+if(MSVC)
+    #target_compile_options(${PROJECT_NAME} PRIVATE /LTCG)
+    target_link_options(${PROJECT_NAME} PRIVATE /LTCG /INCREMENTAL)
+endif()

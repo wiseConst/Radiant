@@ -17,12 +17,6 @@ float2 SampleSphericalMap(const float3 v)
 float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
     const float2 uv = SampleSphericalMap(normalize(fsInput.LocalPos));
-
-    // Tonemapping to reduce abnormal high sun values, but this shouldn't be a solution,
-    // since I tonemap my final image in the very end, and this gives not enough perception of environment,
-    // because instead of sampling HDR values in PBR shader we're sampling LDR values, physically-based things going off there.
-    // http://disq.us/p/2j82n9x
-    // const float3 outColor = Shaders::TonemapReinhard(Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(uv).rgb);
     const float3 outColor = Shaders::Texture_Heap[u_PC.SrcTextureID].Sample(uv).rgb;
 
     return float4(outColor, 1.0f);

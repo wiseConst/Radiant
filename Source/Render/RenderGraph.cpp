@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "RenderGraph.hpp"
 
 // NOTE: Only for RenderGraphResourcePool::UI_ShowResourceUsage()
@@ -10,8 +9,8 @@ template <> struct ankerl::unordered_dense::hash<vk::MemoryBarrier2>
 
     [[nodiscard]] auto operator()(const vk::MemoryBarrier2& x) const noexcept -> std::uint64_t
     {
-        return detail::wyhash::hash(static_cast<std::uint64_t>(x.srcAccessMask) + static_cast<std::uint64_t>(x.srcStageMask) +
-                                    static_cast<std::uint64_t>(x.dstAccessMask) + static_cast<std::uint64_t>(x.dstStageMask));
+        return detail::wyhash::hash((std::uint64_t)x.srcAccessMask) + detail::wyhash::hash((std::uint64_t)x.srcStageMask) +
+               detail::wyhash::hash((std::uint64_t)x.dstAccessMask) + detail::wyhash::hash((std::uint64_t)x.dstStageMask);
     }
 };
 
@@ -200,6 +199,11 @@ namespace Radiant
                 dstAccessMask |= vk::AccessFlagBits2::eShaderWrite;
             }
 
+            // TODO:
+            // Ensure that the stage masks are valid if no stages were determined.
+            //     if (srcStageMask == vk::PipelineStageFlags2(0)) srcStageMask |= vk::PipelineStageFlagBits2::eTopOfPipe;
+            //     if (dstStageMask == vk::PipelineStageFlags2(0)) dstStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
+
             // NOTE: Read-To-Read don't need any sync.
             const bool bIsAnyWriteOpPresent =
                 /*src*/ (srcAccessMask & vk::AccessFlagBits2::eShaderWrite) || (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
@@ -233,7 +237,7 @@ namespace Radiant
         static void FillImageBarrierIfNeeded(UnorderedSet<vk::MemoryBarrier2>& memoryBarriers,
                                              std::vector<vk::ImageMemoryBarrier2>& imageMemoryBarriers, const Unique<GfxTexture>& texture,
                                              const ResourceStateFlags currentState, const ResourceStateFlags nextState,
-                                             vk::ImageLayout& outNextLayout, const u32 subresourceIndex) noexcept
+                                             vk::ImageLayout& outNextLayout, const u16 layerIndex, const u16 mipIndex) noexcept
         {
             constexpr auto bestDepthStencilState =
                 EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT | EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT;
@@ -449,16 +453,25 @@ namespace Radiant
                 dstStageMask |= vk::PipelineStageFlagBits2::eAllTransfer;
             }
 
+            // TODO:
+            // Ensure that the stage masks are valid if no stages were determined.
+            //     if (srcStageMask == vk::PipelineStageFlags2(0)) srcStageMask |= vk::PipelineStageFlagBits2::eTopOfPipe;
+            //     if (dstStageMask == vk::PipelineStageFlags2(0)) dstStageMask |= vk::PipelineStageFlagBits2::eBottomOfPipe;
+
             if (oldLayout == outNextLayout && oldLayout == vk::ImageLayout::eUndefined || outNextLayout == vk::ImageLayout::eUndefined)
                 RDNT_ASSERT(false, "Failed to determine image barrier!");
 
             // NOTE: Read-To-Read don't need any sync.
             const bool bIsAnyWriteOpPresent =
-                /*src*/ (srcAccessMask & vk::AccessFlagBits2::eShaderWrite) || (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                /*src*/ (srcAccessMask & vk::AccessFlagBits2::eColorAttachmentWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eDepthStencilAttachmentWrite) ||
+                (srcAccessMask & vk::AccessFlagBits2::eShaderWrite) || (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
                 (srcAccessMask & vk::AccessFlagBits2::eHostWrite) || (srcAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
                 (srcAccessMask & vk::AccessFlagBits2::eTransferWrite) || (srcAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
                 (srcAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR) ||
-                /*dst*/ (dstAccessMask & vk::AccessFlagBits2::eShaderWrite) || (dstAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
+                /*dst*/ (dstAccessMask & vk::AccessFlagBits2::eColorAttachmentWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eDepthStencilAttachmentWrite) ||
+                (dstAccessMask & vk::AccessFlagBits2::eShaderWrite) || (dstAccessMask & vk::AccessFlagBits2::eTransferWrite) ||
                 (dstAccessMask & vk::AccessFlagBits2::eHostWrite) || (dstAccessMask & vk::AccessFlagBits2::eMemoryWrite) ||
                 (dstAccessMask & vk::AccessFlagBits2::eShaderStorageWrite) ||
                 (dstAccessMask & vk::AccessFlagBits2::eAccelerationStructureWriteKHR);
@@ -478,24 +491,30 @@ namespace Radiant
                     imageMemoryBarriers.emplace_back(srcStageMask, srcAccessMask, dstStageMask, dstAccessMask, oldLayout, outNextLayout,
                                                      vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, *texture);
 
+                vk::ImageAspectFlags aspectMask{};
+                if (texture->IsDepthFormat(texture->GetDescription().Format))
+                    aspectMask = vk::ImageAspectFlagBits::eDepth;
+                else
+                    aspectMask = vk::ImageAspectFlagBits::eColor;
+
+                if (texture->IsStencilFormat(texture->GetDescription().Format)) aspectMask |= vk::ImageAspectFlagBits::eStencil;
+
                 imageMemoryBarrier.setSubresourceRange(vk::ImageSubresourceRange()
-                                                           .setBaseArrayLayer(0)
+                                                           .setBaseArrayLayer(layerIndex)
                                                            .setLayerCount(1)
-                                                           .setAspectMask(texture->IsDepthFormat(texture->GetDescription().Format)
-                                                                              ? vk::ImageAspectFlagBits::eDepth
-                                                                              : vk::ImageAspectFlagBits::eColor)
-                                                           .setBaseMipLevel(subresourceIndex)
+                                                           .setAspectMask(aspectMask)
+                                                           .setBaseMipLevel(mipIndex)
                                                            .setLevelCount(1));
             }
         }
 
     }  // namespace RenderGraphUtils
 
-    void RenderGraph::AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
+    void RenderGraph::AddPass(const std::string_view& name, const ECommandQueueType commandQueueType, RenderGraphSetupFunc&& setupFunc,
                               RenderGraphExecuteFunc&& executeFunc, const u8 commandQueueIndex) noexcept
     {
-        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<u32>(m_Passes.size()), commandQueueIndex, name, passType,
-                                                                       std::forward<RenderGraphSetupFunc>(setupFunc),
+        auto& pass = m_Passes.emplace_back(MakeUnique<RenderGraphPass>(static_cast<u32>(m_Passes.size()), name, commandQueueType,
+                                                                       commandQueueIndex, std::forward<RenderGraphSetupFunc>(setupFunc),
                                                                        std::forward<RenderGraphExecuteFunc>(executeFunc)));
         RenderGraphResourceScheduler scheduler(*this, *pass);
         pass->Setup(scheduler);
@@ -511,10 +530,12 @@ namespace Radiant
         BuildAdjacencyLists();
         TopologicalSort();
         BuildDependencyLevels();
+        FinalizeDependencyLevels();
+        CullRedundantSynchronizations();
 
         GraphvizDump();
 
-        m_Stats.BuildTime = std::chrono::duration<f32, std::chrono::milliseconds::period>(Timer::Now() - buildBeginTime).count();
+        m_Stats.BuildTime = Timer::GetElapsedSecondsFromNow(buildBeginTime) * 1000.0f;
     }
 
     void RenderGraph::BuildAdjacencyLists() noexcept
@@ -528,28 +549,43 @@ namespace Radiant
                 // Skip self.
                 if (writePass->m_ID == readPass->m_ID) continue;
 
+                const bool bAreQueuesDifferent = writePass->m_DetectedQueue != readPass->m_DetectedQueue;
+
                 bool bAnyDependencyFound = false;
                 for (const auto& subresourceID : writePass->m_TextureWrites)
                 {
-                    bAnyDependencyFound = std::find(readPass->m_TextureReads.cbegin(), readPass->m_TextureReads.cend(), subresourceID) !=
-                                          readPass->m_TextureReads.cend();
+                    bAnyDependencyFound = std::ranges::find(readPass->m_TextureReads, subresourceID) != readPass->m_TextureReads.end();
 
-                    if (bAnyDependencyFound) break;
+                    if (bAnyDependencyFound)
+                    {
+                        m_AdjacencyLists[writePass->m_ID].emplace_back(readPass->m_ID);
+
+                        if (bAreQueuesDifferent)
+                        {
+                            readPass->m_PassesToSyncWithOnDifferentQueues.emplace(writePass->m_ID);
+                            writePass->m_bSignalRequired = true;
+                        }
+                        break;
+                    }
                 }
-                if (bAnyDependencyFound)
-                {
-                    m_AdjacencyLists[writePass->m_ID].emplace_back(readPass->m_ID);
-                    continue;
-                }
+                if (bAnyDependencyFound) continue;
 
                 for (const auto& subresourceID : writePass->m_BufferWrites)
                 {
-                    bAnyDependencyFound = std::find(readPass->m_BufferReads.cbegin(), readPass->m_BufferReads.cend(), subresourceID) !=
-                                          readPass->m_BufferReads.cend();
+                    bAnyDependencyFound = std::ranges::find(readPass->m_BufferReads, subresourceID) != readPass->m_BufferReads.end();
 
-                    if (bAnyDependencyFound) break;
+                    if (bAnyDependencyFound)
+                    {
+                        m_AdjacencyLists[writePass->m_ID].emplace_back(readPass->m_ID);
+
+                        if (bAreQueuesDifferent)
+                        {
+                            readPass->m_PassesToSyncWithOnDifferentQueues.emplace(writePass->m_ID);
+                            writePass->m_bSignalRequired = true;
+                        }
+                        break;
+                    }
                 }
-                if (bAnyDependencyFound) m_AdjacencyLists[writePass->m_ID].emplace_back(readPass->m_ID);
             }
             m_AdjacencyLists[writePass->m_ID].shrink_to_fit();
         }
@@ -606,19 +642,208 @@ namespace Radiant
             }
         }
 
+        m_DependencyLevels.resize(dependencyLevelCount, *this);
+
         // 2. Fill dependency levels.
         // Dispatch nodes to corresponding dependency levels.
         // Iterate through unordered nodes because adjacency lists contain indices to
         // initial unordered list of nodes and longest distances also correspond to them.
-        m_DependencyLevels.resize(dependencyLevelCount, *this);
-        for (u32 passIndex{0}; passIndex < m_Passes.size(); ++passIndex)
+        for (u32 nodeIndex{}; nodeIndex < m_TopologicallySortedPassesID.size(); ++nodeIndex)
         {
-            const auto levelIndex        = longestPassDistances[passIndex];
+            auto& pass                   = m_Passes[m_TopologicallySortedPassesID[nodeIndex]];
+            const auto levelIndex        = longestPassDistances[pass->m_ID];
             auto& dependencyLevel        = m_DependencyLevels[levelIndex];
             dependencyLevel.m_LevelIndex = levelIndex;
-            dependencyLevel.AddPass(m_Passes[passIndex].get());
+            dependencyLevel.AddPass(pass.get());
 
-            m_Passes[passIndex]->m_DependencyLevelIndex = levelIndex;
+            pass->m_DependencyLevelIndex = levelIndex;
+        }
+    }
+
+    void RenderGraph::FinalizeDependencyLevels() noexcept
+    {
+        u32 globalExecutionIndex{};
+
+        for (auto& dependencyLevel : m_DependencyLevels)
+        {
+            u32 localExecutionIndex{};
+            for (auto& pass : dependencyLevel.m_Passes)
+            {
+                pass->m_LocalToDependencyLevelExecutionIndex = localExecutionIndex;
+                pass->m_GlobalExecutionIndex                 = globalExecutionIndex;
+                pass->m_LocalToQueueExecutionIndex           = m_QueueNodeCounters[pass->m_DetectedQueue]++;
+
+                ++globalExecutionIndex;
+                ++localExecutionIndex;
+            }
+        }
+    }
+
+    void RenderGraph::CullRedundantSynchronizations() noexcept
+    {
+        // Initialize synchronization index sets.
+        for (auto& pass : m_Passes)
+        {
+            for (const auto& [detectedQueue, _] : m_QueueNodeCounters)
+                pass->m_SynchronizationIndexSet[detectedQueue] = std::numeric_limits<u32>::max();
+        }
+
+        for (auto& dependencyLevel : m_DependencyLevels)
+        {
+            // First pass: find closest pass to sync with, compute initial SSIS (sufficient synchronization index set).
+            for (auto& pass : dependencyLevel.m_Passes)
+            {
+                const auto currentPassDetectedQueue = pass->m_DetectedQueue;
+
+                UnorderedMap<RenderGraphDetectedQueue, u32> closestPassesToSyncWithOnDifferentQueues;
+                for (const auto& [detectedQueue, _] : m_QueueNodeCounters)
+                    closestPassesToSyncWithOnDifferentQueues[detectedQueue] = std::numeric_limits<u32>::max();
+
+                // Find closest dependencies from other queues for the current pass.
+                for (const auto dependencyPassID : pass->m_PassesToSyncWithOnDifferentQueues)
+                {
+                    const auto& dependencyPass              = m_Passes[dependencyPassID];
+                    const auto& dependencyPassDetectedQueue = dependencyPass->m_DetectedQueue;
+
+                    const auto closestPassID = closestPassesToSyncWithOnDifferentQueues[dependencyPassDetectedQueue];
+                    if (closestPassID == std::numeric_limits<u32>::max())
+                        closestPassesToSyncWithOnDifferentQueues[dependencyPassDetectedQueue] = dependencyPassID;
+                    else if (const auto& closestPass = m_Passes[closestPassID];
+                             dependencyPass->m_LocalToQueueExecutionIndex > closestPass->m_LocalToQueueExecutionIndex)
+                        closestPassesToSyncWithOnDifferentQueues[dependencyPassDetectedQueue] = dependencyPassID;
+                }
+
+                // Get rid of nodes to sync that may have had redundancies.
+                pass->m_PassesToSyncWithOnDifferentQueues.clear();
+
+                // Compute initial SSIS.
+                for (const auto [detectedQueue, _] : m_QueueNodeCounters)
+                {
+                    const auto closestPassID = closestPassesToSyncWithOnDifferentQueues[detectedQueue];
+                    if (closestPassID == std::numeric_limits<u32>::max())
+                    {
+                        // If we do not have a closest pass to sync with on another queue,
+                        // we need to use SSIS value for that queue from the previous pass on this pass's queue
+                        // (closestPassesToSyncWithOnDifferentQueues[currentPassDetectedQueue]) to correctly propagate SSIS values
+                        // for all queues through the graph and do not lose them.
+                        const auto previousPassOnCurrentPassQueueID = closestPassesToSyncWithOnDifferentQueues[currentPassDetectedQueue];
+
+                        // Previous pass can be null if we're dealing with first pass in the queue.
+                        if (previousPassOnCurrentPassQueueID != std::numeric_limits<u32>::max())
+                        {
+                            const auto& previousPassOnCurrentPassQueue = m_Passes[previousPassOnCurrentPassQueueID];
+                            pass->m_SynchronizationIndexSet[detectedQueue] =
+                                previousPassOnCurrentPassQueue->m_SynchronizationIndexSet[detectedQueue];
+                        }
+                    }
+                    else
+                    {
+                        // Update SSIS using closest passes' indices.
+                        const auto& closestPass             = m_Passes[closestPassID];
+                        const auto closestPassDetectedQueue = closestPass->m_DetectedQueue;
+                        if (closestPassDetectedQueue != currentPassDetectedQueue)
+                            pass->m_SynchronizationIndexSet[closestPassDetectedQueue] = closestPass->m_LocalToQueueExecutionIndex;
+
+                        // Store only closest passes to sync with.
+                        pass->m_PassesToSyncWithOnDifferentQueues.emplace(closestPassID);
+                    }
+                }
+
+                // Use pass's execution index as synchronization index on its own queue.
+                pass->m_SynchronizationIndexSet[currentPassDetectedQueue] = pass->m_LocalToQueueExecutionIndex;
+            }
+
+            // Second pass: cull redundant dependencies by searching for indirect synchronizations.
+            for (auto& pass : dependencyLevel.m_Passes)
+            {
+                const auto currentPassDetectedQueue = pass->m_DetectedQueue;
+
+                // Keep track of queues we still need to sync with.
+                UnorderedSet<RenderGraphDetectedQueue> queuesToSyncWith;
+
+                // Store passes and queue syncs they cover.
+                struct SyncCoverage
+                {
+                    u32 PassToSyncWithID{};
+                    UnorderedSet<RenderGraphDetectedQueue> SyncedQueues;
+                };
+                std::vector<SyncCoverage> syncCoverageArray;
+
+                // Final optimized list of passes without redundant dependencies.
+                for (const auto dependencyPassID : pass->m_PassesToSyncWithOnDifferentQueues)
+                {
+                    const auto& dependencyPass = m_Passes[dependencyPassID];
+                    queuesToSyncWith.emplace(dependencyPass->m_DetectedQueue);
+                }
+
+                // Keep track of passes that can help us to sync with >= 1 queue.
+                UnorderedSet<u32> optimalPassesToSyncWith;
+                while (!queuesToSyncWith.empty())
+                {
+                    uint64_t maxNumberOfSyncsCoveredBySingleNode{};
+
+                    for (const auto dependencyPassID : pass->m_PassesToSyncWithOnDifferentQueues)
+                    {
+                        const auto& dependencyPass = m_Passes[dependencyPassID];
+
+                        // Take a dependency pass and check how many queues we would sync with
+                        // if we would only sync with this one pass. We very well may encounter a case
+                        // where by synchronizing with just one node we will sync with more then one queue
+                        // or even all of them through indirect synchronizations,
+                        // which will make other synchronizations previously detected for this node redundant.
+
+                        UnorderedSet<RenderGraphDetectedQueue> syncedQueues;
+                        for (const auto& detectedQueue : queuesToSyncWith)
+                        {
+                            auto currentPassDesiredSyncIndex   = pass->m_SynchronizationIndexSet[detectedQueue];
+                            const auto dependencyPassSyncIndex = dependencyPass->m_SynchronizationIndexSet[detectedQueue];
+
+                            RDNT_ASSERT(currentPassDesiredSyncIndex != std::numeric_limits<u32>::max(),
+                                        "Bug! Pass that wants to sync with some queue must have a valid sync index for that queue.");
+
+                            if (detectedQueue == currentPassDetectedQueue) --currentPassDesiredSyncIndex;
+
+                            if (dependencyPassSyncIndex != std::numeric_limits<u32>::max() &&
+                                dependencyPassSyncIndex >= currentPassDesiredSyncIndex)
+                            {
+                                syncedQueues.emplace(detectedQueue);
+                            }
+                        }
+
+                        syncCoverageArray.emplace_back(dependencyPassID, syncedQueues);
+                        maxNumberOfSyncsCoveredBySingleNode = std::max(maxNumberOfSyncsCoveredBySingleNode, syncedQueues.size());
+                    }
+
+                    for (const auto& syncCoverage : syncCoverageArray)
+                    {
+                        if (syncCoverage.SyncedQueues.size() < maxNumberOfSyncsCoveredBySingleNode) continue;
+
+                        // Optimal list of synchronizations should not contain passes from the same queue,
+                        // because work on the same queue is synchronized automatically and implicitly.
+                        const auto& dependencyPass         = m_Passes[syncCoverage.PassToSyncWithID];
+                        const auto dependencyDetectedQueue = dependencyPass->m_DetectedQueue;
+                        if (dependencyDetectedQueue != currentPassDetectedQueue)
+                        {
+                            optimalPassesToSyncWith.emplace(syncCoverage.PassToSyncWithID);
+
+                            // Update SSIS.
+                            auto& index = pass->m_SynchronizationIndexSet[dependencyDetectedQueue];
+                            index       = std::max(index, dependencyPass->m_LocalToQueueExecutionIndex);
+                        }
+
+                        // Remove covered queues from the list of queues we need to sync with.
+                        for (const auto& syncedDetectedQueue : syncCoverage.SyncedQueues)
+                            queuesToSyncWith.erase(syncedDetectedQueue);
+                    }
+
+                    // Remove passes that we synced with from the original list. Reverse iterating to avoid index invalidation.
+                    for (auto syncCoverageIt = syncCoverageArray.rbegin(); syncCoverageIt != syncCoverageArray.rend(); ++syncCoverageIt)
+                        pass->m_PassesToSyncWithOnDifferentQueues.erase(syncCoverageIt->PassToSyncWithID);
+                }
+
+                // Finally, assign an optimal list of passes to sync with to the current pass.
+                pass->m_PassesToSyncWithOnDifferentQueues = optimalPassesToSyncWith;
+            }
         }
     }
 
@@ -680,7 +905,7 @@ namespace Radiant
 
         if constexpr (s_bUseResourceMemoryAliasing)
         {
-            m_ResourcePool->CalculateEffectiveLifetimes(m_TopologicallySortedPassesID, m_ResourcesUsedByPassesID);
+            m_ResourcePool->CalculateEffectiveLifetimes(m_Passes, m_ResourcesUsedByPassesID);
             m_ResourcePool->BindResourcesToMemoryRegions();
         }
 
@@ -695,6 +920,9 @@ namespace Radiant
         CreateResources();
 
         const auto& frameData = m_GfxContext->GetCurrentFrameData();
+
+        // TODO: Make something frameData.GetCommandBuffer(queue type, idx, level), that does begin() and binds to descriptor sets.
+
         frameData.GeneralCommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
         const auto& pipelineLayout    = m_GfxContext->GetDevice()->GetBindlessPipelineLayout();
@@ -725,31 +953,23 @@ namespace Radiant
         frameData.GeneralCommandBuffer.end();
 
         const auto& presentQueue = m_GfxContext->GetDevice()->GetGeneralQueue().Handle;
-        presentQueue.submit2(
-            vk::SubmitInfo2()
-                .setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(frameData.GeneralCommandBuffer))
-                .setSignalSemaphoreInfos(
-                    vk::SemaphoreSubmitInfo()
-                        .setSemaphore(*frameData.RenderFinishedSemaphore)
-                        .setValue(1)
-                        .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput | vk::PipelineStageFlagBits2::eTransfer |
-                                      vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eLateFragmentTests |
-                                      vk::PipelineStageFlagBits2::eEarlyFragmentTests))
-                .setWaitSemaphoreInfos(vk::SemaphoreSubmitInfo()
-                                           .setSemaphore(*frameData.ImageAvailableSemaphore)
-                                           .setValue(1)
-                                           // NOTE: somebody in discord said eTopOfPipe is deprecated and we should use eAllCommands, but
-                                           // layers are angry about that.
-                                           .setStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)),
-            *frameData.RenderFinishedFence);
+        presentQueue.submit2(vk::SubmitInfo2()
+                                 .setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(frameData.GeneralCommandBuffer))
+                                 .setSignalSemaphoreInfos(vk::SemaphoreSubmitInfo()
+                                                              .setSemaphore(*frameData.RenderFinishedSemaphore)
+                                                              .setValue(1)
+                                                              .setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput |
+                                                                            vk::PipelineStageFlagBits2::eTransfer |
+                                                                            vk::PipelineStageFlagBits2::eComputeShader))
+                                 .setWaitSemaphoreInfos(vk::SemaphoreSubmitInfo()
+                                                            .setSemaphore(*frameData.ImageAvailableSemaphore)
+                                                            .setValue(1)
+                                                            .setStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)),
+                             *frameData.RenderFinishedFence);
     }
 
     void RenderGraph::DependencyLevel::Execute(const Unique<GfxContext>& gfxContext) noexcept
     {
-        // TODO: Sort by types to have less compute<->graphics switches. (now this sorting breaks ssao and light culling somewhy)
-        /*std::sort(std::execution::par, m_Passes.begin(), m_Passes.end(),
-                  [](const auto* lhsPass, const auto* rhsPass) { return lhsPass->m_Type < rhsPass->m_Type; });*/
-
         auto& frameData = gfxContext->GetCurrentFrameData();
         auto& cmd       = frameData.GeneralCommandBuffer;
 
@@ -776,12 +996,6 @@ namespace Radiant
             cpuTask.Name      = currentPass->m_Name;
             cpuTask.Color     = Colors::ColorArray[currentPass->m_ID % Colors::ColorArray.size()];
 
-            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
-            {
-                RDNT_ASSERT(currentPass->m_Viewport.has_value(), "Viewport is invalid!");
-                RDNT_ASSERT(currentPass->m_Scissor.has_value(), "Scissor is invalid!");
-            }
-
             // TODO: Fill stencil
             auto stencilAttachmentInfo = vk::RenderingAttachmentInfo();
             auto depthAttachmentInfo   = vk::RenderingAttachmentInfo();
@@ -794,7 +1008,7 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+                if (currentPass->m_bIsGraphicsPass)
                 {
                     const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
 
@@ -805,18 +1019,20 @@ namespace Radiant
                                                 (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT);
                     if (!bIsRasterUsage) continue;
 
-                    layerCount = std::max(layerCount, texture->GetDescription().LayerCount);
+                    // NOTE: +1 since, layers enumeration starts from 0.
+                    const u16 resourceLayerIndex = subresourceID.ResourceLayerIndex + 1;
+                    layerCount                   = std::max(layerCount, resourceLayerIndex);
                     if (texture->IsDepthFormat(texture->GetDescription().Format))
                     {
-                        depthAttachmentInfo = texture->GetRenderingAttachmentInfo(
-                            vk::ImageLayout::eDepthStencilAttachmentOptimal, {}, vk::AttachmentLoadOp::eLoad,
-                            vk::AttachmentStoreOp::eDontCare, subresourceID.SubresourceIndex);
+                        depthAttachmentInfo = texture->GetRenderingAttachmentInfo(vk::ImageLayout::eDepthStencilAttachmentOptimal, {},
+                                                                                  vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eNone,
+                                                                                  subresourceID.ResourceMipIndex);
                     }
                     else
                     {
                         colorAttachmentInfos.emplace_back() =
                             texture->GetRenderingAttachmentInfo(vk::ImageLayout::eColorAttachmentOptimal, {}, vk::AttachmentLoadOp::eLoad,
-                                                                vk::AttachmentStoreOp::eDontCare, subresourceID.SubresourceIndex);
+                                                                vk::AttachmentStoreOp::eNone, subresourceID.ResourceMipIndex);
                     }
                 }
             }
@@ -827,7 +1043,7 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
+                if (currentPass->m_bIsGraphicsPass)
                 {
                     const auto nextState = currentPass->m_ResourceIDToResourceState[subresourceID];
 
@@ -838,27 +1054,28 @@ namespace Radiant
                                                 (nextState & EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT);
                     if (!bIsRasterUsage) continue;
 
-                    layerCount = std::max(layerCount, texture->GetDescription().LayerCount);
+                    // NOTE: +1 since, layers enumeration starts from 0.
+                    const u16 resourceLayerIndex = subresourceID.ResourceLayerIndex + 1;
+                    layerCount                   = std::max(layerCount, resourceLayerIndex);
                     if (texture->IsDepthFormat(texture->GetDescription().Format))
                     {
                         depthAttachmentInfo = texture->GetRenderingAttachmentInfo(
                             vk::ImageLayout::eDepthStencilAttachmentOptimal,
                             vk::ClearValue().setDepthStencil(*currentPass->m_DepthStencilInfo->ClearValue),
                             currentPass->m_DepthStencilInfo->DepthLoadOp, currentPass->m_DepthStencilInfo->DepthStoreOp,
-                            subresourceID.SubresourceIndex);
+                            subresourceID.ResourceMipIndex);
                     }
                     else
                     {
                         auto& currentRTInfo                 = currentPass->m_RenderTargetInfos[colorAttachmentInfos.size()];
                         colorAttachmentInfos.emplace_back() = texture->GetRenderingAttachmentInfo(
                             vk::ImageLayout::eColorAttachmentOptimal, vk::ClearValue().setColor(*currentRTInfo.ClearValue),
-                            currentRTInfo.LoadOp, currentRTInfo.StoreOp, subresourceID.SubresourceIndex);
+                            currentRTInfo.LoadOp, currentRTInfo.StoreOp, subresourceID.ResourceMipIndex);
                     }
                 }
             }
 
-            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
-                (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
+            if (currentPass->m_bIsGraphicsPass && (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
             {
                 cmd.beginRendering(
                     vk::RenderingInfo()
@@ -876,8 +1093,7 @@ namespace Radiant
             RenderGraphResourceScheduler scheduler(m_RenderGraph, *currentPass);
             currentPass->Execute(scheduler, cmd);
 
-            if (currentPass->m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS &&
-                (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
+            if (currentPass->m_bIsGraphicsPass && (currentPass->m_DepthStencilInfo.has_value() || currentPass->m_RenderTargetCount > 0))
                 cmd.endRendering();
 
             cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(frameData.FrameStartTime);
@@ -960,6 +1176,16 @@ namespace Radiant
 
                 RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
                 RGbuffer->SetState(nextState);
+
+                currentPass->m_bIsGraphicsPass |= ((nextState & RESOURCE_STATE_VERTEX_BUFFER_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_INDEX_BUFFER_BIT) ||              //
+                                                   (nextState & RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT) ||    //
+                                                   (nextState & RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT) ||  //
+                                                   (nextState & RESOURCE_STATE_RENDER_TARGET_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_DEPTH_READ_BIT) ||                //
+                                                   (nextState & RESOURCE_STATE_DEPTH_WRITE_BIT) ||               //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_SOURCE_BIT) ||            //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_DESTINATION_BIT));
             }
 
             for (const auto& subresourceID : currentPass->m_BufferWrites)
@@ -973,6 +1199,16 @@ namespace Radiant
 
                 RenderGraphUtils::FillBufferBarrierIfNeeded(memoryBarriers, bufferMemoryBarriers, buffer, currentState, nextState);
                 RGbuffer->SetState(nextState);
+
+                currentPass->m_bIsGraphicsPass |= ((nextState & RESOURCE_STATE_VERTEX_BUFFER_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_INDEX_BUFFER_BIT) ||              //
+                                                   (nextState & RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT) ||    //
+                                                   (nextState & RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT) ||  //
+                                                   (nextState & RESOURCE_STATE_RENDER_TARGET_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_DEPTH_READ_BIT) ||                //
+                                                   (nextState & RESOURCE_STATE_DEPTH_WRITE_BIT) ||               //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_SOURCE_BIT) ||            //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_DESTINATION_BIT));
             }
 
             for (const auto& subresourceID : currentPass->m_TextureReads)
@@ -982,8 +1218,9 @@ namespace Radiant
                 bool bIsRMWAccess = false;
                 for (const auto& rmwSubresourceID : currentPass->m_TextureWrites)
                 {
-                    if (rmwSubresourceID.SubresourceIndex != subresourceID.SubresourceIndex ||
-                        rmwSubresourceID.ResourceID != subresourceID.ResourceID)
+                    if (rmwSubresourceID.ResourceID != subresourceID.ResourceID ||
+                        rmwSubresourceID.ResourceMipIndex != subresourceID.ResourceMipIndex ||
+                        rmwSubresourceID.ResourceLayerIndex != subresourceID.ResourceLayerIndex)
                         continue;
 
                     bIsRMWAccess = m_RenderGraph.ResolveResourceName(rmwSubresourceID.ResourceName) ==
@@ -997,13 +1234,23 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                const auto currentState = RGtexture->GetState(subresourceID.SubresourceIndex);
+                const auto currentState = RGtexture->GetState(subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
                 const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
 
                 vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
                 RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
-                                                           nextLayout, subresourceID.SubresourceIndex);
-                RGtexture->SetState(nextState, subresourceID.SubresourceIndex);
+                                                           nextLayout, subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
+                RGtexture->SetState(nextState, subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
+
+                currentPass->m_bIsGraphicsPass |= ((nextState & RESOURCE_STATE_VERTEX_BUFFER_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_INDEX_BUFFER_BIT) ||              //
+                                                   (nextState & RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT) ||    //
+                                                   (nextState & RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT) ||  //
+                                                   (nextState & RESOURCE_STATE_RENDER_TARGET_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_DEPTH_READ_BIT) ||                //
+                                                   (nextState & RESOURCE_STATE_DEPTH_WRITE_BIT) ||               //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_SOURCE_BIT) ||            //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_DESTINATION_BIT));
             }
 
             for (const auto& subresourceID : currentPass->m_TextureWrites)
@@ -1012,13 +1259,23 @@ namespace Radiant
                     m_RenderGraph.m_ResourcePool->GetTexture(m_RenderGraph.m_ResourceIDToTextureHandle[subresourceID.ResourceID]);
                 auto& texture = RGtexture->Get();
 
-                const auto currentState = RGtexture->GetState(subresourceID.SubresourceIndex);
+                const auto currentState = RGtexture->GetState(subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
                 const auto nextState    = currentPass->m_ResourceIDToResourceState[subresourceID];
 
                 vk::ImageLayout nextLayout{vk::ImageLayout::eUndefined};
                 RenderGraphUtils::FillImageBarrierIfNeeded(memoryBarriers, imageMemoryBarriers, texture, currentState, nextState,
-                                                           nextLayout, subresourceID.SubresourceIndex);
-                RGtexture->SetState(nextState, subresourceID.SubresourceIndex);
+                                                           nextLayout, subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
+                RGtexture->SetState(nextState, subresourceID.ResourceLayerIndex, subresourceID.ResourceMipIndex);
+
+                currentPass->m_bIsGraphicsPass |= ((nextState & RESOURCE_STATE_VERTEX_BUFFER_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_INDEX_BUFFER_BIT) ||              //
+                                                   (nextState & RESOURCE_STATE_VERTEX_SHADER_RESOURCE_BIT) ||    //
+                                                   (nextState & RESOURCE_STATE_FRAGMENT_SHADER_RESOURCE_BIT) ||  //
+                                                   (nextState & RESOURCE_STATE_RENDER_TARGET_BIT) ||             //
+                                                   (nextState & RESOURCE_STATE_DEPTH_READ_BIT) ||                //
+                                                   (nextState & RESOURCE_STATE_DEPTH_WRITE_BIT) ||               //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_SOURCE_BIT) ||            //
+                                                   (nextState & RESOURCE_STATE_RESOLVE_DESTINATION_BIT));
             }
         }
 
@@ -1051,6 +1308,7 @@ namespace Radiant
     {
         RDNT_ASSERT(!m_Passes.empty() && !m_Name.empty(), "DebugName or passes array is not valid!");
 
+#if 1
         std::stringstream ss;
         ss << "digraph " << m_Name << " {" << std::endl;
         ss << "\tnode [shape=rectangle, style=filled];" << std::endl;
@@ -1066,6 +1324,24 @@ namespace Radiant
             ss << std::endl;
         }
         ss << "}" << std::endl;
+#else
+        // TODO: remove, temporary check for cross queue dependencies check
+        std::stringstream ss;
+        ss << "digraph " << m_Name << " {" << std::endl;
+        ss << "\tnode [shape=rectangle, style=filled];" << std::endl;
+        ss << "\tedge [color=black];" << std::endl << std::endl;
+
+        for (const auto passID : m_TopologicallySortedPassesID)
+        {
+            const auto& pass = m_Passes[passID];
+            for (const auto dependencyPassID : pass->m_PassesToSyncWithOnDifferentQueues)
+            {
+                ss << "\t" << m_Passes[dependencyPassID]->m_Name << " -> " << pass->m_Name << std::endl;
+            }
+            ss << std::endl;
+        }
+        ss << "}" << std::endl;
+#endif
 
         CoreUtils::SaveData("render_graph_ref.dot", ss);
     }
@@ -1073,7 +1349,7 @@ namespace Radiant
     void RenderGraphResourceScheduler::CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept
     {
         const auto resourceID                             = m_RenderGraph.CreateResourceID(name);
-        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0);
+        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0, 0);
         m_RenderGraph.m_BufferCreates[name]               = bufferDesc;
         m_Pass.m_ResourceIDToResourceState[subresourceID] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
     }
@@ -1082,7 +1358,7 @@ namespace Radiant
                                                                     const ResourceStateFlags resourceState) noexcept
     {
         const auto resourceID    = m_RenderGraph.GetResourceID(name);
-        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0);
+        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0, 0);
         m_Pass.m_BufferReads.emplace_back(subresourceID);
         m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_READ_BIT;
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
@@ -1093,7 +1369,7 @@ namespace Radiant
                                                                      const ResourceStateFlags resourceState) noexcept
     {
         const auto resourceID    = m_RenderGraph.GetResourceID(name);
-        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0);
+        const auto subresourceID = RenderGraphSubresourceID(name, resourceID, 0, 0);
         m_Pass.m_BufferWrites.emplace_back(subresourceID);
         m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_WRITE_BIT;
         m_RenderGraph.m_ResourcesUsedByPassesID[resourceID].emplace(m_Pass.m_ID);
@@ -1104,12 +1380,12 @@ namespace Radiant
                                                          const vk::AttachmentLoadOp depthLoadOp, const vk::AttachmentStoreOp depthStoreOp,
                                                          const vk::ClearDepthStencilValue& clearValue,
                                                          const vk::AttachmentLoadOp stencilLoadOp,
-                                                         const vk::AttachmentStoreOp stencilStoreOp,
+                                                         const vk::AttachmentStoreOp stencilStoreOp, const u16 layerIndex,
                                                          const std::string& newAliasName) noexcept
     {
         const auto resourceID = WriteTexture(
             name, mipSet, EResourceStateBits::RESOURCE_STATE_DEPTH_READ_BIT | EResourceStateBits::RESOURCE_STATE_DEPTH_WRITE_BIT,
-            newAliasName);
+            layerIndex, newAliasName);
         m_Pass.m_DepthStencilInfo = {.ClearValue     = clearValue,
                                      .DepthLoadOp    = depthLoadOp,
                                      .DepthStoreOp   = depthStoreOp,
@@ -1120,11 +1396,11 @@ namespace Radiant
 
     void RenderGraphResourceScheduler::WriteRenderTarget(const std::string& name, const MipSet& mipSet, const vk::AttachmentLoadOp loadOp,
                                                          const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue,
-                                                         const std::string& newAliasName) noexcept
+                                                         const u16 layerIndex, const std::string& newAliasName) noexcept
     {
         RDNT_ASSERT(m_Pass.m_RenderTargetCount + 1 < s_MaxColorRenderTargets, "Max limit on color render targets reached! {}",
                     s_MaxColorRenderTargets);
-        const auto resourceID = WriteTexture(name, mipSet, EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT, newAliasName);
+        const auto resourceID = WriteTexture(name, mipSet, EResourceStateBits::RESOURCE_STATE_RENDER_TARGET_BIT, layerIndex, newAliasName);
         m_Pass.m_RenderTargetInfos[m_Pass.m_RenderTargetCount++] =
             RenderGraphPass::RenderTargetInfo{.ClearValue = clearValue, .LoadOp = loadOp, .StoreOp = storeOp};
         (void)resourceID;
@@ -1147,7 +1423,7 @@ namespace Radiant
     }
 
     NODISCARD RGResourceID RenderGraphResourceScheduler::ReadTexture(const std::string& name, const MipSet& mipSet,
-                                                                     const ResourceStateFlags resourceState) noexcept
+                                                                     const ResourceStateFlags resourceState, const u16 layerIndex) noexcept
     {
         const auto resourceID = m_RenderGraph.GetResourceID(name);
 
@@ -1177,7 +1453,7 @@ namespace Radiant
 
         for (u32 p = baseMipLevel; p < baseMipLevel + mipLevelCount; ++p)
         {
-            const auto subresourceID = RenderGraphSubresourceID(name, resourceID, p);
+            const auto subresourceID = RenderGraphSubresourceID(name, resourceID, p, layerIndex);
             m_Pass.m_TextureReads.emplace_back(subresourceID);
             m_Pass.m_ResourceIDToResourceState[subresourceID] |= resourceState | EResourceStateBits::RESOURCE_STATE_READ_BIT;
         }
@@ -1187,7 +1463,7 @@ namespace Radiant
     }
 
     NODISCARD RGResourceID RenderGraphResourceScheduler::WriteTexture(const std::string& name, const MipSet& mipSet,
-                                                                      const ResourceStateFlags resourceState,
+                                                                      const ResourceStateFlags resourceState, const u16 layerIndex,
                                                                       const std::string& newAliasName) noexcept
     {
         const auto resourceID = m_RenderGraph.GetResourceID(name);
@@ -1223,14 +1499,15 @@ namespace Radiant
 
         for (u32 p = baseMipLevel; p < baseMipLevel + mipLevelCount; ++p)
         {
-            const auto subresourceID = RenderGraphSubresourceID(newAliasName != s_DEFAULT_STRING ? newAliasName : name, resourceID, p);
+            const auto subresourceID =
+                RenderGraphSubresourceID(newAliasName != s_DEFAULT_STRING ? newAliasName : name, resourceID, p, layerIndex);
             m_Pass.m_TextureWrites.emplace_back(subresourceID);
             m_Pass.m_ResourceIDToResourceState[subresourceID] |=
                 resourceState | EResourceStateBits::RESOURCE_STATE_WRITE_BIT | EResourceStateBits::RESOURCE_STATE_READ_BIT;
 
             if (newAliasName != s_DEFAULT_STRING)
             {
-                const auto srcSubresourceID = RenderGraphSubresourceID(name, resourceID, p);
+                const auto srcSubresourceID = RenderGraphSubresourceID(name, resourceID, p, layerIndex);
                 m_Pass.m_TextureReads.emplace_back(srcSubresourceID);
             }
         }
@@ -1242,7 +1519,7 @@ namespace Radiant
     void RenderGraphResourceScheduler::CreateTexture(const std::string& name, const GfxTextureDescription& textureDesc) noexcept
     {
         const auto resourceID                             = m_RenderGraph.CreateResourceID(name);
-        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0);
+        const auto subresourceID                          = RenderGraphSubresourceID(name, resourceID, 0, 0);
         m_RenderGraph.m_TextureCreates[name]              = textureDesc;
         m_Pass.m_ResourceIDToResourceState[subresourceID] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
     }
@@ -1390,6 +1667,32 @@ namespace Radiant
             return CreateBufferFunc(m_DeviceBuffers, m_DeviceRMA);
 
         RDNT_ASSERT(false, "{}: nothing to return!");
+    }
+
+    void RenderGraphResourcePool::CalculateEffectiveLifetimes(
+        const std::vector<Unique<RenderGraphPass>>& passes,
+        const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept
+    {
+        for (const auto& [resourceID, passesIDSet] : resourcesUsedByPassesID)
+        {
+            u32 begin{std::numeric_limits<u32>::max()};
+            u32 end{std::numeric_limits<u32>::min()};
+
+            for (const auto passID : passesIDSet)
+            {
+                const auto& pass = passes[passID];
+                begin            = std::min(begin, pass->m_GlobalExecutionIndex);
+                end              = std::max(begin, pass->m_GlobalExecutionIndex);
+            }
+
+            const auto el = RenderGraphResourceEffectiveLifetime{.Begin = begin, .End = end};
+            if (m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
+                m_ReBARRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
+            else if (m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
+                m_HostRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
+            else if (m_DeviceRMA.m_ResourceInfoMap.contains(resourceID))
+                m_DeviceRMA.m_ResourceLifetimeMap[resourceID] = el;
+        }
     }
 
     void RenderGraphResourcePool::ResourceMemoryAliaser::BindResourcesToMemoryRegions() noexcept

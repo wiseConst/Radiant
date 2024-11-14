@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GfxBuffer.hpp"
 
 #include <Render/GfxContext.hpp>

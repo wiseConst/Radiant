@@ -32,13 +32,14 @@ template <> struct ankerl::unordered_dense::hash<vk::SamplerCreateInfo>
             pNext = baseStructure->pNext ? baseStructure->pNext : nullptr;
         }
 
-        return pNextHash + detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter) +
-                                                static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
-                                                static_cast<std::uint64_t>(x.addressModeV) + static_cast<std::uint64_t>(x.addressModeW) +
-                                                static_cast<std::uint64_t>(x.mipLodBias) + static_cast<std::uint64_t>(x.anisotropyEnable) +
-                                                static_cast<std::uint64_t>(x.maxAnisotropy) + static_cast<std::uint64_t>(x.compareEnable) +
-                                                static_cast<std::uint64_t>(x.compareOp) + static_cast<std::uint64_t>(x.minLod) +
-                                                static_cast<std::uint64_t>(x.maxLod) + static_cast<std::uint64_t>(x.borderColor));
+        return pNextHash + detail::wyhash::hash(static_cast<std::uint64_t>(x.magFilter) + static_cast<std::uint64_t>(x.minFilter)) +
+               detail::wyhash::hash(static_cast<std::uint64_t>(x.mipmapMode) + static_cast<std::uint64_t>(x.addressModeU) +
+                                    static_cast<std::uint64_t>(x.addressModeV) + static_cast<std::uint64_t>(x.addressModeW) +
+                                    static_cast<std::uint64_t>(x.mipLodBias)) +
+               detail::wyhash::hash(static_cast<std::uint64_t>(x.anisotropyEnable) + static_cast<std::uint64_t>(x.maxAnisotropy) +
+                                    static_cast<std::uint64_t>(x.compareEnable) + static_cast<std::uint64_t>(x.compareOp)) +
+               detail::wyhash::hash(static_cast<std::uint64_t>(x.minLod) + static_cast<std::uint64_t>(x.maxLod) +
+                                    static_cast<std::uint64_t>(x.borderColor));
     }
 };
 
@@ -47,10 +48,10 @@ namespace Radiant
 
     struct GfxBindlessStatistics
     {
-        u64 StorageImagesUsed{0};
-        u64 CombinedImageSamplersUsed{0};
-        u64 SampledImagesUsed{0};
-        u64 SamplersUsed{0};
+        u32 StorageImagesUsed{0};
+        u32 CombinedImageSamplersUsed{0};
+        u32 SampledImagesUsed{0};
+        u32 SamplersUsed{0};
     };
 
     class GfxDevice final : private Uncopyable, private Unmovable
@@ -229,10 +230,11 @@ namespace Radiant
 
         NODISCARD auto GetBindlessStatistics() const noexcept
         {
-            return GfxBindlessStatistics{m_BindlessThingsIDs[Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING].GetPresentObjectsSize(),
-                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING].GetPresentObjectsSize(),
-                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING].GetPresentObjectsSize(),
-                                         m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLER_BINDING].GetPresentObjectsSize()};
+            return GfxBindlessStatistics{
+                static_cast<u32>(m_BindlessThingsIDs[Shaders::s_BINDLESS_STORAGE_IMAGE_BINDING].GetPresentObjectsSize()),
+                static_cast<u32>(m_BindlessThingsIDs[Shaders::s_BINDLESS_COMBINED_IMAGE_SAMPLER_BINDING].GetPresentObjectsSize()),
+                static_cast<u32>(m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLED_IMAGE_BINDING].GetPresentObjectsSize()),
+                static_cast<u32>(m_BindlessThingsIDs[Shaders::s_BINDLESS_SAMPLER_BINDING].GetPresentObjectsSize())};
         }
 
       private:
@@ -267,6 +269,7 @@ namespace Radiant
             ECommandQueueType Type{};
             u8 QueueIndex{};
             u8 QueueFamilyIndex{std::numeric_limits<u8>::max()};
+            std::mutex QueueMutex{};
             vk::Queue Handle{};
             std::array<vk::UniqueSemaphore, s_BufferedFrameCount> TimelineSemaphore;
             std::array<u64, s_BufferedFrameCount> TimelineValue;

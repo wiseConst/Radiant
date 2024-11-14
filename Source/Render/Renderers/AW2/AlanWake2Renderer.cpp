@@ -56,7 +56,7 @@ namespace Radiant
                 RGResourceID CameraBuffer;
             } msTestPassData = {};
             m_RenderGraph->AddPass(
-                "MeshShaderTestPass", ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS,
+                "MeshShaderTestPass", ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                 [&](RenderGraphResourceScheduler& scheduler)
                 {
                     scheduler.CreateTexture(
@@ -131,7 +131,7 @@ namespace Radiant
                 const auto passName = "HZBPass" + std::to_string(mipLevel);
 
                 m_RenderGraph->AddPass(
-                    passName, ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_COMPUTE,
+                    passName, ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL,
                     [&](RenderGraphResourceScheduler& scheduler)
                     {
                         if (mipLevel == 0)

@@ -2,16 +2,6 @@
 
 #include <Render/RenderGraphDefines.hpp>
 
-template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphSubresourceID>
-{
-    using is_avalanching = void;
-
-    [[nodiscard]] auto operator()(const Radiant::RenderGraphSubresourceID& x) const noexcept -> std::uint64_t
-    {
-        return detail::wyhash::hash(static_cast<std::uint64_t>(x.ResourceID) + static_cast<std::uint64_t>(x.SubresourceIndex));
-    }
-};
-
 namespace Radiant
 {
     // NOTE: Huge thanks to Pavlo Muratov for giga chad article!
@@ -52,7 +42,7 @@ namespace Radiant
             void TransitionResourceStates(const vk::CommandBuffer& cmd) noexcept;
         };
 
-        void AddPass(const std::string_view& name, const ERenderGraphPassType passType, RenderGraphSetupFunc&& setupFunc,
+        void AddPass(const std::string_view& name, const ECommandQueueType commandQueueType, RenderGraphSetupFunc&& setupFunc,
                      RenderGraphExecuteFunc&& executeFunc, const u8 commandQueueIndex = 0) noexcept;
 
         void Build() noexcept;
@@ -115,7 +105,7 @@ namespace Radiant
         std::vector<Unique<RenderGraphPass>> m_Passes;
         std::vector<u32> m_TopologicallySortedPassesID;
         std::vector<std::vector<u32>> m_AdjacencyLists;
-
+        UnorderedMap<RenderGraphDetectedQueue, u32> m_QueueNodeCounters;
         std::vector<DependencyLevel> m_DependencyLevels;
 
         Pool<RGResourceID> m_ResourceIDPool;
@@ -139,6 +129,8 @@ namespace Radiant
         void BuildAdjacencyLists() noexcept;
         void TopologicalSort() noexcept;
         void BuildDependencyLevels() noexcept;
+        void FinalizeDependencyLevels() noexcept;
+        void CullRedundantSynchronizations() noexcept;
         void CreateResources() noexcept;
 
         void GraphvizDump() const noexcept;
@@ -149,30 +141,36 @@ namespace Radiant
       public:
         RenderGraphResource(Unique<TResource> resource) noexcept : m_Handle(std::move(resource))
         {
-            m_CurrentState[0] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
+            m_CurrentState[0][0] = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
         }
         ~RenderGraphResource() noexcept = default;
 
         NODISCARD FORCEINLINE auto& Get() noexcept { return m_Handle; }
-        NODISCARD FORCEINLINE const ResourceStateFlags GetState(const u32 subresourceIndex = 0) const noexcept
+        NODISCARD FORCEINLINE const ResourceStateFlags GetState(const u16 resourceLayerIndex = 0,
+                                                                const u16 resourceMipIndex   = 0) const noexcept
         {
-            if (!m_CurrentState.contains(subresourceIndex)) return EResourceStateBits::RESOURCE_STATE_UNDEFINED;
+            if (!m_CurrentState.contains(resourceLayerIndex)) return EResourceStateBits::RESOURCE_STATE_UNDEFINED;
+            if (!m_CurrentState.at(resourceLayerIndex).contains(resourceMipIndex)) return EResourceStateBits::RESOURCE_STATE_UNDEFINED;
 
-            return m_CurrentState.at(subresourceIndex);
+            return m_CurrentState.at(resourceLayerIndex).at(resourceMipIndex);
         }
-        FORCEINLINE void SetState(const ResourceStateFlags resourceState, const u32 subresourceIndex = 0) noexcept
+        FORCEINLINE void SetState(const ResourceStateFlags resourceState, const u16 resourceLayerIndex = 0,
+                                  const u16 resourceMipIndex = 0) noexcept
         {
-            m_CurrentState[subresourceIndex] = resourceState;
+            m_CurrentState[resourceLayerIndex][resourceMipIndex] = resourceState;
         }
         FORCEINLINE void ResetState() noexcept
         {
-            for (auto& [subresourceIndex, resourceState] : m_CurrentState)
-                resourceState = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
+            for (auto& [resourceLayerIndex, resourceMipIndexMap] : m_CurrentState)
+            {
+                for (auto& [resourceMipIndex, resourceState] : resourceMipIndexMap)
+                    resourceState = EResourceStateBits::RESOURCE_STATE_UNDEFINED;
+            }
         }
 
       private:
         Unique<TResource> m_Handle{nullptr};
-        UnorderedMap<u32, ResourceStateFlags> m_CurrentState{EResourceStateBits::RESOURCE_STATE_UNDEFINED};  // NOTE: Per subresource
+        UnorderedMap<u16, UnorderedMap<u16, ResourceStateFlags>> m_CurrentState;  // NOTE: Per layer, per mip
 
         constexpr RenderGraphResource() noexcept = delete;
     };
@@ -181,8 +179,8 @@ namespace Radiant
     using RenderGraphResourceBuffer  = RenderGraphResource<GfxBuffer>;
 
     // NOTE:
-    // 1) All CPU-side(ReBAR as well!!) buffers are buffered by default, but GPU-side aren't!
-    // 2) All textures aren't buffered!
+    // 1) All CPU-side(ReBAR as well!!) buffers are FIF-buffered by default, but GPU-side aren't!
+    // 2) All textures aren't FIF-buffered!
     class RenderGraphResourcePool final : private Uncopyable, private Unmovable
     {
       public:
@@ -299,32 +297,8 @@ namespace Radiant
             RDNT_ASSERT(false, "{}: Nothing to return!", __FUNCTION__);
         }
 
-        void CalculateEffectiveLifetimes(const std::vector<u32>& topologicallySortedPassesID,
-                                         const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept
-        {
-            for (const auto& [resourceID, passesIDSet] : resourcesUsedByPassesID)
-            {
-                u32 begin{std::numeric_limits<u32>::max()};
-                u32 end{std::numeric_limits<u32>::min()};
-
-                for (const auto passID : passesIDSet)
-                {
-                    const auto it = std::find(topologicallySortedPassesID.cbegin(), topologicallySortedPassesID.cend(), passID);
-                    RDNT_ASSERT(it != topologicallySortedPassesID.cend(), "Unknown passID!");
-                    const auto topsortPassIndex = static_cast<u32>(std::distance(topologicallySortedPassesID.cbegin(), it));
-                    begin                       = std::min(begin, topsortPassIndex);
-                    end                         = std::max(end, topsortPassIndex);
-                }
-
-                const auto el = RenderGraphResourceEffectiveLifetime{.Begin = begin, .End = end};
-                if (m_ReBARRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
-                    m_ReBARRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
-                else if (m_HostRMA[m_CurrentFrameIndex].m_ResourceInfoMap.contains(resourceID))
-                    m_HostRMA[m_CurrentFrameIndex].m_ResourceLifetimeMap[resourceID] = el;
-                else if (m_DeviceRMA.m_ResourceInfoMap.contains(resourceID))
-                    m_DeviceRMA.m_ResourceLifetimeMap[resourceID] = el;
-            }
-        }
+        void CalculateEffectiveLifetimes(const std::vector<Unique<RenderGraphPass>>& passes,
+                                         const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept;
 
         void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID, const std::string& debugName,
                               const vk::MemoryRequirements& memoryRequirements, const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
@@ -502,9 +476,9 @@ namespace Radiant
     class RenderGraphPass final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphPass(const u32 passID, const u8 commandQueueIndex, const std::string_view& name, const ERenderGraphPassType passType,
-                        RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
-            : m_ID(passID), m_CommandQueueIndex(commandQueueIndex), m_Name(name), m_Type(passType), m_SetupFunc(setupFunc),
+        RenderGraphPass(const u32 passID, const std::string_view& name, const ECommandQueueType commandQueueType,
+                        const u8 commandQueueIndex, RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
+            : m_ID(passID), m_DetectedQueue(commandQueueType, commandQueueIndex), m_Name(name), m_SetupFunc(setupFunc),
               m_ExecuteFunc(executeFunc)
         {
         }
@@ -520,26 +494,36 @@ namespace Radiant
         {
             RDNT_ASSERT(m_ExecuteFunc, "ExecuteFunc is invalid!");
 
-            if (m_Type == ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS)
-            {
-                RDNT_ASSERT(m_Viewport.has_value(), "Viewport is invalid!");
-                RDNT_ASSERT(m_Scissor.has_value(), "Scissor is invalid!");
-
-                commandBuffer.setViewportWithCount(*m_Viewport);
-                commandBuffer.setScissorWithCount(*m_Scissor);
-            }
+            if (m_Viewport) commandBuffer.setViewportWithCount(*m_Viewport);
+            if (m_Scissor) commandBuffer.setScissorWithCount(*m_Scissor);
 
             m_ExecuteFunc(resourceScheduler, commandBuffer);
         }
 
       private:
-        ERenderGraphPassType m_Type{ERenderGraphPassType::RENDER_GRAPH_PASS_TYPE_GRAPHICS};
-        u8 m_CommandQueueIndex{0};
+        RenderGraphDetectedQueue m_DetectedQueue{};
+        bool m_bSignalRequired{false};
         u8 m_RenderTargetCount{0};
         u32 m_ID{0};
         u32 m_DependencyLevelIndex{0};
+        u32 m_LocalToDependencyLevelExecutionIndex{0};
+        u32 m_LocalToQueueExecutionIndex{0};
+        u32 m_GlobalExecutionIndex{0};  // Across the whole frame.
         std::string m_Name{s_DEFAULT_STRING};
-        //    UnorderedSet<u32> m_PassesToSyncWith;  // Contains pass ID.
+        bool m_bIsGraphicsPass{false};
+
+        /* Info about closest node, current pass needs sync with.struct RenderGraphSyncPoint
+        {
+            ERenderGraphPassType PassType{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL};
+            u8 CommandQueueIndex{0};
+            u32 PassID{0};
+        };
+        std::vector<RenderGraphSyncPoint> m_PassesToSyncWith;  // Current pass depends on others(and others may be also from different
+          queues). */
+        UnorderedSet<u32> m_PassesToSyncWithOnDifferentQueues;  // PassID from different queues.
+        //  std::vector<u64> m_SynchronizationIndexSet;  // Sufficient Synchronization Index Set. Contains passID, from pass we can retrieve
+        // execution queue index and command queue type.
+        UnorderedMap<RenderGraphDetectedQueue, u32> m_SynchronizationIndexSet;
 
         RenderGraphSetupFunc m_SetupFunc{};
         RenderGraphExecuteFunc m_ExecuteFunc{};
@@ -556,26 +540,26 @@ namespace Radiant
         // struct TextureResolveInfo
         // {
         //    RGResourceID ResolveSrc{};
-        // vk::AttachmentLoadOp ResolveLoadOp{vk::AttachmentLoadOp::eDontCare};
-        // vk::AttachmentStoreOp ResolveStoreOp{vk::AttachmentStoreOp::eDontCare};
+        // vk::AttachmentLoadOp ResolveLoadOp{vk::AttachmentLoadOp::eNoneKHR};
+        // vk::AttachmentStoreOp ResolveStoreOp{vk::AttachmentStoreOp::eNone};
         // vk::ResolveModeFlags ResolveMode{vk::ResolveModeFlagBits::eAverage};
         // };
 
         struct RenderTargetInfo
         {
             std::optional<vk::ClearColorValue> ClearValue{std::nullopt};
-            vk::AttachmentLoadOp LoadOp{vk::AttachmentLoadOp::eDontCare};
-            vk::AttachmentStoreOp StoreOp{vk::AttachmentStoreOp::eDontCare};
+            vk::AttachmentLoadOp LoadOp{vk::AttachmentLoadOp::eNoneKHR};
+            vk::AttachmentStoreOp StoreOp{vk::AttachmentStoreOp::eNone};
             // std::optional<TextureResolveInfo> ResolveInfo{std::nullopt};
         };
 
         struct DepthStencilInfo
         {
             std::optional<vk::ClearDepthStencilValue> ClearValue{std::nullopt};
-            vk::AttachmentLoadOp DepthLoadOp{vk::AttachmentLoadOp::eDontCare};
-            vk::AttachmentStoreOp DepthStoreOp{vk::AttachmentStoreOp::eDontCare};
-            vk::AttachmentLoadOp StencilLoadOp{vk::AttachmentLoadOp::eDontCare};
-            vk::AttachmentStoreOp StencilStoreOp{vk::AttachmentStoreOp::eDontCare};
+            vk::AttachmentLoadOp DepthLoadOp{vk::AttachmentLoadOp::eNoneKHR};
+            vk::AttachmentStoreOp DepthStoreOp{vk::AttachmentStoreOp::eNone};
+            vk::AttachmentLoadOp StencilLoadOp{vk::AttachmentLoadOp::eNoneKHR};
+            vk::AttachmentStoreOp StencilStoreOp{vk::AttachmentStoreOp::eNone};
             // std::optional<TextureResolveInfo> ResolveInfo{std::nullopt};
         };
 
@@ -597,6 +581,7 @@ namespace Radiant
         friend RenderGraph;
         friend RenderGraph::DependencyLevel;
         friend RenderGraphResourceScheduler;
+        friend RenderGraphResourcePool;
         constexpr RenderGraphPass() noexcept = delete;
     };
 
@@ -614,16 +599,17 @@ namespace Radiant
         // NOTE: Should be called only inside pass that also writes to resource!
         void ClearOnExecute(const std::string& name, const u32 data, const u64 size, const u64 offset = 0) noexcept;
 
-        NODISCARD RGResourceID ReadTexture(const std::string& name, const MipSet& mipSet, const ResourceStateFlags resourceState) noexcept;
+        NODISCARD RGResourceID ReadTexture(const std::string& name, const MipSet& mipSet, const ResourceStateFlags resourceState,
+                                           const u16 layerIndex = 0) noexcept;
         NODISCARD RGResourceID WriteTexture(const std::string& name, const MipSet& mipSet, const ResourceStateFlags resourceState,
-                                            const std::string& newAliasName = s_DEFAULT_STRING) noexcept;
+                                            const u16 layerIndex = 0, const std::string& newAliasName = s_DEFAULT_STRING) noexcept;
         void WriteDepthStencil(const std::string& name, const MipSet& mipSet, const vk::AttachmentLoadOp depthLoadOp,
                                const vk::AttachmentStoreOp depthStoreOp, const vk::ClearDepthStencilValue& clearValue,
-                               const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eDontCare,
-                               const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-                               const std::string& newAliasName            = s_DEFAULT_STRING) noexcept;
+                               const vk::AttachmentLoadOp stencilLoadOp   = vk::AttachmentLoadOp::eNoneKHR,
+                               const vk::AttachmentStoreOp stencilStoreOp = vk::AttachmentStoreOp::eNone, const u16 layerIndex = 0,
+                               const std::string& newAliasName = s_DEFAULT_STRING) noexcept;
         void WriteRenderTarget(const std::string& name, const MipSet& mipSet, const vk::AttachmentLoadOp loadOp,
-                               const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue,
+                               const vk::AttachmentStoreOp storeOp, const vk::ClearColorValue& clearValue, const u16 layerIndex = 0,
                                const std::string& newAliasName = s_DEFAULT_STRING) noexcept;
 
         void CreateBuffer(const std::string& name, const GfxBufferDescription& bufferDesc) noexcept;

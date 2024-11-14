@@ -17,7 +17,7 @@ namespace Radiant
     static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
 
     static constexpr bool s_bRequireRayTracing  = false;
-    static constexpr bool s_bRequireMeshShading = true;
+    static constexpr bool s_bRequireMeshShading = false;
 
     enum class ECommandQueueType : u8
     {

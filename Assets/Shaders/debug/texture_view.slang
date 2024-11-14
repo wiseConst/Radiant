@@ -5,6 +5,8 @@
 struct PushConstantBlock
 {
     uint TextureID;
+    uint LayerIndex;
+    uint MipIndex;
     float4 MinMax;
 };
 [[vk::push_constant]] PushConstantBlock u_PC;
@@ -30,5 +32,8 @@ VSOutput vertexMain(const uint vtxID : SV_VertexID)
 [shader("fragment")]
 float4 fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
-    return float4(Shaders::Texture_Heap[u_PC.TextureID].Sample(fsInput.uv).rgb, 1.0f);
+    if (u_PC.LayerIndex != 0)
+        return float4(Shaders::Texture_Array_Heap[u_PC.TextureID].SampleLevel(float3(fsInput.uv, u_PC.LayerIndex), u_PC.MipIndex).rgb, 1.0f);
+    
+    return float4(Shaders::Texture_Heap[u_PC.TextureID].SampleLevel(fsInput.uv, u_PC.MipIndex).rgb, 1.0f);
 }

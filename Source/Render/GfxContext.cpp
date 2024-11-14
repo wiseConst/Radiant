@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GfxContext.hpp"
 
 #include <Render/GfxTexture.hpp>
@@ -175,9 +174,9 @@ namespace Radiant
 
         m_Device->PollDeletionQueues();
 
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPool);
-        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPool);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPoolVK);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.AsyncComputeCommandPoolVK);
+        m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.DedicatedTransferCommandPoolVK);
 
         m_PipelineStateCache.Invalidate();
         currentFrameData.CPUProfilerData.clear();
@@ -373,9 +372,10 @@ namespace Radiant
             m_DebugUtilsMessenger = m_Instance->createDebugUtilsMessengerEXTUnique(
                 vk::DebugUtilsMessengerCreateInfoEXT()
                     .setPfnUserCallback(debugCallback)
-                    .setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError /*| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo*/ |
-                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose)
+                    .setMessageSeverity(
+                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError /*| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo*/ |
+                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose)
                     .setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
                                     vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
                                     vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding));
@@ -399,19 +399,19 @@ namespace Radiant
         const auto& logicalDevice = m_Device->GetLogicalDevice();
         for (u8 i{}; i < s_BufferedFrameCount; ++i)
         {
-            m_FrameData[i].GeneralCommandPool = logicalDevice->createCommandPoolUnique(
+            m_FrameData[i].GeneralCommandPoolVK = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetGeneralQueue().QueueFamilyIndex));
 
-            m_FrameData[i].AsyncComputeCommandPool = logicalDevice->createCommandPoolUnique(
+            m_FrameData[i].AsyncComputeCommandPoolVK = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetComputeQueue().QueueFamilyIndex));
 
-            m_FrameData[i].DedicatedTransferCommandPool = logicalDevice->createCommandPoolUnique(
+            m_FrameData[i].DedicatedTransferCommandPoolVK = logicalDevice->createCommandPoolUnique(
                 vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_Device->GetTransferQueue().QueueFamilyIndex));
 
             m_FrameData[i].GeneralCommandBuffer = logicalDevice
                                                       ->allocateCommandBuffers(vk::CommandBufferAllocateInfo()
                                                                                    .setCommandBufferCount(1)
-                                                                                   .setCommandPool(*m_FrameData[i].GeneralCommandPool)
+                                                                                   .setCommandPool(*m_FrameData[i].GeneralCommandPoolVK)
                                                                                    .setLevel(vk::CommandBufferLevel::ePrimary))
                                                       .back();
 
@@ -432,13 +432,12 @@ namespace Radiant
             auto stagingBuffer = MakeUnique<GfxBuffer>(m_Device, GfxBufferDescription(sizeof(whiteTextureData), sizeof(whiteTextureData),
                                                                                       vk::BufferUsageFlagBits::eTransferSrc,
                                                                                       EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT));
-
             stagingBuffer->SetData(&whiteTextureData, sizeof(whiteTextureData));
 
-            const auto [cmd, queue] = AllocateSingleUseCommandBufferWithQueue(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
-            cmd->begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+            auto executionContext = CreateImmediateExecuteContext(ECommandQueueType::COMMAND_QUEUE_TYPE_DEDICATED_TRANSFER);
+            executionContext.CommandBuffer.begin(vk::CommandBufferBeginInfo().setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+            executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                 vk::ImageMemoryBarrier2()
                     .setImage(*m_DefaultWhiteTexture)
                     .setSubresourceRange(
@@ -451,13 +450,13 @@ namespace Radiant
                     .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
                     .setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer)));
 
-            cmd->copyBufferToImage(
+            executionContext.CommandBuffer.copyBufferToImage(
                 *stagingBuffer, *m_DefaultWhiteTexture, vk::ImageLayout::eTransferDstOptimal,
                 vk::BufferImageCopy()
                     .setImageSubresource(vk::ImageSubresourceLayers().setLayerCount(1).setAspectMask(vk::ImageAspectFlagBits::eColor))
                     .setImageExtent(vk::Extent3D(1, 1, 1)));
 
-            cmd->pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+            executionContext.CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
                 vk::ImageMemoryBarrier2()
                     .setImage(*m_DefaultWhiteTexture)
                     .setSubresourceRange(
@@ -470,9 +469,8 @@ namespace Radiant
                     .setDstAccessMask(vk::AccessFlagBits2::eNone)
                     .setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)));
 
-            cmd->end();
-            queue.submit(vk::SubmitInfo().setCommandBuffers(*cmd));
-            queue.waitIdle();
+            executionContext.CommandBuffer.end();
+            SubmitImmediateExecuteContext(executionContext);
         }
     }
 

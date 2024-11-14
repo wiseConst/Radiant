@@ -1,4 +1,3 @@
-#include <pch.hpp>
 #include "GfxDevice.hpp"
 
 #define VMA_IMPLEMENTATION
@@ -302,74 +301,50 @@ namespace Radiant
 
         SetDebugName(m_GPUProperties.deviceName, *m_Device);
 
-        constexpr u64 c_TimelineSemaphoreInitialValue = 0;
-        m_Queues[0].Handle                            = m_Device->getQueue(m_Queues[0].QueueFamilyIndex, m_Queues[0].QueueIndex);
-        for (auto& timelineValue : m_Queues[0].TimelineValue)
+        const auto InitializeCommandQueueFunc = [&](const std::string& commandQueueName, const u8 commandQueueOffsetInsideGlobalQueueArray,
+                                                    const u8 maxCommandQueueCount) noexcept
         {
-            timelineValue = c_TimelineSemaphoreInitialValue;
-        }
-
-        std::ranges::for_each(m_Queues[0].TimelineSemaphore,
-                              [&](auto& timelineSemaphore)
-                              {
-                                  const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
-                                                                   .setInitialValue(c_TimelineSemaphoreInitialValue)
-                                                                   .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
-                                  timelineSemaphore = m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
-                              });
-        SetDebugName("COMMAND_QUEUE_GENERAL", m_Queues[0].Handle);
-
-        for (u32 queueIndex = 0; queueIndex < s_MaxComputeQueueCount; ++queueIndex)
-        {
-            if (m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex == std::numeric_limits<u8>::max()) continue;
-
-            for (auto& timelineValue : m_Queues[c_ComputeQueueOffsetArray + queueIndex].TimelineValue)
+            constexpr u64 c_TimelineSemaphoreInitialValue = 0;
+            u32 detectedQueueCount{};
+            for (u32 queueIndex = 0; queueIndex < maxCommandQueueCount; ++queueIndex)
             {
-                timelineValue = c_TimelineSemaphoreInitialValue;
+                if (m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].QueueFamilyIndex == std::numeric_limits<u8>::max())
+                    continue;
+                ++detectedQueueCount;
+
+                for (auto& timelineValue : m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].TimelineValue)
+                    timelineValue = c_TimelineSemaphoreInitialValue;
+
+                std::ranges::for_each(m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].TimelineSemaphore,
+                                      [&](auto& timelineSemaphore)
+                                      {
+                                          const auto semaphoreTypeCI =
+                                              vk::SemaphoreTypeCreateInfo()
+                                                  .setInitialValue(c_TimelineSemaphoreInitialValue)
+                                                  .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
+                                          timelineSemaphore =
+                                              m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
+                                      });
+
+                const std::string currentQueueName = commandQueueName + std::to_string(queueIndex);
+                m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].Handle =
+                    m_Device->getQueue(m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].QueueFamilyIndex,
+                                       m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].QueueIndex);
+                SetDebugName(currentQueueName.data(), m_Queues[commandQueueOffsetInsideGlobalQueueArray + queueIndex].Handle);
             }
+            return detectedQueueCount;
+        };
 
-            std::ranges::for_each(m_Queues[c_ComputeQueueOffsetArray + queueIndex].TimelineSemaphore,
-                                  [&](auto& timelineSemaphore)
-                                  {
-                                      const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
-                                                                       .setInitialValue(c_TimelineSemaphoreInitialValue)
-                                                                       .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
-                                      timelineSemaphore =
-                                          m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
-                                  });
+        const auto generalQueueCount = InitializeCommandQueueFunc("COMMAND_QUEUE_GENERAL", 0, 1);
+        const auto asyncComputeQueueCount =
+            InitializeCommandQueueFunc("COMMAND_QUEUE_ASYNC_COMPUTE_", c_ComputeQueueOffsetArray, s_MaxComputeQueueCount);
+        const auto dedicatedTransferQueueCount =
+            InitializeCommandQueueFunc("COMMAND_QUEUE_DEDICATED_TRANSFER_", c_TransferQueueOffsetArray, s_MaxTransferQueueCount);
 
-            const std::string queueName = "COMMAND_QUEUE_ASYNC_COMPUTE_" + std::to_string(queueIndex);
-            m_Queues[c_ComputeQueueOffsetArray + queueIndex].Handle =
-                m_Device->getQueue(m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueFamilyIndex,
-                                   m_Queues[c_ComputeQueueOffsetArray + queueIndex].QueueIndex);
-            SetDebugName(queueName.data(), m_Queues[c_ComputeQueueOffsetArray + queueIndex].Handle);
-        }
-
-        for (u32 queueIndex = 0; queueIndex < s_MaxTransferQueueCount; ++queueIndex)
-        {
-            if (m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex == std::numeric_limits<u8>::max()) continue;
-
-            for (auto& timelineValue : m_Queues[c_TransferQueueOffsetArray + queueIndex].TimelineValue)
-            {
-                timelineValue = c_TimelineSemaphoreInitialValue;
-            }
-
-            std::ranges::for_each(m_Queues[c_TransferQueueOffsetArray + queueIndex].TimelineSemaphore,
-                                  [&](auto& timelineSemaphore)
-                                  {
-                                      const auto semaphoreTypeCI = vk::SemaphoreTypeCreateInfo()
-                                                                       .setInitialValue(c_TimelineSemaphoreInitialValue)
-                                                                       .setSemaphoreType(VULKAN_HPP_NAMESPACE::SemaphoreType::eTimeline);
-                                      timelineSemaphore =
-                                          m_Device->createSemaphoreUnique(vk::SemaphoreCreateInfo().setPNext(&semaphoreTypeCI));
-                                  });
-
-            const std::string queueName = "COMMAND_QUEUE_DEDICATED_TRANSFER_" + std::to_string(queueIndex);
-            m_Queues[c_TransferQueueOffsetArray + queueIndex].Handle =
-                m_Device->getQueue(m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueFamilyIndex,
-                                   m_Queues[c_TransferQueueOffsetArray + queueIndex].QueueIndex);
-            SetDebugName(queueName.data(), m_Queues[c_TransferQueueOffsetArray + queueIndex].Handle);
-        }
+        LOG_INFO("Command Queue Configuration: ");
+        LOG_INFO("General Command Queue: {}", generalQueueCount);
+        LOG_INFO("Async Compute Queue: {}", asyncComputeQueueCount);
+        LOG_INFO("Dedicated Transfer Queue: {}", dedicatedTransferQueueCount);
     }
 
     void GfxDevice::InitVMA(const vk::UniqueInstance& instance) noexcept

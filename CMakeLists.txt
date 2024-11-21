@@ -108,7 +108,7 @@ if (NOT EXISTS ${GRAPHVIZ_ROOT})
 endif()
 
 # slang - modern feature-rich, cross-gfx-api, robust shader language
-set(SLANG_VERSION 2024.14.4)
+set(SLANG_VERSION 2024.14.5)
 set(SLANG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/slang)
 if (NOT EXISTS ${SLANG_ROOT})
     message(STATUS "Downloading slang...")

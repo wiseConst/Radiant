@@ -100,42 +100,57 @@ float3 EvaluateRadiance(const float3 F0, const float3 lightColor, const float3 a
 }
 
 #define VISUALIZE_CSM_SPLITS 0
+#define CSM_FILTER_ACROSS_CASCADES 1
 
-void EvaluateDirectionalShadows(out uint cascadeIndex, out float shadow, const float3 L, const float3 fragPosWS, const float3 N)
+void EvaluateDirectionalShadows(out uint cascadeIndex, out float shadow, const float3 L, const float3 fragPosWS, const float3 N, const float maxShadowDistance, const float shadowTransitionDistance)
 {
+    const float NdotL = saturate(dot(N, L));
+    const float2 shadowOffsets = Shaders::GetShadowOffsets(NdotL);
+    const float3 fragPosWSBiased = fragPosWS + 0.001 * N * shadowOffsets.x + 0.003 * shadowOffsets.y * L;
+
     shadow = 0.0f;
     cascadeIndex = SHADOW_MAP_CASCADE_COUNT - 1;
-    const float positiveDepthVS = abs(mul(u_PC.CameraData->ViewMatrix, float4(fragPosWS, 1.0f)).z);
+    const float3 fragPosVS = mul(u_PC.CameraData->ViewMatrix, float4(fragPosWSBiased, 1.0f)).xyz;
+    const float positiveDepthVS = abs(fragPosVS.z);
 
     const float4 fComparison = float4(float4(positiveDepthVS) > float4(u_PC.MPSData.CSMData.CascadeSplits[0], 
         u_PC.MPSData.CSMData.CascadeSplits[1], u_PC.MPSData.CSMData.CascadeSplits[2], u_PC.MPSData.CSMData.CascadeSplits[3]));
     float fIndex = dot(
     float4(float(SHADOW_MAP_CASCADE_COUNT > 0),
            float(SHADOW_MAP_CASCADE_COUNT > 1),
-                              float(SHADOW_MAP_CASCADE_COUNT > 2),
+           float(SHADOW_MAP_CASCADE_COUNT > 2),
            float(SHADOW_MAP_CASCADE_COUNT > 3))
         , fComparison);
 
     fIndex = min(fIndex, SHADOW_MAP_CASCADE_COUNT - 1);
     cascadeIndex = (uint)fIndex;
 
-    const float4 fragPosLS = mul(u_PC.MPSData.CSMData.ViewProjectionMatrix[cascadeIndex], float4(fragPosWS, 1.0f));
-    float3 projCoords = fragPosLS.xyz / fragPosLS.w;
-    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+    shadow += Shaders::SampleShadowMapArray(Shaders::Texture_Array_Heap[u_PC.MPSData.ShadowMapTextureArrayID], cascadeIndex, u_PC.MPSData.CSMData, fragPosWSBiased, NdotL, u_PC.LightData.Sun.Size);
 
-    if (Shaders::is_saturated(projCoords))
+#if CSM_FILTER_ACROSS_CASCADES
+    // Sample the next cascade, and blend between the two results to
+    // smooth the transition
+    const float BlendThreshold = 0.1f;
+
+    const float nextSplit = u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex];
+    const float splitSize = cascadeIndex == 0 ? nextSplit : nextSplit - u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex - 1];
+    const float fadeFactor = (nextSplit - positiveDepthVS) / splitSize;
+
+    [branch]
+    if (fadeFactor <= BlendThreshold && cascadeIndex != SHADOW_MAP_CASCADE_COUNT - 1)
     {
-        const float bias = max(0.05f, (1.0f - dot(N, L))) / (u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex] * 0.5f);
-        const float currentDepth = projCoords.z;  // get depth of current fragment from light's perspective
+        const uint nextCascadeIndex = cascadeIndex + 1;
+        float nextSplitVisibility = Shaders::SampleShadowMapArray(Shaders::Texture_Array_Heap[u_PC.MPSData.ShadowMapTextureArrayID], nextCascadeIndex, u_PC.MPSData.CSMData, fragPosWSBiased, NdotL, u_PC.LightData.Sun.Size);
 
-#if PCF_SHADOWS_ENABLE
-        static constexpr float2 texelSize = 1.0f / SHADOW_MAP_CASCADE_SIZE;
-        shadow = Shaders::PCF_Filter(Shaders::Texture_Array_Heap[u_PC.MPSData.ShadowMapTextureArrayID], cascadeIndex, projCoords.xy, currentDepth, bias, texelSize);
-#else
-        const float sampledDepth = Shaders::Texture_Array_Heap[u_PC.MPSData.ShadowMapTextureArrayID].Sample(float3(projCoords.xy, cascadeIndex)).r;
-        shadow += (projCoords.z + bias) < sampledDepth ? 1.0 : 0.0;
-#endif
+        const float lerpAmt = smoothstep(0.0f, BlendThreshold, fadeFactor);
+        shadow = lerp(nextSplitVisibility, shadow, lerpAmt);
     }
+#endif
+
+    const float distance = length(fragPosVS);
+    const float shadowFade = saturate(1.0f - ((distance - (maxShadowDistance - shadowTransitionDistance)) / shadowTransitionDistance));
+
+    shadow *= shadowFade;
 }
 
 [shader("fragment")]
@@ -159,7 +174,7 @@ float4 fragmentMain(FragmentStageInput fsInput: FragmentStageInput, float4 fragC
     const float3 dirL = normalize(u_PC.LightData.Sun.Direction);
     float shadow = 0.0f;
     uint cascadeIndex = 0;
-    if (u_PC.LightData.Sun.bCastShadows) EvaluateDirectionalShadows(cascadeIndex, shadow, dirL, fsInput.FragPosWS, N);
+    if (u_PC.LightData.Sun.bCastShadows) EvaluateDirectionalShadows(cascadeIndex, shadow, dirL, fsInput.FragPosWS, N, u_PC.LightData.Sun.MaxShadowDistance, u_PC.LightData.Sun.ShadowFade);
 
     const float3 albedoOverPi = albedo.rgb * Shaders::s_RcpPI;
     irradiance += (1.0f - shadow) * EvaluateRadiance(F0, Shaders::UnpackUnorm4x8(u_PC.LightData->Sun.Color).xyz * u_PC.LightData->Sun.Intensity, albedoOverPi, metallicRoughness, V, dirL, N);

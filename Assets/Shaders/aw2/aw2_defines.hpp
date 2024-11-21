@@ -56,7 +56,7 @@ namespace Radiant
         struct MeshInstanceData
         {
             float3 Translation;
-            float4 Orientation;  // x - angle, yzw - vector
+            float4 Orientation;  // quat: x - angle, yzw - vector
             float3 Scale;
             uint32_t GeometryID;
         };

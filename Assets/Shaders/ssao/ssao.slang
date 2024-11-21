@@ -16,7 +16,7 @@ struct PushConstantBlock
 float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
 {
     const uint2 rotationUV = uint2(fsInput.uv * u_PC.CameraData->FullResolution) % 4;
-    const float3 noise = normalize(Shaders::g_RotationVectors[rotationUV.y * 4 + rotationUV.x] * 2.0f - 1.0f);
+    const float3 noise = normalize(Shaders::GetRotationVector(rotationUV.y * 4 + rotationUV.x) * 2.0f - 1.0f);
     
     const float3 viewPos = Shaders::ScreenSpaceToView(fsInput.uv, Shaders::Texture_Heap[u_PC.DepthTextureID].Sample(fsInput.uv).r, u_PC.CameraData->InvProjectionMatrix).xyz;
     const float3 N = normalize(cross(ddx(viewPos), ddy(viewPos)));
@@ -28,7 +28,7 @@ float fragmentMain(VSOutput fsInput: VSOutput) : SV_Target
     [unroll]
     for (uint32_t i = 0; i < Shaders::g_SampleCount; ++i)
     {
-        const float3 sample = viewPos + mul(TBN, Shaders::g_Kernel[i]) * Shaders::g_SampleRadius;
+        const float3 sample = viewPos + mul(TBN, Shaders::GetHemisphereSample8(i)) * Shaders::g_SampleRadius;
 
         float4 offsetUV = mul(u_PC.CameraData->ProjectionMatrix, float4(sample, 1.0f));
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;

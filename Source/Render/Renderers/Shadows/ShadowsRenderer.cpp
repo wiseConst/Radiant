@@ -28,13 +28,16 @@ namespace Radiant
     static glm::vec3 s_MeshTranslation{0.0f, 0.0f, 0.0f};
     static glm::vec3 s_MeshRotation{0.0f, 0.0f, 0.0f};
 
-    static bool s_bComputeTightBounds{false};  // switches whole csm pipeline to GPU.(setup shadows, etc..)
+    static bool s_bComputeTightBounds{true};  // switches whole csm pipeline to GPU.(setup shadows, etc..)
     static bool s_bCascadeTexelSizedIncrements{true};
     static f32 s_CascadeSplitDelta{0.95f};
     static f32 s_CascadeMinDistance{0.01f};   // zNear
     static f32 s_CascadeMaxDistance{350.0f};  // zFar
 
     static u64 s_DrawCallCount{0};
+
+    // for sdsm d16 could be enough
+    static vk::Format s_CSMTextureFormat = vk::Format::eD16Unorm /*eD32Sfloat*/;
 
     ShadowsRenderer::ShadowsRenderer() noexcept
     {
@@ -69,7 +72,7 @@ namespace Radiant
             {
                 const GfxPipelineDescription pipelineDesc = {
                     .DebugName       = "CSMPass",
-                    .PipelineOptions = GfxGraphicsPipelineOptions{.RenderingFormats{vk::Format::eD16Unorm},  // for sdsm d16 could be enough
+                    .PipelineOptions = GfxGraphicsPipelineOptions{.RenderingFormats{s_CSMTextureFormat},
                                                                   .DynamicStates{vk::DynamicState::ePrimitiveTopology},
                                                                   .CullMode{vk::CullModeFlagBits::eFront},  // fuck peter pan
                                                                   .FrontFace{vk::FrontFace::eCounterClockwise},
@@ -147,13 +150,16 @@ namespace Radiant
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
-                m_LightData->Sun.bCastShadows = true;
-                m_LightData->Sun.Direction    = {-0.5f, 0.8f, 0.08f};
-                m_LightData->Sun.Intensity    = 1.0f;
-                m_LightData->Sun.Color        = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
-                m_LightData->PointLightCount  = 0;
+                m_LightData->Sun.bCastShadows      = true;
+                m_LightData->Sun.Direction         = {-0.5f, 0.8f, 0.08f};
+                m_LightData->Sun.Intensity         = 1.0f;
+                m_LightData->Sun.Size              = 8.5f;
+                m_LightData->Sun.ShadowFade        = 25.0f;
+                m_LightData->Sun.MaxShadowDistance = 400.0f;
+                m_LightData->Sun.Color             = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
+                m_LightData->PointLightCount       = 0;
 
-                m_Scene->LoadMesh(m_GfxContext, "../Assets/Models/sponza/scene.gltf");
+                m_Scene->LoadMesh(m_GfxContext, "../Assets/Models/bistro_exterior/scene.gltf");
                 m_Scene->IterateObjects(m_DrawContext);
             }));
 
@@ -448,18 +454,18 @@ namespace Radiant
 
                     if (cascadeIndex == 0)
                     {
-                        scheduler.CreateTexture(
-                            ResourceNames::CSMShadowMapTexture,
-                            GfxTextureDescription(vk::ImageType::e2D, glm::uvec3(SHADOW_MAP_CASCADE_SIZE, SHADOW_MAP_CASCADE_SIZE, 1),
-                                                  vk::Format::eD16Unorm, vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                                                  vk::SamplerCreateInfo()
-                                                      .setAddressModeU(vk::SamplerAddressMode::eClampToBorder)
-                                                      .setAddressModeV(vk::SamplerAddressMode::eClampToBorder)
-                                                      .setAddressModeW(vk::SamplerAddressMode::eClampToBorder)
-                                                      .setMagFilter(vk::Filter::eNearest)
-                                                      .setMinFilter(vk::Filter::eNearest)
-                                                      .setBorderColor(vk::BorderColor::eFloatOpaqueBlack),
-                                                  SHADOW_MAP_CASCADE_COUNT));
+                        scheduler.CreateTexture(ResourceNames::CSMShadowMapTexture,
+                                                GfxTextureDescription(vk::ImageType::e2D,
+                                                                      glm::uvec3(SHADOW_MAP_CASCADE_SIZE, SHADOW_MAP_CASCADE_SIZE, 1),
+                                                                      s_CSMTextureFormat, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                                                      vk::SamplerCreateInfo()
+                                                                          .setAddressModeU(vk::SamplerAddressMode::eClampToBorder)
+                                                                          .setAddressModeV(vk::SamplerAddressMode::eClampToBorder)
+                                                                          .setAddressModeW(vk::SamplerAddressMode::eClampToBorder)
+                                                                          .setMagFilter(vk::Filter::eNearest)
+                                                                          .setMinFilter(vk::Filter::eNearest)
+                                                                          .setBorderColor(vk::BorderColor::eFloatOpaqueBlack),
+                                                                      SHADOW_MAP_CASCADE_COUNT));
                     }
 
                     scheduler.WriteDepthStencil(ResourceNames::CSMShadowMapTexture, MipSet::FirstMip(), vk::AttachmentLoadOp::eClear,
@@ -769,8 +775,10 @@ namespace Radiant
                     if (ImGui::TreeNodeEx("Sun Parameters", ImGuiTreeNodeFlags_Framed))
                     {
                         ImGui::DragFloat3("Direction", (f32*)&m_LightData->Sun.Direction, 0.01f, -1.0f, 1.0f);
-
                         ImGui::DragFloat("Intensity", &m_LightData->Sun.Intensity, 0.01f, 0.0f, 500.0f);
+                        ImGui::DragFloat("Size", &m_LightData->Sun.Size, 0.1f, 0.0f, 50.0f);
+                        ImGui::DragFloat("Shadow Fade", &m_LightData->Sun.ShadowFade, 1.0f, 0.0f);
+                        ImGui::DragFloat("Max Shadow Distance", &m_LightData->Sun.MaxShadowDistance, 1.0f, 0.0f);
                         ImGui::Checkbox("Cast Shadows", &m_LightData->Sun.bCastShadows);
 
                         if (ImGui::DragFloat3("Radiance", (f32*)&s_SunColor, 0.01f, 0.0f, 1.0f))

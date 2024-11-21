@@ -171,7 +171,7 @@ void EvaluateDirectionalShadows(out uint cascadeIndex, out float shadow, const f
     float fIndex = dot(
     float4(float(SHADOW_MAP_CASCADE_COUNT > 0),
            float(SHADOW_MAP_CASCADE_COUNT > 1),
-                              float(SHADOW_MAP_CASCADE_COUNT > 2),
+           float(SHADOW_MAP_CASCADE_COUNT > 2),
            float(SHADOW_MAP_CASCADE_COUNT > 3))
         , fComparison);
 
@@ -184,7 +184,7 @@ void EvaluateDirectionalShadows(out uint cascadeIndex, out float shadow, const f
 
     if (Shaders::is_saturated(projCoords))
     {
-        const float bias = max(0.05f, (1.0f - dot(N, L))) / (u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex] * 0.5f);
+        const float bias = max(0.0005f, 0.005f * (1.0f - dot(N, L))) / u_PC.MPSData.CSMData.CascadeSplits[cascadeIndex];
         const float currentDepth = projCoords.z; // get depth of current fragment from light's perspective
 
 #if PCF_SHADOWS_ENABLE

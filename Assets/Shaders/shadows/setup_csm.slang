@@ -159,12 +159,16 @@ void SetupCSMData(const float cameraFovY, const float cameraAR, const float zNea
     // https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-10-parallel-split-shadow-maps-programmable-gpus
     const float range = zFar - zNear;
     const float ratio = zFar / zNear;
+
+   // const float cascadeSplitLambda = u_PC.CascadeSplitLambda;
+    const float cascadeSplitLambda = range / (zFar + SHADOWS_ZFAR_OFFSET);
+
     for (uint i = 0; i < SHADOW_MAP_CASCADE_COUNT; ++i)
     {
         const float p = (i + 1) / (float)SHADOW_MAP_CASCADE_COUNT;
         const float logPart = zNear * pow(ratio, p);
         const float uniformPart = zNear + range * p;
-        const float d = uniformPart + u_PC.CascadeSplitLambda * (logPart - uniformPart);
+        const float d = uniformPart + cascadeSplitLambda * (logPart - uniformPart);
         u_PC.CSMData.CascadeSplits[i] = (d - zNear) / range;
     }
 
@@ -267,5 +271,5 @@ void computeMain(const uint groupIndex : SV_GroupIndex)
     // printf("zNear: %f, zFar: %f\n", zNear, zFar);
 
     const float aspectRatio = u_PC.CameraData.FullResolution.x / u_PC.CameraData.FullResolution.y;
-    SetupCSMData(glm_radians(u_PC.CameraData.Zoom), aspectRatio, zNear, zFar, u_PC.CameraData.ViewMatrix, normalize(u_PC.SunDirection));
+    SetupCSMData(glm_radians(u_PC.CameraData.Zoom), aspectRatio, max(zNear, SHADOWS_ZNEAR), max(zFar, SHADOWS_ZFAR_OFFSET), u_PC.CameraData.ViewMatrix, normalize(u_PC.SunDirection));
 }

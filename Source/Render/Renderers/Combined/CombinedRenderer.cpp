@@ -501,10 +501,10 @@ namespace Radiant
 
             // m_SSSPipeline->HotReload();
 
-            // m_SSAOPipelineGraphics->HotReload();
-            // m_SSAOPipelineCompute->HotReload();
-            // _SSAOBoxBlurPipelineGraphics->HotReload();
-            // m_SSAOBoxBlurPipelineCompute->HotReload();
+            m_SSAOPipelineGraphics->HotReload();
+            m_SSAOPipelineCompute->HotReload();
+            m_SSAOBoxBlurPipelineGraphics->HotReload();
+            m_SSAOBoxBlurPipelineCompute->HotReload();
 
             // m_BloomDownsamplePipelineGraphics->HotReload();
             // m_BloomUpsampleBlurPipelineGraphics->HotReload();

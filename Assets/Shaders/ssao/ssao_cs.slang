@@ -92,7 +92,7 @@ void computeMain(uint3 DTid : SV_DispatchThreadID, const uint3 Gid : SV_GroupID,
 
     const float2 baseUV = (DTid.xy + 0.5f) * u_PC.CameraData.InvFullResolution;
     const uint2 rotationUV = uint2(baseUV * u_PC.CameraData->FullResolution) % 4;
-    const float3 noise = normalize(Shaders::g_RotationVectors[rotationUV.y * 4 + rotationUV.x] * 2.0f - 1.0f);
+    const float3 noise = normalize(Shaders::GetRotationVector(rotationUV.y * 4 + rotationUV.x) * 2.0f - 1.0f);
 
     const float3 viewPos = P0;
     const float3 T = normalize(noise - N * dot(N, noise));
@@ -103,7 +103,7 @@ void computeMain(uint3 DTid : SV_DispatchThreadID, const uint3 Gid : SV_GroupID,
     [unroll]
     for (uint32_t i = 0; i < Shaders::g_SampleCount; ++i)
     {
-        const float3 sample = viewPos + mul(TBN, Shaders::g_Kernel[i]) * Shaders::g_SampleRadius;
+        const float3 sample = viewPos + mul(TBN, Shaders::GetHemisphereSample8(i)) * Shaders::g_SampleRadius;
 
         float4 offsetUV = mul(u_PC.CameraData->ProjectionMatrix, float4(sample, 1.0f));
         offsetUV.xy = (offsetUV.xy / offsetUV.w) * 0.5f + 0.5f;

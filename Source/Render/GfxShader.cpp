@@ -77,11 +77,17 @@ namespace Radiant
         auto slangResult = slang::createGlobalSession(slangGlobalSession.writeRef());
         RDNT_ASSERT(SLANG_SUCCEEDED(slangResult), "SLANG: Failed to create global session!");
 
-        const slang::TargetDesc targetDesc = {.format                      = SLANG_SPIRV,
-                                              .profile                     = slangGlobalSession->findProfile("glsl460"),
-                                              .flags                       = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
-                                              .floatingPointMode           = SLANG_FLOATING_POINT_MODE_FAST,
-                                              .forceGLSLScalarBufferLayout = true};
+        const slang::TargetDesc targetDesc = {
+            .format  = SLANG_SPIRV,
+            .profile = slangGlobalSession->findProfile("sm_6_7" /*"glsl460"*/),
+            .flags   = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY,
+#if RDNT_DEBUG
+            .floatingPointMode = SLANG_FLOATING_POINT_MODE_DEFAULT,
+#else
+            .floatingPointMode = SLANG_FLOATING_POINT_MODE_FAST,
+#endif
+            .forceGLSLScalarBufferLayout = true
+        };
 
         std::vector<slang::CompilerOptionEntry> compileOptions = {};
         compileOptions.emplace_back(slang::CompilerOptionName::Capability,
@@ -97,10 +103,11 @@ namespace Radiant
         {
             compileOptions.emplace_back(slang::CompilerOptionName::Optimization,
                                         slang::CompilerOptionValue{.intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE});
-            /*      compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
-                                              slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
-                  compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
-                                              slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});*/
+            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
+            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
+            //compileOptions.emplace_back(
+            //    slang::CompilerOptionName::DebugInformationFormat,
+            //    slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_DEFAULT /*SLANG_DEBUG_INFO_FORMAT_C7*/});
             // compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
         }
         else

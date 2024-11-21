@@ -1681,8 +1681,11 @@ namespace Radiant
             for (const auto passID : passesIDSet)
             {
                 const auto& pass = passes[passID];
-                begin            = std::min(begin, pass->m_GlobalExecutionIndex);
-                end              = std::max(begin, pass->m_GlobalExecutionIndex);
+                // NOTE: Initially here was m_GlobalExecutionIndex, but it led to bad offset determination inside
+                // resource memory bucket, since it depends on TopSortIndex only,
+                // but not on DependencyLevel(which takes into account unrelated passes)
+                begin = std::min(begin, pass->m_DependencyLevelIndex);
+                end   = std::max(begin, pass->m_DependencyLevelIndex);
             }
 
             const auto el = RenderGraphResourceEffectiveLifetime{.Begin = begin, .End = end};

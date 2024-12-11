@@ -103,12 +103,11 @@ namespace Radiant
         {
             compileOptions.emplace_back(slang::CompilerOptionName::Optimization,
                                         slang::CompilerOptionValue{.intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE});
-            //compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
-            //                            slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
-            //compileOptions.emplace_back(
-            //    slang::CompilerOptionName::DebugInformationFormat,
-            //    slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_DEFAULT /*SLANG_DEBUG_INFO_FORMAT_C7*/});
-            // compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
+            /* compileOptions.emplace_back(slang::CompilerOptionName::DebugInformation,
+                                         slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL});
+             compileOptions.emplace_back(slang::CompilerOptionName::DebugInformationFormat,
+                                         slang::CompilerOptionValue{.intValue0 = SLANG_DEBUG_INFO_FORMAT_C7});*/
+            //  compileOptions.emplace_back(slang::CompilerOptionName::DumpIntermediates, slang::CompilerOptionValue{.intValue0 = 1});
         }
         else
         {

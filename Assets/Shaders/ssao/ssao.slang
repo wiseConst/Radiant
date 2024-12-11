@@ -1,7 +1,7 @@
 // ssao.slang
 
 #include "../../../Source/ShaderDefines.hpp"
-#include "../FullScreenQuad.slang"
+#include "../common/FullScreenQuad.slang"
 #include <ssao_defines.hpp>
 
 struct PushConstantBlock

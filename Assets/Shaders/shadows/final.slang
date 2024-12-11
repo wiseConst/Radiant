@@ -1,7 +1,7 @@
 // final.slang
 
 #include "../../../Source/ShaderDefines.hpp"
-#include "../FullScreenQuad.slang"
+#include "../common/FullScreenQuad.slang"
 
 struct PushConstantBlock
 {

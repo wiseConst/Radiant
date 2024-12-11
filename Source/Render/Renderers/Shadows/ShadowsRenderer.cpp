@@ -39,6 +39,8 @@ namespace Radiant
     // for sdsm d16 could be enough
     static vk::Format s_CSMTextureFormat = vk::Format::eD16Unorm /*eD32Sfloat*/;
 
+    // TODO: https://wickedengine.net/2018/01/easy-transparent-shadow-maps/
+
     ShadowsRenderer::ShadowsRenderer() noexcept
     {
         m_MainCamera = MakeShared<Camera>(70.0f, static_cast<f32>(m_ViewportExtent.width) / static_cast<f32>(m_ViewportExtent.height),
@@ -62,7 +64,7 @@ namespace Radiant
                                                    .bDepthWrite{true},
                                                    .DepthCompareOp{vk::CompareOp::eGreaterOrEqual}},
                     .Shader = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                    GfxShaderDescription{.Path = "../Assets/Shaders/depth_pre_pass.slang"})};
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/common/depth_pre_pass.slang"})};
                 m_DepthPrePassPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 

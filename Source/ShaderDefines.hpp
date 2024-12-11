@@ -5,9 +5,9 @@
 namespace Radiant
 {
     using float4x4 = glm::mat4;
-    using float2   = glm::float2;
-    using float3   = glm::float3;
-    using float4   = glm::float4;
+    using float2   = glm::vec2;
+    using float3   = glm::vec3;
+    using float4   = glm::vec4;
 
     using u16vec2 = glm::u16vec2;
     using u16vec4 = glm::u16vec4;
@@ -17,7 +17,7 @@ namespace Radiant
 
 #endif
 
-#define MAX_POINT_LIGHT_COUNT 256
+#define MAX_POINT_LIGHT_COUNT 512
     // TODO: Implement spot lights
 #define MAX_SPOT_LIGHT_COUNT 256
 
@@ -41,20 +41,6 @@ namespace Radiant
     half2 UV;
 #endif
         int16_t TSign;  // NOTE: Maybe put in the last tangent's bit?
-    };
-
-    struct ObjectInstanceData
-    {
-        float3 translation;
-        float3 scale;
-        // x - real part, yzw - imaginary part.
-        // TODO: on c++ side convert from range[-1. 1] to [0,1] (*0.5 + 0.5) and then halfPackUnorm
-        // unpacking *2-1
-#ifdef __cplusplus
-        u16vec4 orientation;
-#else
-    half4 orientation;
-#endif
     };
 
     struct Sphere
@@ -103,7 +89,7 @@ namespace Radiant
 
 #ifndef __cplusplus
 
-#include <../Assets/Shaders/kernels.slang>
+#include <../Assets/Shaders/common/kernels.slang>
 
 #endif
 
@@ -242,6 +228,12 @@ namespace Radiant
 
         [vk::binding(s_BINDLESS_SAMPLER_BINDING, 0)] SamplerState Sampler_Heap[s_MAX_BINDLESS_SAMPLERS];
 
+        // From FXAA NV paper (2009).
+        float Rgb2Luma(const float3 rgb)
+        {
+            return rgb.y * (0.587 / 0.299) + rgb.x;
+        }
+
         float2 VogelDiskSample(const uint sampleIndex, const uint samplesCount, const float phi)
         {
             static const float GoldenAngle = 2.4f;
@@ -287,6 +279,8 @@ namespace Radiant
             return uint3(unflatten2D(idx, dim.xy), z);
         }
 
+        // https://gamedev.stackexchange.com/questions/28395/rotating-vector3-by-a-quaternion
+        // https://fgiesen.wordpress.com/2019/02/09/rotating-a-single-vector-using-a-quaternion/
         float3 RotateByQuat(const float3 v, const float4 quat /* x yzw = w xyz */)
         {
             const float3 t = 2 * cross(quat.yzw, v);
@@ -488,6 +482,13 @@ namespace Radiant
             // Convert to world space
             return normalize(tangent * H.x + bitangent * H.y + N * H.z);
         }
+
+        enum EToneMapMode
+        {
+            TONE_MAP_MODE_REINHARD,
+            TONE_MAP_MODE_UNCHARTED2,
+            TONE_MAP_MODE_ACES
+        };
 
         float3 TonemapACES(const float3 x)
         {

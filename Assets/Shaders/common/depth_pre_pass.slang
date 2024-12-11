@@ -1,6 +1,6 @@
 // depth_pre_pass.slang
 
-#include <../../Source/ShaderDefines.hpp>
+#include <../../../Source/ShaderDefines.hpp>
 
 struct PushConstantBlock
 {

@@ -32,8 +32,9 @@ namespace Radiant
                     "GfxPipelineStateCache: Pipeline holds invalid options!");
 
         // Every pipeline bind invalidates the whole state.
-        Invalidate();
+        Invalidate(nullptr);
 
+        std::scoped_lock lock(m_Mtx);
         if (LastBoundPipeline == pipeline) return;
 
         vk::PipelineBindPoint pipelineBindPoint{vk::PipelineBindPoint::eGraphics};
@@ -48,12 +49,17 @@ namespace Radiant
 
         cmd.bindPipeline(pipelineBindPoint, *pipeline);
         LastBoundPipeline = pipeline;
+        LastUsedCmd       = (vk::CommandBuffer*)&cmd;
     }
 
     void GfxPipelineStateCache::Bind(const vk::CommandBuffer& cmd, GfxBuffer* indexBuffer, const vk::DeviceSize offset,
                                      const vk::IndexType indexType) noexcept
     {
         RDNT_ASSERT(indexBuffer, "GfxPipelineStateCache: IndexBuffer is invalid!");
+
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (LastBoundIndexBuffer == indexBuffer && LastBoundIndexBufferOffset.has_value() && *LastBoundIndexBufferOffset == offset &&
             LastBoundIndexType.has_value() && *LastBoundIndexType == indexType)
             return;
@@ -66,6 +72,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::CullModeFlags cullMode) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (CullMode.has_value() && CullMode == cullMode) return;
 
         cmd.setCullMode(cullMode);
@@ -74,6 +83,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::PrimitiveTopology primitiveTopology) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (PrimitiveTopology.has_value() && PrimitiveTopology == primitiveTopology) return;
 
         cmd.setPrimitiveTopology(primitiveTopology);
@@ -82,6 +94,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::FrontFace frontFace) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (FrontFace.has_value() && FrontFace == frontFace) return;
 
         cmd.setFrontFace(frontFace);
@@ -90,6 +105,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::PolygonMode polygonMode) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (PolygonMode.has_value() && PolygonMode == polygonMode) return;
 
         cmd.setPolygonModeEXT(polygonMode);
@@ -98,6 +116,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::Set(const vk::CommandBuffer& cmd, const vk::CompareOp compareOp) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (DepthCompareOp.has_value() && DepthCompareOp == compareOp) return;
 
         cmd.setDepthCompareOp(compareOp);
@@ -106,6 +127,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::SetDepthClamp(const vk::CommandBuffer& cmd, const bool bDepthClampEnable) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (bDepthClamp.has_value() && bDepthClamp == bDepthClampEnable) return;
 
         cmd.setDepthClampEnableEXT(bDepthClampEnable);
@@ -114,6 +138,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::SetStencilTest(const vk::CommandBuffer& cmd, const bool bStencilTestEnable) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (bStencilTest.has_value() && bStencilTest == bStencilTestEnable) return;
 
         cmd.setStencilTestEnable(bStencilTestEnable);
@@ -122,6 +149,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::SetDepthTest(const vk::CommandBuffer& cmd, const bool bDepthTestEnable) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (bDepthTest.has_value() && bDepthTest == bDepthTestEnable) return;
 
         cmd.setDepthTestEnable(bDepthTestEnable);
@@ -130,6 +160,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::SetDepthWrite(const vk::CommandBuffer& cmd, const bool bDepthWriteEnable) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (bDepthWrite.has_value() && bDepthWrite == bDepthWriteEnable) return;
 
         cmd.setDepthWriteEnable(bDepthWriteEnable);
@@ -138,6 +171,9 @@ namespace Radiant
 
     void GfxPipelineStateCache::SetDepthBounds(const vk::CommandBuffer& cmd, const glm::vec2& depthBounds) noexcept
     {
+        Invalidate(&cmd);
+
+        std::scoped_lock lock(m_Mtx);
         if (DepthBounds.has_value() && DepthBounds == depthBounds) return;
 
         cmd.setDepthBounds(depthBounds.x, depthBounds.y);
@@ -157,21 +193,23 @@ namespace Radiant
             return false;
         }
 
-        auto& cpuTask     = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].CPUProfilerData.emplace_back();
-        cpuTask.StartTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
-        cpuTask.Name      = "WaitForFence";
-        cpuTask.Color     = Colors::ColorArray[1];
-
         auto& currentFrameData = m_FrameData[m_CurrentFrameIndex];
-        RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*currentFrameData.RenderFinishedFence, vk::True, UINT64_MAX) ==
-                        vk::Result::eSuccess,
-                    "{}", __FUNCTION__);
-        m_Device->GetLogicalDevice()->resetFences(*currentFrameData.RenderFinishedFence);
+        {
+            auto& cpuTask = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].CPUProfilerData.emplace_back();
+            cpuTask.StartTime =
+                Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
+            cpuTask.Name  = "WaitForFence";
+            cpuTask.Color = Colors::ColorArray[1];
 
-        cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
+            RDNT_ASSERT(m_Device->GetLogicalDevice()->waitForFences(*currentFrameData.RenderFinishedFence, vk::True,
+                                                                    std::numeric_limits<u64>::max()) == vk::Result::eSuccess,
+                        "{}", __FUNCTION__);
+            m_Device->GetLogicalDevice()->resetFences(*currentFrameData.RenderFinishedFence);
+
+            cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
+        }
 
         // NOTE: Reset all states only after every GPU op finished!
-
         m_Device->PollDeletionQueues();
 
         m_Device->GetLogicalDevice()->resetCommandPool(*currentFrameData.GeneralCommandPoolVK);
@@ -182,32 +220,42 @@ namespace Radiant
         currentFrameData.CPUProfilerData.clear();
         currentFrameData.GPUProfilerData.clear();
         currentFrameData.FrameStartTime = Timer::Now();
-        if (currentFrameData.TimestampsQueryPool)
+
         {
-            auto [result, data] = m_Device->GetLogicalDevice()->getQueryPoolResults<u64>(
-                *currentFrameData.TimestampsQueryPool, 0, currentFrameData.CurrentTimestampIndex,
-                sizeof(u64) * currentFrameData.TimestampsCapacity, sizeof(u64),
-                vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
-            RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to getQueryPoolResults()!");
-
-            currentFrameData.TimestampResults = std::move(data);
-            m_Device->GetLogicalDevice()->resetQueryPool(*currentFrameData.TimestampsQueryPool, 0, currentFrameData.TimestampsCapacity);
-
-            // NOTE: CPUProfilerData is populated right when executing rendergraph, but with GPU things are different and we populate it's
-            // timings right after it finished work for appropriate frame.
-            auto& prevFrameGPUProfilerData = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].GPUProfilerData;
-            for (u32 taskIndex{}, timestampIndex{};
-                 taskIndex < prevFrameGPUProfilerData.size() && timestampIndex < currentFrameData.TimestampResults.size();
-                 ++taskIndex, timestampIndex += 2)
+            auto& cpuTask = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].CPUProfilerData.emplace_back();
+            cpuTask.StartTime =
+                Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
+            cpuTask.Name  = "CollectGPUTimings";
+            cpuTask.Color = Colors::pomegranate;
+            if (currentFrameData.TimestampsQueryPool)
             {
-                const auto frequencyFactor = m_Device->GetGPUProperties().limits.timestampPeriod / 1e9;
-                prevFrameGPUProfilerData[taskIndex].StartTime =
-                    (currentFrameData.TimestampResults[timestampIndex] - currentFrameData.TimestampResults[0]) * frequencyFactor;
-                prevFrameGPUProfilerData[taskIndex].EndTime =
-                    (currentFrameData.TimestampResults[timestampIndex + 1] - currentFrameData.TimestampResults[0]) * frequencyFactor;
+                auto [result, data] = m_Device->GetLogicalDevice()->getQueryPoolResults<u64>(
+                    *currentFrameData.TimestampsQueryPool, 0, currentFrameData.CurrentTimestampIndex,
+                    sizeof(u64) * currentFrameData.TimestampsCapacity, sizeof(u64),
+                    vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+                RDNT_ASSERT(result == vk::Result::eSuccess, "Failed to getQueryPoolResults()!");
+
+                currentFrameData.TimestampResults = std::move(data);
+                m_Device->GetLogicalDevice()->resetQueryPool(*currentFrameData.TimestampsQueryPool, 0, currentFrameData.TimestampsCapacity);
+
+                // NOTE: CPUProfilerData is populated right when executing rendergraph, but with GPU things are different and we populate
+                // it's timings right after it finished work for appropriate frame.
+                auto& prevFrameGPUProfilerData = m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].GPUProfilerData;
+                for (u32 taskIndex{}, timestampIndex{};
+                     taskIndex < prevFrameGPUProfilerData.size() && (timestampIndex + 1) < currentFrameData.TimestampResults.size();
+                     ++taskIndex, ++timestampIndex)
+                {
+                    const auto frequencyFactor = m_Device->GetGPUProperties().limits.timestampPeriod / 1e9;
+
+                    prevFrameGPUProfilerData[taskIndex].StartTime =
+                        (currentFrameData.TimestampResults[timestampIndex] - currentFrameData.TimestampResults[0]) * frequencyFactor;
+                    prevFrameGPUProfilerData[taskIndex].EndTime =
+                        (currentFrameData.TimestampResults[timestampIndex + 1] - currentFrameData.TimestampResults[0]) * frequencyFactor;
+                }
             }
+            currentFrameData.CurrentTimestampIndex = 0;
+            cpuTask.EndTime = Timer::GetElapsedSecondsFromNow(m_FrameData[(m_CurrentFrameIndex - 1) % s_BufferedFrameCount].FrameStartTime);
         }
-        currentFrameData.CurrentTimestampIndex = 0;
 
         // NOTE: Apparently on NV cards this throws vk::OutOfDateKHRError.
         try
@@ -372,13 +420,9 @@ namespace Radiant
             m_DebugUtilsMessenger = m_Instance->createDebugUtilsMessengerEXTUnique(
                 vk::DebugUtilsMessengerCreateInfoEXT()
                     .setPfnUserCallback(debugCallback)
-                    .setMessageSeverity(
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError /*| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo*/ |
-                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose)
-                    .setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
-                                    vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-                                    vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding));
+                    .setMessageSeverity(vk::FlagTraits<vk::DebugUtilsMessageSeverityFlagBitsEXT>::allFlags ^
+                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo)
+                    .setMessageType(vk::FlagTraits<vk::DebugUtilsMessageTypeFlagBitsEXT>::allFlags));
         }
     }
 

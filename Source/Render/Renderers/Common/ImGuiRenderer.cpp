@@ -197,9 +197,9 @@ namespace Radiant
                             "Backbuffer image for swapchain blit should have color format!");
 
                 constexpr auto backbufferImageSubresourceRange = vk::ImageSubresourceRange()
+                                                                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
                                                                      .setBaseArrayLayer(0)
                                                                      .setLayerCount(1)
-                                                                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
                                                                      .setBaseMipLevel(0)
                                                                      .setLevelCount(1);
                 cmd.pipelineBarrier2(
@@ -207,7 +207,7 @@ namespace Radiant
                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eNone)
-                                                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)
+                                                                    .setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)
                                                                     .setOldLayout(vk::ImageLayout::eUndefined)
                                                                     .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
                                                                     .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
@@ -268,18 +268,18 @@ namespace Radiant
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 
                 cmd.endRendering();
-                cmd.pipelineBarrier2(vk::DependencyInfo()
-                                         .setDependencyFlags(vk::DependencyFlagBits::eByRegion)
-                                         .setImageMemoryBarriers(vk::ImageMemoryBarrier2()
-                                                                     .setImage(m_GfxContext->GetCurrentSwapchainImage())
-                                                                     .setSubresourceRange(backbufferImageSubresourceRange)
-                                                                     .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite |
-                                                                                       vk::AccessFlagBits2::eColorAttachmentRead)
-                                                                     .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
-                                                                     .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                                                                     .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
-                                                                     .setDstAccessMask(vk::AccessFlagBits2::eNone)
-                                                                     .setDstStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)));
+                cmd.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(
+                    vk::ImageMemoryBarrier2()
+                        .setImage(m_GfxContext->GetCurrentSwapchainImage())
+                        .setSubresourceRange(backbufferImageSubresourceRange)
+                        .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead)
+                        .setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                        .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                        .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+                        .setDstAccessMask(vk::AccessFlagBits2::eNone)
+                        .setDstStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)));
+
+                // INSERT_DEBUG_MEMORY_BARRIER(cmd);
             });
     }
 

@@ -1,7 +1,7 @@
 // generate_brdf_lut.slang
 
 #include <../../../Source/ShaderDefines.hpp>
-#include <../FullScreenQuad.slang>
+#include <../common/FullScreenQuad.slang>
 
 static constexpr uint s_SampleCount = 1024u;
 static constexpr float s_InvSampleCount = 1.0f / (float)s_SampleCount;

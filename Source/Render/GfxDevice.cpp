@@ -58,6 +58,7 @@ namespace Radiant
 
         auto vkFeatures12 =
             vk::PhysicalDeviceVulkan12Features()
+                .setDrawIndirectCount(vk::True)
                 .setBufferDeviceAddress(vk::True)  // GPU buffer pointers via uint64_t
                 .setScalarBlockLayout(vk::True)    // Solving shader data alignment issues.
                 .setShaderInt8(vk::True)
@@ -118,6 +119,7 @@ namespace Radiant
         paravozik  = &dynamicState3FeaturesEXT.pNext;
 
         constexpr vk::PhysicalDeviceFeatures vkFeatures10 = vk::PhysicalDeviceFeatures()
+                                                                .setImageCubeArray(vk::True)
                                                                 .setShaderInt16(vk::True)
                                                                 .setShaderInt64(vk::True)
                                                                 .setFillModeNonSolid(vk::True)
@@ -125,6 +127,7 @@ namespace Radiant
                                                                 .setSamplerAnisotropy(vk::True)
                                                                 .setPipelineStatisticsQuery(vk::True)
                                                                 .setDepthClamp(vk::True)
+                                                                .setTessellationShader(vk::True)
                                                                 .setGeometryShader(vk::True)
                                                                 .setTextureCompressionBC(s_bUseTextureCompressionBC ? vk::True : vk::False)
                                                                 .setShaderStorageImageArrayDynamicIndexing(vk::True)

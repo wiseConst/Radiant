@@ -1,7 +1,7 @@
 // pbr_bloom_downsample.slang
 
 #include "../../../Source/ShaderDefines.hpp"
-#include "../FullScreenQuad.slang"
+#include "../common/FullScreenQuad.slang"
 #include <bloom_defines.hpp>
 
 // This shader performs downsampling on a texture,

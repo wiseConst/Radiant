@@ -11,6 +11,8 @@ namespace Radiant
     // https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
     // https://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/
 
+    // TODO: Add mutex for render graph && resource pool?
+
     class RenderGraph final : private Uncopyable, private Unmovable
     {
       public:
@@ -103,8 +105,8 @@ namespace Radiant
         RenderGraphStatistics m_Stats = {};
 
         std::vector<Unique<RenderGraphPass>> m_Passes;
-        std::vector<u32> m_TopologicallySortedPassesID;
-        std::vector<std::vector<u32>> m_AdjacencyLists;
+        std::vector<RGPassID> m_TopologicallySortedPassesID;
+        std::vector<std::vector<RGPassID>> m_AdjacencyLists;
         UnorderedMap<RenderGraphDetectedQueue, u32> m_QueueNodeCounters;
         std::vector<DependencyLevel> m_DependencyLevels;
 
@@ -120,7 +122,7 @@ namespace Radiant
         UnorderedMap<std::string, GfxTextureDescription> m_TextureCreates;
         UnorderedMap<std::string, GfxBufferDescription> m_BufferCreates;
 
-        UnorderedMap<RGResourceID, UnorderedSet<u32>>
+        UnorderedMap<RGResourceID, UnorderedSet<RGPassID>>
             m_ResourcesUsedByPassesID{};  // Stores real pass ID, not the one that we get after topsort!
 
         friend DependencyLevel;
@@ -298,7 +300,7 @@ namespace Radiant
         }
 
         void CalculateEffectiveLifetimes(const std::vector<Unique<RenderGraphPass>>& passes,
-                                         const UnorderedMap<RGResourceID, UnorderedSet<u32>>& resourcesUsedByPassesID) noexcept;
+                                         const UnorderedMap<RGResourceID, UnorderedSet<RGPassID>>& resourcesUsedByPassesID) noexcept;
 
         void FillResourceInfo(const RGResourceHandleVariant& resourceHandle, const RGResourceID& resourceID, const std::string& debugName,
                               const vk::MemoryRequirements& memoryRequirements, const vk::MemoryPropertyFlags memoryPropertyFlags) noexcept
@@ -476,7 +478,7 @@ namespace Radiant
     class RenderGraphPass final : private Uncopyable, private Unmovable
     {
       public:
-        RenderGraphPass(const u32 passID, const std::string_view& name, const ECommandQueueType commandQueueType,
+        RenderGraphPass(const RGPassID passID, const std::string_view& name, const ECommandQueueType commandQueueType,
                         const u8 commandQueueIndex, RenderGraphSetupFunc&& setupFunc, RenderGraphExecuteFunc&& executeFunc) noexcept
             : m_ID(passID), m_DetectedQueue(commandQueueType, commandQueueIndex), m_Name(name), m_SetupFunc(setupFunc),
               m_ExecuteFunc(executeFunc)
@@ -504,7 +506,7 @@ namespace Radiant
         RenderGraphDetectedQueue m_DetectedQueue{};
         bool m_bSignalRequired{false};
         u8 m_RenderTargetCount{0};
-        u32 m_ID{0};
+        RGPassID m_ID{0};
         u32 m_DependencyLevelIndex{0};
         u32 m_LocalToDependencyLevelExecutionIndex{0};
         u32 m_LocalToQueueExecutionIndex{0};
@@ -512,18 +514,14 @@ namespace Radiant
         std::string m_Name{s_DEFAULT_STRING};
         bool m_bIsGraphicsPass{false};
 
-        /* Info about closest node, current pass needs sync with.struct RenderGraphSyncPoint
-        {
-            ERenderGraphPassType PassType{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL};
-            u8 CommandQueueIndex{0};
-            u32 PassID{0};
-        };
-        std::vector<RenderGraphSyncPoint> m_PassesToSyncWith;  // Current pass depends on others(and others may be also from different
-          queues). */
-        UnorderedSet<u32> m_PassesToSyncWithOnDifferentQueues;  // PassID from different queues.
+        UnorderedSet<RGPassID> m_PassesToSyncWithOnDifferentQueues;  // PassID from different queues.
         //  std::vector<u64> m_SynchronizationIndexSet;  // Sufficient Synchronization Index Set. Contains passID, from pass we can retrieve
         // execution queue index and command queue type.
-        UnorderedMap<RenderGraphDetectedQueue, u32> m_SynchronizationIndexSet;
+        UnorderedMap<RenderGraphDetectedQueue, RGPassID> m_SynchronizationIndexSet;
+
+        //  sufficient synchronization index set (SSIS) is a set of numbers assigned to each node
+        // in the graph containing indices of closest nodes on each queue a node needs to synchronize with.
+        //   UnorderedMap<RenderGraphDetectedQueue, UnorderedSet<u32>> m_SynchronizationIndexSet;
 
         RenderGraphSetupFunc m_SetupFunc{};
         RenderGraphExecuteFunc m_ExecuteFunc{};

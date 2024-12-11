@@ -52,7 +52,13 @@ namespace Radiant
             for (u32 i{}; i < gpo->RenderingFormats.size(); ++i)
             {
                 const auto format = gpo->RenderingFormats[i];
-                // TODO: Stencil formats
+                if (GfxTexture::IsStencilFormat(format))
+                {
+                    RDNT_ASSERT(dynamicRenderingInfo.stencilAttachmentFormat == vk::Format::eUndefined,
+                                "Stencil attachment already initialized?!");
+                    dynamicRenderingInfo.setStencilAttachmentFormat(format);
+                }
+
                 if (GfxTexture::IsDepthFormat(format))
                 {
                     RDNT_ASSERT(dynamicRenderingInfo.depthAttachmentFormat == vk::Format::eUndefined,
@@ -60,9 +66,7 @@ namespace Radiant
                     dynamicRenderingInfo.setDepthAttachmentFormat(format);
                 }
                 else
-                {
                     colorAttachmentFormats.emplace_back(format);
-                }
             }
             dynamicRenderingInfo.setColorAttachmentFormats(colorAttachmentFormats);
 

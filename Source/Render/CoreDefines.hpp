@@ -17,7 +17,7 @@ namespace Radiant
     static constexpr bool s_bShaderDebugPrintf         = false;  // it disables performance metrics for NSight!
 
     static constexpr bool s_bRequireRayTracing  = false;
-    static constexpr bool s_bRequireMeshShading = false;
+    static constexpr bool s_bRequireMeshShading = true;
 
     enum class ECommandQueueType : u8
     {
@@ -46,7 +46,7 @@ namespace Radiant
         RESOURCE_CREATE_FORCE_NO_RESOURCE_MEMORY_ALIASING_BIT =
             BIT(3),  // Create resource & bind to memory, this flag is needed cuz RESOURCE_CREATE_RENDER_GRAPH_MEMORY_CONTROLLED_BIT being
                      // set by render graph, so we can disable memory aliasing
-        RESOURCE_CREATE_DONT_TOUCH_SAMPLED_IMAGES_BIT = BIT(4)  // Used only for mesh textures, since they're prebaked with sampler.
+        RESOURCE_CREATE_DONT_TOUCH_SAMPLED_IMAGES_BIT = BIT(4)  // If specified combined image sampler isn't created.
     };
 
     using ResourceStateFlags = u32;
@@ -76,7 +76,7 @@ namespace Radiant
 
     enum class EAlphaMode : u8
     {
-        ALPHA_MODE_OPAQUE,  // The alpha value is ignored, and the rendered output is fully opaque.
+        ALPHA_MODE_OPAQUE = 0,  // The alpha value is ignored, and the rendered output is fully opaque.
         ALPHA_MODE_MASK,   // The rendered output is either fully opaque or fully transparent depending on the alpha value and the specified
                            // alphaCutoff value;
         ALPHA_MODE_BLEND,  // The alpha value is used to composite the source and destination areas. The rendered output is combined with

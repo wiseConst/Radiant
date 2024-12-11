@@ -29,16 +29,17 @@ struct VertexOutput
     float4 color;
 };
 
+// vulkan ndc
 static const float4 positions[3] = {
-	float4(0.0, -1.0, 0.0, 1.0),
-	float4(-1.0, 1.0, 0.0, 1.0),
-    float4(1.0, 1.0, 0.0, 1.0)
+    float4(0.0, -1.0, 0.0, 1.0),
+    float4(-1.0, 1.0, 0.0, 1.0),
+    float4(1.0,  1.0, 0.0, 1.0)
 };
 
 static const float4 colors[3] = {
-	float4(0.0, 1.0, 0.0, 1.0),
-	float4(0.0, 0.0, 1.0, 1.0),
-	float4(1.0, 0.0, 0.0, 1.0)
+    float4(0.0, 1.0, 0.0, 1.0),
+    float4(0.0, 0.0, 1.0, 1.0),
+    float4(1.0, 0.0, 0.0, 1.0)
 };
 
 [outputtopology("triangle")]
@@ -54,7 +55,7 @@ void meshMain(out indices uint3 triangles[1], out vertices VertexOutput vertices
 
     triangles[0] = uint3(0, 1, 2);
     for (uint i = 0; i < 3; i++) {
-        vertices[i].sv_position = mul(u_PC.CameraData.ViewProjectionMatrix, positions[i] + float4(0,0,-2,0));
+        vertices[i].sv_position = mul(u_PC.CameraData.ViewProjectionMatrix, positions[i] + float4(0, 0, -2, 0));
         vertices[i].color = colors[i];
     }
 }

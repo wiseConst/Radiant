@@ -16,6 +16,14 @@ namespace Radiant
 
     static constexpr u8 s_MaxColorRenderTargets = 8;  // NOTE: Defined across all GAPI's AFAIK.
 
+#define INSERT_DEBUG_MEMORY_BARRIER(cmd)                                                                                                   \
+    cmd.pipelineBarrier2(                                                                                                                  \
+        vk::DependencyInfo().setMemoryBarriers(vk::MemoryBarrier2()                                                                        \
+                                                   .setSrcAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite) \
+                                                   .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)                              \
+                                                   .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite) \
+                                                   .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)));
+
     using MipRange = std::pair<u32, std::optional<u32>>;  // NOTE: In case lastMip not specified, it means unbound(till the end).
     struct MipSet final
     {
@@ -42,7 +50,8 @@ namespace Radiant
         std::optional<MipVariant> Combination{std::nullopt};
     };
 
-    struct RenderGraphDetectedQueue
+    // TODO: Continue work on multiple queue submission.
+    struct RenderGraphDetectedQueue final
     {
         RenderGraphDetectedQueue(const ECommandQueueType commandQueueType, const u8 commandQueueIndex) noexcept
             : CommandQueueType(commandQueueType), CommandQueueIndex(commandQueueIndex)
@@ -50,17 +59,17 @@ namespace Radiant
         }
         RenderGraphDetectedQueue() noexcept = default;
 
-        ECommandQueueType CommandQueueType{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL};
-        u8 CommandQueueIndex{0};
-
         FORCEINLINE auto IsCompetent() const noexcept { return CommandQueueType == ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL; }
         FORCEINLINE bool operator==(const RenderGraphDetectedQueue& other) const noexcept
         {
             return std::tie(CommandQueueType, CommandQueueIndex) == std::tie(other.CommandQueueType, other.CommandQueueIndex);
         }
+
+        ECommandQueueType CommandQueueType{ECommandQueueType::COMMAND_QUEUE_TYPE_GENERAL};
+        u8 CommandQueueIndex{0};
     };
 
-    struct RenderGraphDetectedQueueEqual
+    struct RenderGraphDetectedQueueEqual final
     {
         FORCEINLINE bool operator()(const RenderGraphDetectedQueue& lhs, const RenderGraphDetectedQueue& rhs) const noexcept
         {
@@ -72,7 +81,7 @@ namespace Radiant
     using RenderGraphExecuteFunc = std::function<void(const RenderGraphResourceScheduler&, const vk::CommandBuffer&)>;
 
     // RenderGraphResourcePool
-    struct RenderGraphBufferHandle
+    struct RenderGraphBufferHandle final
     {
         u64 ID{0};
         ExtraBufferFlags BufferFlags{EExtraBufferFlagBits::EXTRA_BUFFER_FLAG_HOST_BIT};
@@ -84,15 +93,18 @@ namespace Radiant
 
     // RenderGraph
     using RGResourceID = u64;  // Unique resource ID
+    using RGPassID     = u32;  // Render Pass ID
 
     struct RenderGraphStatistics
     {
         f32 BuildTime{0.0f};  // CPU build time(milliseconds).
         u32 BarrierBatchCount{0};
         u32 BarrierCount{0};
+        u32 DependencyLevelCount{0};
+        u32 PassCount{0};
     };
 
-    struct RenderGraphSubresourceID
+    struct RenderGraphSubresourceID final
     {
         RenderGraphSubresourceID(const std::string& resourceName, const RGResourceID& resourceID, const u16 resourceMipIndex,
                                  const u16 resourceLayerIndex) noexcept
@@ -116,13 +128,16 @@ namespace Radiant
 
 }  // namespace Radiant
 
+#include <string>
+
 template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphSubresourceID>
 {
     using is_avalanching = void;
 
     [[nodiscard]] auto operator()(const Radiant::RenderGraphSubresourceID& x) const noexcept -> std::uint64_t
     {
-        return detail::wyhash::hash(x.ResourceID) + detail::wyhash::hash(x.ResourceLayerIndex) + detail::wyhash::hash(x.ResourceMipIndex);
+        return std::hash<std::string>{}(x.ResourceName) + detail::wyhash::hash(x.ResourceID) + detail::wyhash::hash(x.ResourceLayerIndex) +
+               detail::wyhash::hash(x.ResourceMipIndex);
     }
 };
 
@@ -132,8 +147,6 @@ template <> struct ankerl::unordered_dense::hash<Radiant::RenderGraphDetectedQue
 
     [[nodiscard]] auto operator()(const Radiant::RenderGraphDetectedQueue& x) const noexcept -> std::uint64_t
     {
-        const auto commandQueueTypeHash = detail::wyhash::hash((std::uint64_t)x.CommandQueueType);
-        const auto commandQueueIndex    = detail::wyhash::hash(x.CommandQueueIndex);
-        return detail::wyhash::hash(commandQueueTypeHash + commandQueueIndex);
+        return detail::wyhash::hash((std::uint64_t)x.CommandQueueType) + detail::wyhash::hash((std::uint64_t)x.CommandQueueIndex);
     }
 };

@@ -32,7 +32,7 @@ namespace Radiant
 #endif
 
 #if RDNT_RELEASE
-#define RDNT_ASSERT(cond, ...) (cond)
+#define RDNT_ASSERT(cond, ...) (void)(cond)
 
 #endif
 
@@ -82,7 +82,7 @@ namespace Radiant
         std::mutex m_Mtx{};
         std::deque<std::move_only_function<void() noexcept>> m_WorkQueue;
         bool m_bShutdownRequested{false};
-        static constexpr bool s_bSetCPUCoreAffinity = true;
+        static constexpr bool s_bSetCPUCoreAffinity = false;
         std::vector<std::jthread> m_Workers;
 
         void Init() noexcept
@@ -112,6 +112,8 @@ namespace Radiant
                                                   func();
                                               }
                                           });
+
+                                      if (!s_bSetCPUCoreAffinity) return;
 
 #if defined(RDNT_WINDOWS)
                                       // Attaching thread to specific CPU
@@ -143,7 +145,7 @@ namespace Radiant
     };
 
     using PoolID = u64;
-    template <typename T> class Pool
+    template <typename T> struct Pool
     {
       public:
         constexpr Pool() noexcept = default;
@@ -188,7 +190,7 @@ namespace Radiant
             return poolID < m_bPresentObjects.size() && m_bPresentObjects[poolID];
         }
 
-        class PoolIterator
+        struct PoolIterator
         {
           public:
             PoolIterator(Pool<T>& pool, PoolID& poolID) noexcept : m_Pool(pool), m_ID(poolID) { NextPresentElement(); }
@@ -258,7 +260,7 @@ namespace Radiant
             std::ofstream output(dataPath.data(), std::ios::out | std::ios::binary | std::ios::trunc);
             RDNT_ASSERT(output.is_open(), "Failed to open: {}", dataPath);
 
-            output.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(data[0]));
+            output.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(T));
             output.close();
         }
 

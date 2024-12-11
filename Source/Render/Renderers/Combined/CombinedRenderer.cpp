@@ -107,8 +107,8 @@ namespace Radiant
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
-                auto depthPrePassShader              = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
-                                                                GfxShaderDescription{.Path = "../Assets/Shaders/depth_pre_pass.slang"});
+                auto depthPrePassShader = MakeShared<GfxShader>(
+                    m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/common/depth_pre_pass.slang"});
                 const GfxGraphicsPipelineOptions gpo = {
                     .RenderingFormats{vk::Format::eD32Sfloat},
                     .DynamicStates{vk::DynamicState::eCullMode, vk::DynamicState::ePrimitiveTopology},
@@ -333,8 +333,8 @@ namespace Radiant
                 const GfxPipelineDescription pipelineDesc = {
                     .DebugName       = "SSS",
                     .PipelineOptions = GfxComputePipelineOptions{},
-                    .Shader =
-                        MakeShared<GfxShader>(m_GfxContext->GetDevice(), GfxShaderDescription{.Path = "../Assets/Shaders/sss/sss.slang"})};
+                    .Shader          = MakeShared<GfxShader>(m_GfxContext->GetDevice(),
+                                                    GfxShaderDescription{.Path = "../Assets/Shaders/shadows/sss.slang"})};
                 m_SSSPipeline = MakeUnique<GfxPipeline>(m_GfxContext->GetDevice(), pipelineDesc);
             }));
 
@@ -451,13 +451,16 @@ namespace Radiant
         thingsToPrepare.emplace_back(Application::Get().GetThreadPool()->Submit(
             [&]() noexcept
             {
-                m_LightData->Sun.bCastShadows = true;
-                m_LightData->Sun.Direction    = {-0.5f, 0.8f, 0.08f};
-                m_LightData->Sun.Intensity    = 1.0f;
-                m_LightData->Sun.Color        = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
-                m_LightData->PointLightCount  = MAX_POINT_LIGHT_COUNT;
-                constexpr f32 radius          = 2.5f;
-                constexpr f32 intensity       = 1.2f;
+                m_LightData->Sun.bCastShadows      = true;
+                m_LightData->Sun.Direction         = {-0.5f, 0.8f, 0.08f};
+                m_LightData->Sun.Intensity         = 1.0f;
+                m_LightData->Sun.Size              = 8.5f;
+                m_LightData->Sun.ShadowFade        = 25.0f;
+                m_LightData->Sun.MaxShadowDistance = 400.0f;
+                m_LightData->Sun.Color             = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
+                m_LightData->PointLightCount       = MAX_POINT_LIGHT_COUNT;
+                constexpr f32 radius               = 2.5f;
+                constexpr f32 intensity            = 1.2f;
                 for (auto& pl : m_LightData->PointLights)
                 {
                     pl.sphere.Origin = glm::linearRand(s_MinPointLightPos, s_MaxPointLightPos);
@@ -1789,10 +1792,15 @@ namespace Radiant
 
                 struct PushConstantBlock
                 {
+                    glm::vec2 SrcTexelSize{1.0f};
                     u32 MainPassTextureID;
                     u32 BloomTextureID;
-                } pc                 = {};
-                pc.MainPassTextureID = scheduler.GetTexture(finalPassData.MainPassTexture)->GetBindlessTextureID();
+                } pc = {};
+
+                auto& mainPassTexture = scheduler.GetTexture(finalPassData.MainPassTexture);
+
+                pc.SrcTexelSize      = 1.0f / (glm::vec2&)mainPassTexture->GetDescription().Dimensions;
+                pc.MainPassTextureID = mainPassTexture->GetBindlessTextureID();
                 pc.BloomTextureID    = scheduler.GetTexture(finalPassData.BloomTexture)->GetBindlessTextureID();
 
                 cmd.pushConstants<PushConstantBlock>(m_GfxContext->GetDevice()->GetBindlessPipelineLayout(), vk::ShaderStageFlagBits::eAll,
@@ -1862,6 +1870,8 @@ namespace Radiant
                         ImGui::Text("Build Time: [%.3f] ms", m_RenderGraphStats.BuildTime);
                         ImGui::Text("Barrier Batch Count: %u", m_RenderGraphStats.BarrierBatchCount);
                         ImGui::Text("Barrier Count: %u", m_RenderGraphStats.BarrierCount);
+                        ImGui::Text("Dependency Level Count: %u", m_RenderGraphStats.DependencyLevelCount);
+                        ImGui::Text("Pass Count: %u", m_RenderGraphStats.PassCount);
 
                         m_RenderGraphResourcePool->UI_ShowResourceUsage();
 
@@ -1874,23 +1884,28 @@ namespace Radiant
                     if (ImGui::TreeNodeEx("Sun Parameters", ImGuiTreeNodeFlags_Framed))
                     {
                         ImGui::DragFloat3("Direction", (f32*)&m_LightData->Sun.Direction, 0.01f, -1.0f, 1.0f);
-
-                        ImGui::DragFloat("Intensity", &m_LightData->Sun.Intensity, 0.01f, 0.0f, 5.0f);
+                        ImGui::DragFloat("Intensity", &m_LightData->Sun.Intensity, 0.01f, 0.0f, 500.0f);
+                        ImGui::DragFloat("Size", &m_LightData->Sun.Size, 0.1f, 0.0f, 50.0f);
+                        ImGui::DragFloat("Shadow Fade", &m_LightData->Sun.ShadowFade, 1.0f, 0.0f);
+                        ImGui::DragFloat("Max Shadow Distance", &m_LightData->Sun.MaxShadowDistance, 1.0f, 0.0f);
                         ImGui::Checkbox("Cast Shadows", &m_LightData->Sun.bCastShadows);
 
                         if (ImGui::DragFloat3("Radiance", (f32*)&s_SunColor, 0.01f, 0.0f, 1.0f))
-                        {
                             m_LightData->Sun.Color = Shaders::PackUnorm4x8(glm::vec4(s_SunColor, 1.0f));
-                        }
 
                         ImGui::TreePop();
                     }
                 }
 
-                ImGui::SeparatorText("Mesh Transform");
-                ImGui::DragFloat3("Translation", (float*)&s_MeshTranslation, 0.5f);
-                ImGui::DragFloat3("Rotation", (float*)&s_MeshRotation, 1.f, -360.0f, 360.0f);
-                ImGui::DragFloat("Scale", &s_MeshScale, 0.01f, 0.0f);
+                ImGui::Separator();
+                if (ImGui::TreeNodeEx("Mesh Transform", ImGuiTreeNodeFlags_Framed))
+                {
+                    ImGui::DragFloat3("Translation", (float*)&s_MeshTranslation, 0.5f);
+                    ImGui::DragFloat3("Rotation", (float*)&s_MeshRotation, 1.f, -360.0f, 360.0f);
+                    ImGui::DragFloat("Scale", &s_MeshScale, 0.01f, 0.0f);
+
+                    ImGui::TreePop();
+                }
 
                 ImGui::Separator();
                 ImGui::Checkbox("Bloom Use Compute", &s_bBloomComputeBased);

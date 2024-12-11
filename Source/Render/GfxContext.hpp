@@ -45,8 +45,12 @@ namespace Radiant
         void SetDepthWrite(const vk::CommandBuffer& cmd, const bool bDepthWriteEnable) noexcept;
         void SetDepthBounds(const vk::CommandBuffer& cmd, const glm::vec2& depthBounds) noexcept;
 
-        void Invalidate() noexcept
+        void Invalidate(const vk::CommandBuffer* cmd = nullptr) noexcept
         {
+            std::scoped_lock lock(m_Mtx);
+            if (LastUsedCmd == cmd && cmd) return;
+
+            LastUsedCmd       = (vk::CommandBuffer*)cmd;
             LastBoundPipeline = nullptr;
 
             LastBoundIndexBuffer       = nullptr;
@@ -71,7 +75,9 @@ namespace Radiant
         }
 
       private:
-        GfxPipeline* LastBoundPipeline{nullptr};  // Main object, if it changes, whole state is invalidated.
+        std::mutex m_Mtx{};
+        vk::CommandBuffer* LastUsedCmd{nullptr};  // (1) Main object, if it changes, whole state is invalidated.
+        GfxPipeline* LastBoundPipeline{nullptr};  // (2) Main object, if it changes, whole state is invalidated.
         GfxBuffer* LastBoundIndexBuffer{nullptr};
         std::optional<vk::DeviceSize> LastBoundIndexBufferOffset{std::nullopt};
         std::optional<vk::IndexType> LastBoundIndexType{std::nullopt};
